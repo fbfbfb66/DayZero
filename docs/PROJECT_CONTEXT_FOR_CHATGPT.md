@@ -16,10 +16,12 @@
 - **AI 架构**: **已接入真实 AI (Supabase Edge Functions)**。具备完整的 AI Draft 架构。
     - **后端代理**: 使用 Supabase Edge Function (`generate-checkin-draft`) 作为 Kimi API 的代理。
     - **今日总结**: 使用专门的 Edge Function (`generate-daily-summary`) 基于全天记录生成个性化建议。
+    - **协议演进**: 已建立 **AI 助手协议层 (Assistant Protocol Layer)**，支持多意图识别与复合卡片返回。
     - **安全性**: Kimi API Key 仅保存在 Supabase Secret 中，Android 端通过 Supabase Publishable Key 进行身份验证。
 - **运行数据来源**: 
     - 记录观察: `RoomRecordRepository` -> Room Database (Flow 自动更新)。
     - 草稿生成: `RemoteAiDraftRepository` (默认启用) 或 `FakeAiDraftRepository` (调试开关)。
+    - 智能助手: `FakeAiAssistantRepository` (Phase A 协议验证)。
 - **交互特性**: **支持多次分餐录入与自动合并**。同一天只保留一条 Confirmed 记录，新草稿确认时会智能合并。所有系统交互（如冲突处理、餐次追问）均已集成在 AI 聊天窗口内作为 **ChoiceCard** 出现。
 - **数据一致性**: 
     - 已修复确认后不同步问题。
@@ -98,12 +100,18 @@
 - **AI 拟人化**: 增加 `TypingIndicator`（跳动的三点动画），提供更真实的对话反馈感。
 - **布局精简**: 移除了 AI 记录页多余的底层 Surface，实现了真正的沉浸式背景。
 
+### 5.4 AI 助手协议化 (Phase 9 - 正在进行)
+- **协议定义**: 新增 `AiAssistantTurn` 交互单元，支持文本回复 + 多卡片（Draft, Choice, Summary, Weight, Edit, Delete）。
+- **意图驱动**: 定义 `AiIntent` 枚举，涵盖饮食记录、体重、建议、鼓励、修改、删除等 10 种意图。
+- **架构准备**: 新增 `AiAssistantRepository` 接口，为后续切换到“全意图 AI 助手”做准备。目前不影响现有的稳定录入流程。
+
 ---
 
 ## 6. 开发者调试指南
 - **Logcat Tag**: `DayZeroDataFlow`。
 - **核心逻辑**: 观察 `observeRecords` 与 `confirmDraftWithMerge` 的协同。
 - **AI 调试**: 通过 `RemoteAiDraftRepository` 检查 Supabase 响应。
+- **协议验证**: 查看 `FakeAiAssistantRepository` 模拟的不同意图返回。
 
 ---
 
