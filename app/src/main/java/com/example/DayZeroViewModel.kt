@@ -10,13 +10,20 @@ import com.example.domain.model.AppState
 import com.example.domain.model.MealType
 import com.example.domain.model.RecordStatus
 import com.example.domain.repository.RecordRepository
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+
+sealed interface UiEvent {
+    data object RecordConfirmed : UiEvent
+}
 
 class DayZeroViewModel(
     private val recordRepository: RecordRepository
@@ -24,6 +31,9 @@ class DayZeroViewModel(
 
     private val _uiState = MutableStateFlow(AppState())
     val uiState: StateFlow<AppState> = _uiState.asStateFlow()
+
+    private val _uiEvents = MutableSharedFlow<UiEvent>()
+    val uiEvents: SharedFlow<UiEvent> = _uiEvents.asSharedFlow()
 
     init {
         observeRecords()
@@ -44,9 +54,7 @@ class DayZeroViewModel(
                 status = RecordStatus.Confirmed,
                 weightKg = newWeight
             )
-            _uiState.update { 
-                it.copy(aiMessage = "成功确认！今日记录已更新。")
-            }
+            _uiEvents.emit(UiEvent.RecordConfirmed)
         }
     }
 

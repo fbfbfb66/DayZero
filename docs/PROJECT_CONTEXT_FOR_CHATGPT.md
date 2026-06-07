@@ -82,6 +82,7 @@
     - 不再直接持有数据源。
     - 通过 `RecordRepository` (接口) 观察记录流。
     - 使用 `viewModelScope` 发起异步更新操作。
+    - **UI 事件管理**: 引入 `UiEvent` (SharedFlow) 处理一次性事件（如记录成功提示），避免状态重复触发。
 - **依赖注入**: 使用 `DayZeroViewModel.Factory` 在 `AppNavigation` 中手动注入 `RoomRecordRepository`。
 - **初始化逻辑**: `RoomRecordRepository` 在首次 `observeRecords` 时，若数据库为空则插入 Mock 示例数据。
 
@@ -95,10 +96,11 @@
 **操作流向**:
 1. 用户在 UI 点击（如“确认录入”）。
 2. ViewModel 调用 `repository.updateRecordStatus(id, Confirmed)`。
-3. Repository 通过 Mapper 将修改转为 Entity，调用 DAO `upsertRecord`。
-4. Room 数据库更新，触发 `observeAllRecords` 的 Flow 发射新数据。
-5. ViewModel 监听到新数据，更新 `uiState`。
-6. UI 自动重绘（日历标记出现，草稿消失）。
+3. ViewModel 发射 `UiEvent.RecordConfirmed` 一次性事件。
+4. 顶层 UI (`MainApp`) 监听到事件，显示 `SuccessConfirmOverlay` 动画。
+5. Room 数据库更新，触发 `observeAllRecords` 的 Flow 发射新数据。
+6. ViewModel 监听到新数据，更新 `uiState`。
+7. UI 自动重绘（日历标记出现，草稿消失）。
 
 ---
 

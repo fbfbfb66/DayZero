@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -28,7 +27,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Divider
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -37,13 +35,10 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -55,6 +50,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.DayZeroViewModel
@@ -62,7 +58,6 @@ import com.example.domain.model.DailyRecord
 import com.example.domain.model.RecordStatus
 import com.example.ui.theme.CardBackground
 import com.example.ui.theme.TextPrimary
-import com.example.ui.theme.LightGreen
 import com.example.ui.theme.BrandGreen
 import com.example.ui.theme.BorderNormal
 import com.example.ui.theme.TextSecondary
@@ -74,13 +69,6 @@ import java.time.format.DateTimeFormatter
 fun AiRecordScreen(viewModel: DayZeroViewModel) {
     val uiState by viewModel.uiState.collectAsState()
     var inputText by remember { mutableStateOf("") }
-    val snackbarHostState = remember { SnackbarHostState() }
-
-    LaunchedEffect(uiState.aiMessage) {
-        uiState.aiMessage?.let {
-            snackbarHostState.showSnackbar(it)
-        }
-    }
 
     Scaffold(
         topBar = {
@@ -89,7 +77,6 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = WarmBackground)
             )
         },
-        snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
         containerColor = WarmBackground
     ) { innerPadding ->
         Column(
@@ -122,42 +109,74 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
                     }
                 } else {
                     item {
-                        Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                            Text("目前没有草稿记录", color = TextSecondary)
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                "今天的草稿已确认 ✨",
+                                color = TextPrimary,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                "可以继续告诉 AI 你还吃了什么，\n我会帮你记录下来。",
+                                color = TextSecondary,
+                                fontSize = 14.sp,
+                                textAlign = TextAlign.Center,
+                                lineHeight = 20.sp
+                            )
                         }
                     }
                 }
             }
 
             // Input Bar
-            Box(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(Color.White)
-                    .padding(8.dp)
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
+                // Mock Disclaimer
+                Text(
+                    text = "AI 分析功能正在开发中 · 当前为本地演示逻辑",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                    textAlign = TextAlign.Center,
+                    color = com.example.ui.theme.TextTertiary,
+                    fontSize = 10.sp
+                )
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(8.dp)
                 ) {
-                    IconButton(onClick = { /* Demo */ }) {
-                        Icon(Icons.Filled.AddPhotoAlternate, contentDescription = "上传图片", tint = BrandGreen)
-                    }
-                    OutlinedTextField(
-                        value = inputText,
-                        onValueChange = { inputText = it },
-                        modifier = Modifier.weight(1f),
-                        placeholder = { Text("告诉 AI 你今天吃了什么……", color = TextSecondary) },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            unfocusedBorderColor = BorderNormal,
-                            focusedBorderColor = BrandGreen,
-                            unfocusedContainerColor = WarmBackground,
-                            focusedContainerColor = WarmBackground
-                        ),
-                        shape = RoundedCornerShape(24.dp)
-                    )
-                    IconButton(onClick = { /* Demo */ }) {
-                        Icon(Icons.Filled.Send, contentDescription = "发送", tint = BrandGreen)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(onClick = { /* Demo */ }) {
+                            Icon(Icons.Filled.AddPhotoAlternate, contentDescription = "上传图片", tint = BrandGreen)
+                        }
+                        OutlinedTextField(
+                            value = inputText,
+                            onValueChange = { inputText = it },
+                            modifier = Modifier.weight(1f),
+                            placeholder = { Text("告诉 AI 你今天吃了什么……", color = TextSecondary) },
+                            colors = OutlinedTextFieldDefaults.colors(
+                                unfocusedBorderColor = BorderNormal,
+                                focusedBorderColor = BrandGreen,
+                                unfocusedContainerColor = WarmBackground,
+                                focusedContainerColor = WarmBackground
+                            ),
+                            shape = RoundedCornerShape(24.dp)
+                        )
+                        IconButton(onClick = { /* Demo */ }) {
+                            Icon(Icons.Filled.Send, contentDescription = "发送", tint = BrandGreen)
+                        }
                     }
                 }
             }
