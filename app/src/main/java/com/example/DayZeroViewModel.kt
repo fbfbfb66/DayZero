@@ -5,7 +5,9 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.CreationExtras
 import com.example.data.local.database.DayZeroDatabase
+import com.example.data.remote.NetworkModule
 import com.example.data.repository.FakeAiDraftRepository
+import com.example.data.repository.RemoteAiDraftRepository
 import com.example.data.repository.RoomRecordRepository
 import com.example.domain.mapper.CheckinDraftMapper
 import com.example.domain.model.AppState
@@ -27,6 +29,7 @@ import kotlinx.coroutines.launch
 
 sealed interface UiEvent {
     data object RecordConfirmed : UiEvent
+    data class Error(val message: String) : UiEvent
 }
 
 class DayZeroViewModel(
@@ -70,16 +73,13 @@ class DayZeroViewModel(
                 // Save as Draft to Room
                 recordRepository.upsertRecord(dailyRecord)
             } catch (e: Exception) {
-                // Handle error
+                _uiEvents.emit(UiEvent.Error("AI 分析暂时失败了，可以稍后再试。"))
             } finally {
                 _uiState.update { it.copy(isAnalyzing = false) }
             }
         }
     }
-    
-    // I need to add upsertRecord to RecordRepository interface if it's not there.
-    // Wait, let's check RecordRepository.kt content.
-    
+
     fun confirmDraft(recordId: String, newWeight: Float?) {
         viewModelScope.launch {
             recordRepository.updateRecordStatus(
@@ -102,6 +102,8 @@ class DayZeroViewModel(
     }
 
     companion object {
+        private const val USE_REMOTE_AI = true
+
         val Factory: ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(
@@ -110,9 +112,16 @@ class DayZeroViewModel(
             ): T {
                 val application = checkNotNull(extras[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY])
                 val database = DayZeroDatabase.getDatabase(application)
+                
+                val aiRepository = if (USE_REMOTE_AI) {
+                    RemoteAiDraftRepository(NetworkModule.aiDraftApiService)
+                } else {
+                    FakeAiDraftRepository()
+                }
+
                 return DayZeroViewModel(
                     recordRepository = RoomRecordRepository(database.dailyRecordDao()),
-                    aiDraftRepository = FakeAiDraftRepository()
+                    aiDraftRepository = aiRepository
                 ) as T
             }
         }

@@ -30,15 +30,22 @@
 - **UI 优化**：引入 `UiEvent` 系统，将“确认成功”提示从黑色 Snackbar 替换为居中、主题一致的成功动画组件 (`SuccessConfirmOverlay`)。
 
 ## 阶段 4：AI Draft 架构建立
-- **AI 抽象层**：创建了 `AiDraftRepository` 接口，定义了从文本生成草稿的标准契约。
-- **模拟 AI 实现**：实现了 `FakeAiDraftRepository`，基于关键词匹配模拟 AI 分析饮食并生成结构化草稿。
-- **数据转换**：引入 `CheckinDraftMapper`，实现了 AI 草稿到 Room 持久化模型 `DailyRecord` 的无缝转换。
-- **流程跑通**：用户在 AI 记录页输入文本，点击发送即可在本地生成并持久化一个新的 Draft，随后可继续编辑并确认录入。
-- **UI 集成**：发送按钮集成了 `isAnalyzing` 状态，显示加载动画并防止重复提交。
+- **AI 抽象层**：创建了 `AiDraftRepository` 接口。
+- **模拟 AI 实现**：实现了 `FakeAiDraftRepository` 进行本地测试。
+
+## 阶段 5：真实 AI 后端接入 (Supabase)
+- **云函数部署**：在 Supabase 部署了 `generate-checkin-draft` Edge Function，对接 Kimi API。
+- **远程数据层**：
+    - 新增 `AiDraftApiService` (Retrofit)。
+    - 新增 DTO 系列与 `AiDraftRemoteMapper`。
+    - 引入 `NetworkModule` 配置 OkHttp 拦截器自动注入 Supabase 密钥。
+- **仓库切换**：实现 `RemoteAiDraftRepository` 并设置为 `DayZeroViewModel` 的默认数据源。
+- **安全性保证**：Kimi API Key 彻底从移动端移除，仅保存在云端 Secret。
+- **错误处理**：增加了针对网络和 AI 解析失败的 `UiEvent.Error` 反馈逻辑。
+- **闭环达成**：用户现在可以使用真实自然语言进行饮食记录分析。
 
 ## 当前仍未完成的部分
-- **真实 AI**：底层已具备切换能力，但目前仍是本地 Fake 逻辑。
-- **图片功能**：`MealEntry` 中仅有 `hasPhoto` 标记，尚无真实图片存储。
+- **图片功能**：`MealEntry` 尚未支持真实图片 URI 和本地显示。
 - **云同步**：暂无登录及多端同步。
 
 ## 下一阶段计划

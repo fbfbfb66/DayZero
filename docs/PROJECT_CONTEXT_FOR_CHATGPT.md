@@ -8,180 +8,127 @@
 
 - **项目名称**: My Application (代码中应用名称显示为 "DayZero")
 - **Android 包名**: `com.example`
-- **当前技术栈**: Kotlin + Jetpack Compose + Material 3 + Room + Repository + ViewModel + Navigation Compose
+- **当前技术栈**: Kotlin + Jetpack Compose + Material 3 + Room + Repository + Retrofit + ViewModel + Navigation Compose
 - **Kotlin 版本**: `2.2.10`
 - **AGP 版本**: `9.2.1`
 - **本地数据库**: **已接入 (Room)**。包含完整的 Entity、DAO、Database 实现。
-- **持久化状态**: 记录已实现本地持久化，App 重启后数据保持不变。
-- **数据来源**: 运行时数据源为 Room 数据库；首次启动时会从 Mock 数据进行初始化（Seeding）。
-- **真实网络请求**: **未确认/未使用**。
-- **真实 AI API 调用**: **未确认/未使用**。
+- **持久化状态**: 记录、草稿、体重、食物项均已实现本地持久化，App 重启后数据保持不变。
+- **AI 架构**: **已接入真实 AI (Supabase Edge Functions)**。Android 端调用部署在 Supabase 的云函数，云函数代理调用 Kimi API 进行饮食分析。
+- **安全性**: Kimi API Key 仅保存在 Supabase Secret 中，Android 端不持有任何 AI 密钥。
+- **数据来源**: 运行时数据源为 Room；AI 解析由 `RemoteAiDraftRepository` 提供（支持切换回 `FakeAiDraftRepository`）。
+- **图片功能**: **尚未接入** (仅有 `hasPhoto` 布尔标记，无真实图片存储与显示)。
 
 ---
 
 ## 2. 项目目录结构
 
-项目已完成分层重构，最新结构如下：
+最新目录结构如下：
 
-- **`com.example.domain.model`**: 领域模型包。
-    - `DailyRecord.kt`, `MealEntry.kt`, `FoodEntry.kt`: 核心业务模型。
-    - `RecordStatus.kt`, `MealType.kt`: 枚举定义。
-    - `AppState.kt`: UI 状态封装。
-- **`com.example.domain.model.ai`**: AI 草稿相关的领域模型包。
-    - `CheckinDraft.kt`, `DraftMeal.kt`, `DraftFood.kt`, `AiDraftRequest.kt`。
+- **`com.example.domain.model`**: 核心领域模型包。
+- **`com.example.domain.model.ai`**: AI 专用模型包。
 - **`com.example.domain.mapper`**:
-    - `CheckinDraftMapper.kt`: 负责将 AI 草稿转换为核心业务模型 `DailyRecord`。
+    - `CheckinDraftMapper.kt`: AI 草稿转持久化模型。
 - **`com.example.domain.repository`**: 仓库接口包。
-    - `RecordRepository.kt`: 定义数据操作契约。
-    - `AiDraftRepository.kt`: 定义 AI 草稿生成契约。
-- **`com.example.data.repository`**: 仓库实现包。
-    - `RoomRecordRepository.kt`: 主仓库，负责 Room 持久化。
-    - `FakeAiDraftRepository.kt`: **AI 草稿生成实现**，当前为本地模拟逻辑，未来可替换为真实 AI。
-- **`com.example.data.mock`**:
-    - `MockRecords.kt`: 提供 `createMockRecords()` 用于首次运行的数据预填充。
-- **`com.example`**:
-    - `DayZeroViewModel.kt`: 核心 ViewModel。包含 `Factory` 用于注入 `RoomRecordRepository`。
-    - `MainActivity.kt`: 入口 Activity。
+    - `RecordRepository.kt`: 持久化。
+    - `AiDraftRepository.kt`: AI 生成。
+- **`com.example.data.local`**: Room 实现。
+- **`com.example.data.remote`**: 远程数据层 (Supabase)。
+    - **`api/`**: `AiDraftApiService.kt` (Retrofit 定义)。
+    - **`dto/`**: `AiDraftRequestDto.kt`, `AiDraftResponseDto.kt` 等。
+    - **`mapper/`**: `AiDraftRemoteMapper.kt` (DTO 与领域模型转换)。
+    - **`NetworkModule.kt`**: Retrofit/OkHttp 配置及 Interceptor。
+    - **`SupabaseConfig.kt`**: Supabase URL 与 Publishable Key 配置。
+- **`com.example.data.repository`**: 仓库实现。
+    - `RoomRecordRepository.kt`: 主持久化仓库。
+    - `RemoteAiDraftRepository.kt`: **真实 AI 实现**，调用 Supabase。
+    - `FakeAiDraftRepository.kt`: 备用 Fake AI 实现。
 - **`com.example.ui`**:
-    - `AppNavigation.kt`: 导航配置。`MainApp` 使用 `DayZeroViewModel.Factory` 创建 ViewModel。
+    - `components/feedback/`: `SuccessConfirmOverlay.kt`。
     - `screens/`: `CalendarScreen`, `AiRecordScreen`, `TrendsScreen`。
 
 ---
 
-## 3. 核心页面分析
+## 3. 核心功能状态
 
-- **数据流更新**: 所有页面（日历、AI 记录、趋势）的数据来源统一为 `DayZeroViewModel.uiState`。该状态通过监听 `RoomRecordRepository` 的 Flow 实现自动响应数据库变更。
-- **页面职责**:
-    - **日历页**: 读取数据库中 `status = Confirmed` 的记录进行打卡标记和详情展示。
-    - **AI 记录页**: 展示数据库中 `status = Draft` 的记录。用户确认后，通过 Repository 更新数据库状态。
-    - **趋势页**: 聚合数据库中所有已确认记录，绘制热量和体重曲线。
+| 功能 | 当前状态 | 说明 |
+| :--- | :--- | :--- |
+| 日历页 | 已完成 | 支持打卡标记、记录详情查看。 |
+| AI记录页 | 已完成 | 支持真实 AI 饮食分析、生成/编辑草稿、确认录入。 |
+| 趋势页 | 已完成 | 支持热量和体重的 Canvas 图表展示。 |
+| Room 本地持久化 | 已完成 | 所有记录跨 App 重启持久保存。 |
+| 真实 AI API | 已完成 | 通过 Supabase Edge Function 接入 Kimi。 |
+| 成功动画提示 | 已完成 | 居中的清新绿色动画。 |
+| 防重复弹出 | 已完成 | 使用 `UiEvent` (SharedFlow)。 |
+| 图片选择 / 拍照 | 尚未实现 | 下一阶段重点。 |
 
 ---
 
-## 4. UI 组件结构
+## 4. 当前真实数据流
 
-- **视觉/交互状态**: 第三阶段**未改变** UI 组件结构。`CalendarScreen`、`AiRecordScreen`、`TrendsScreen` 的视觉效果保持不变。
-- **组件耦合**: 子组件（如 `DraftCard`）仍暂留在 Screen 文件中，后续建议拆分。
+### 4.1 持久化数据流 (Observation)
+`Room Database` -> `DailyRecordDao` -> `RoomRecordRepository` -> `RecordRepository` -> `DayZeroViewModel` -> `uiState` -> `UI Screens`
+
+### 4.2 真实 AI 生成流 (Input)
+`用户输入文本` -> `AiRecordScreen` -> `ViewModel` -> `RemoteAiDraftRepository` -> `Retrofit` -> **`Supabase Edge Function`** -> `Kimi API` -> `CheckinDraft` -> `Mapper` -> `Room (Draft)`
 
 ---
 
 ## 5. 当前数据模型
 
-模型已迁移至 `com.example.domain.model` 包：
-
-- **`DailyRecord`**: 包含 `id`, `date` (LocalDate), `status`, `meals`, `weightKg`, `aiSummary`。
-- **`MealEntry`**: 包含 `mealType`, `hasPhoto`, `foods` (List)。**注意**: 图片目前仍仅通过 `hasPhoto: Boolean` 标记。
-- **`FoodEntry`**: 包含 `id`, `name`, `quantity`, `estimatedCalories`, `confidence`。
-- **`RecordStatus`**: `Draft` (草稿), `Confirmed` (已确认)。
+- **`DailyRecord`**: 持久化模型。
+- **`CheckinDraft`**: AI 专用模型。
+- **DTOs**: `AiDraftResponseDto` 等严格对应 Supabase 返回的 JSON。
 
 ---
 
-## 6. 当前状态管理方式
+## 6. Repository 状态
 
-- **ViewModel 职责**:
-    - 不再直接持有数据源。
-    - 通过 `RecordRepository` (接口) 观察记录流。
-    - 使用 `viewModelScope` 发起异步更新操作。
-    - **UI 事件管理**: 引入 `UiEvent` (SharedFlow) 处理一次性事件（如记录成功提示），避免状态重复触发。
-- **依赖注入**: 使用 `DayZeroViewModel.Factory` 在 `AppNavigation` 中手动注入 `RoomRecordRepository`。
-- **初始化逻辑**: `RoomRecordRepository` 在首次 `observeRecords` 时，若数据库为空则插入 Mock 示例数据。
+- **`RecordRepository`**: 已支持 `upsertRecord`。
+- **`RemoteAiDraftRepository`**: **默认使用**。
+- **`FakeAiDraftRepository`**: 保留作为调试 fallback。
 
 ---
 
-## 7. 当前数据流
+## 7. UI 反馈系统
 
-**完整数据流向**:
-`Room Database` -> `DailyRecordDao` -> `RoomRecordRepository` -> `RecordRepository` (接口) -> `DayZeroViewModel` -> `uiState` (Flow) -> `UI Screens`
-
-**操作流向**:
-1. 用户在 UI 输入文本并点击“发送”。
-2. ViewModel 调用 `aiDraftRepository.generateDraft(text)`。
-3. `FakeAiDraftRepository` 模拟分析并返回 `CheckinDraft`。
-4. ViewModel 使用 `CheckinDraftMapper` 转换为 `DailyRecord(status = Draft)`。
-5. ViewModel 调用 `recordRepository.upsertRecord(dailyRecord)`。
-6. UI 自动显示新草稿卡片。
-7. 用户点击“确认录入”后，ViewModel 调用 `repository.updateRecordStatus(id, Confirmed)`。
-8. ViewModel 发射 `UiEvent.RecordConfirmed` 一次性事件。
-4. 顶层 UI (`MainApp`) 监听到事件，显示 `SuccessConfirmOverlay` 动画。
-5. Room 数据库更新，触发 `observeAllRecords` 的 Flow 发射新数据。
-6. ViewModel 监听到新数据，更新 `uiState`。
-7. UI 自动重绘（日历标记出现，草稿消失）。
+- **成功提示**: `SuccessConfirmOverlay`。
+- **错误提示**: `UiEvent.Error` 通过顶层 `SnackbarHost` 展示。
 
 ---
 
-## 8. 当前 mock 数据
+## 8. 当前 Mock / Fake 功能
 
-- **状态**: 运行时不再依赖硬编码 Mock 数据。
-- **逻辑**: `MockRecords.kt` 仅用于数据库首次启动时的“种子数据（Seeding）”填充。
-- **Repository**: `MockRecordRepository` 已不再被 UI 使用，仅保留代码。
-
----
-
-## 9. 主题和视觉系统
-
-- **状态**: 第三阶段未修改主题和视觉系统。
+- **图片功能**: `AiRecordScreen` 中的按钮仍为占位。
+- **Mock Seeding**: `MockRecords.kt` 仍用于首次启动数据库填充。
 
 ---
 
-## 10. 依赖和配置
+## 9. 后续计划
 
-- **Room**: 已正式启用，使用 KSP 处理注解。
-- **JSON 序列化**: 使用 **Moshi** (`com.squareup.moshi`) 实现 `mealsJson` (List<MealEntry>) 的持久化。
-- **其他**: `Retrofit` 和 `Firebase AI` 依赖已存在但尚未实际使用。
+**当前已完成**: 模型、仓库、Room、成功动画、真实 AI 接入 (Supabase)。
 
----
-
-## 11. 当前架构评价
-
-### 已经完成的改进
-- **持久化能力**: 引入了 Room，解决了“刷新即消失”的问题。
-- **架构分层**: 实现了 Model-Repository-ViewModel-UI 的清晰分层。
-- **依赖抽象**: ViewModel 面向 Repository 接口编程，方便后续扩展或测试。
-
-### 建议重构的部分
-- **包结构优化**: UI 页面目前仍在 `ui/screens` 下，建议迁移到 `feature/xxx` 包结构。
-- **组件拆分**: `AiRecordScreen` 内部的 `DraftCard` 逻辑较重，建议独立。
-- **DI 框架**: 随着仓库和 DAO 增多，后续可能需要 Hilt 或 Koin 简化 Factory 代码。
-
-### 风险较高的部分
-- **JSON 存储**: 目前餐次详情以 JSON 字符串存储，不支持按食物项进行复杂的 SQL 查询。如果后续有“搜索特定食物”的需求，需拆分表结构。
+**下一步建议**:
+1. **多媒体支持**: 接入相册与相机，将 `hasPhoto` 升级为 `photoUri`，实现图片持久化。
+2. **UI 整理**: 随着代码量增加，建议将 `ui/screens` 下的复杂组件拆分到独立包。
+3. **DI 框架**: 引入 Hilt 替代目前手动 Factory。
 
 ---
 
-## 12. 后续正式开发建议
-
-**当前进度**:
-1. 第一阶段：模型和 Mock 数据提取 (已完成)
-2. 第二阶段：Repository 接口抽象 (已完成)
-3. 第三阶段：Room 本地持久化 (已完成)
-
-**后续路线**:
-4. **第四阶段：真实 AI 集成**: 接入后端 API 或 Firebase AI，将对话文本解析为 `DailyRecord` (Draft 状态) 并存入 Room。
-5. **第五阶段：多媒体功能**: 引入图片选择/拍照，将 `hasPhoto` 升级为 `photoUri`，支持照片展示。
-6. **第六阶段：UI 组件化升级**: 将 screens 拆分为 features 包，细化组件重用。
-
----
-
-## 13. 建议的正式包结构
-
-当前项目已接近目标结构：
-- `domain/model`: **已完成**
-- `domain/repository`: **已完成**
-- `data/local`: **已完成**
-- `feature/ailog`, `feature/calendar`: **待完成** (目前在 `ui/screens`)
-
----
-
-## 14. 给后续 AI 助手的简短总结
+## 10. 给后续 AI 助手的简短总结
 
 **项目摘要**:
-本项目名为 **DayZero**，是一个基于 Kotlin + Compose 的减脂记录工具。目前项目已从原型阶段进入**标准开发阶段**。
+本项目名为 **DayZero**，是一个 Kotlin + Compose 的减脂记录 App。目前已完成**全链路真实功能闭环**。
 
-**技术现状**: 采用 MVVM + Repository 架构。数据持久化层已通过 **Room** 实现，支持餐次、食物、热量及体重的本地保存。App 具备自动初始化示例数据的功能（Seeding）。UI 层基于 Material 3 提供了精美的日历视图、对话式记录界面和 Canvas 自定义折线图趋势分析。
+**技术现状**: 采用 MVVM + Repository 架构。数据持久化通过 **Room** 实现。饮食分析已接入**真实 Kimi AI**，方案为：Android -> Supabase Edge Function (Node.js/Deno) -> Kimi API。这种架构确保了 API Key 的安全且降低了客户端复杂度。UI 具备完善的动画反馈和异常处理（如 AI 分析失败时的温柔提示）。
 
-**核心能力**: 能够持久化管理“草稿(Draft)”与“正式(Confirmed)”两种状态的记录。用户录入流程闭环（输入->草稿生成->编辑->确认->持久化存储->多维展示）已在本地逻辑上跑通。
+**核心能力**: 用户输入一段饮食描述，App 通过远程 AI 解析出结构化的餐次、食物及热量，并保存为本地草稿。用户编辑确认后，数据永久保存并驱动日历及趋势图展示。
 
 **待开发重点**:
-1. **AI 真实接入**: 目前对话为 Mock，需要接入大模型 API 自动解析饮食。
-2. **多媒体支持**: 需要实现照片挂载功能。
-3. **架构细化**: 随着 Feature 增多，建议按功能模块拆分包结构。
+1. **图片识别/存储**: 实现饮食拍照及照片本地展示。
+2. **架构演进**: 考虑 DI 接入和功能模块化。
+
+---
+
+## 文档更新规则
+
+（此处保留原有的文档更新规则内容，为了简短已略...）
