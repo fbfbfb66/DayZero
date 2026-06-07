@@ -10,11 +10,13 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -41,6 +43,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -55,6 +58,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -100,76 +104,82 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
             )
         },
         bottomBar = {
-            // Move input bar to bottomBar slot for correct padding/occlusion handling
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color.White)
-                    .imePadding() // Essential for keyboard handling
+            Surface(
+                color = Color.White,
+                shadowElevation = 8.dp, // Add shadow to separate from content
+                modifier = Modifier.imePadding()
             ) {
-                Text(
-                    text = "AI 分析功能正在开发中 · 当前为本地演示逻辑",
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 8.dp),
-                    textAlign = TextAlign.Center,
-                    color = com.example.ui.theme.TextTertiary,
-                    fontSize = 10.sp
-                )
-
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(8.dp)
+                        .padding(bottom = 12.dp) // Extra padding for safety
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
+                    Text(
+                        text = "AI 分析功能正在开发中 · 当前为本地演示逻辑",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp),
+                        textAlign = TextAlign.Center,
+                        color = com.example.ui.theme.TextTertiary,
+                        fontSize = 10.sp
+                    )
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(8.dp)
                     ) {
-                        IconButton(
-                            onClick = { /* Demo */ },
-                            enabled = !uiState.isAnalyzing
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Filled.AddPhotoAlternate, contentDescription = "上传图片", tint = BrandGreen.copy(alpha = if (uiState.isAnalyzing) 0.5f else 1f))
-                        }
-                        OutlinedTextField(
-                            value = inputText,
-                            onValueChange = { inputText = it },
-                            modifier = Modifier.weight(1f),
-                            placeholder = { Text("告诉 AI 你今天吃了什么……", color = TextSecondary) },
-                            enabled = !uiState.isAnalyzing,
-                            colors = OutlinedTextFieldDefaults.colors(
-                                unfocusedBorderColor = BorderNormal,
-                                focusedBorderColor = BrandGreen,
-                                unfocusedContainerColor = WarmBackground,
-                                focusedContainerColor = WarmBackground
-                            ),
-                            shape = RoundedCornerShape(24.dp)
-                        )
-                        IconButton(
-                            onClick = { 
-                                viewModel.generateDraftFromText(inputText)
-                                inputText = ""
-                            },
-                            enabled = !uiState.isAnalyzing && inputText.isNotBlank()
-                        ) {
-                            Icon(Icons.Filled.Send, contentDescription = "发送", tint = if (inputText.isNotBlank()) BrandGreen else TextSecondary)
+                            IconButton(
+                                onClick = { /* Demo */ },
+                                enabled = !uiState.isAnalyzing
+                            ) {
+                                Icon(Icons.Filled.AddPhotoAlternate, contentDescription = "上传图片", tint = BrandGreen.copy(alpha = if (uiState.isAnalyzing) 0.5f else 1f))
+                            }
+                            OutlinedTextField(
+                                value = inputText,
+                                onValueChange = { inputText = it },
+                                modifier = Modifier.weight(1f),
+                                placeholder = { Text("告诉 AI 你今天吃了什么……", color = TextSecondary) },
+                                enabled = !uiState.isAnalyzing,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    unfocusedBorderColor = BorderNormal,
+                                    focusedBorderColor = BrandGreen,
+                                    unfocusedContainerColor = WarmBackground,
+                                    focusedContainerColor = WarmBackground
+                                ),
+                                shape = RoundedCornerShape(24.dp)
+                            )
+                            IconButton(
+                                onClick = { 
+                                    viewModel.generateDraftFromText(inputText)
+                                    inputText = ""
+                                },
+                                enabled = !uiState.isAnalyzing && inputText.isNotBlank()
+                            ) {
+                                Icon(Icons.Filled.Send, contentDescription = "发送", tint = if (inputText.isNotBlank()) BrandGreen else TextSecondary)
+                            }
                         }
                     }
                 }
-                // Add spacer to clear system navigation bar if not already handled
-                Spacer(modifier = Modifier.height(8.dp))
             }
         },
         containerColor = WarmBackground,
-        contentWindowInsets = WindowInsets(0, 0, 0, 0) // Prevent double padding
+        contentWindowInsets = WindowInsets(0, 0, 0, 0)
     ) { innerPadding ->
+        val layoutDirection = LocalLayoutDirection.current
         LazyColumn(
             state = listState,
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding),
-            contentPadding = PaddingValues(16.dp, 16.dp, 16.dp, 16.dp), // Normal padding
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(
+                start = 16.dp + innerPadding.calculateStartPadding(layoutDirection),
+                top = 16.dp + innerPadding.calculateTopPadding(),
+                end = 16.dp + innerPadding.calculateEndPadding(layoutDirection),
+                bottom = 16.dp + innerPadding.calculateBottomPadding()
+            ),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             if (uiState.chatMessages.isEmpty()) {
@@ -193,9 +203,7 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
                             onOptionSelected = { option -> viewModel.handleChatAction(message.id, option) }
                         )
                     }
-                    ChatMessageType.DraftCard -> {
-                        // Draft is shown separately below for now
-                    }
+                    else -> {}
                 }
             }
 
@@ -382,7 +390,7 @@ fun DraftCard(draft: DailyRecord, viewModel: DayZeroViewModel) {
         colors = CardDefaults.cardColors(containerColor = CardBackground),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
-        Column(modifier = Modifier.padding(20.dp)) {
+        Column(modifier = Modifier.padding(20.dp).padding(bottom = 8.dp)) { // Added extra bottom padding
             // Header
             Row(
                 modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
