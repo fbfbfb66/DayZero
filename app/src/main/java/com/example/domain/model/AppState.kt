@@ -4,7 +4,7 @@ import com.example.domain.model.ai.AiChatMessage
 import java.time.LocalDate
 
 data class AppState(
-    val currentDate: LocalDate = LocalDate.of(2026, 6, 7),
+    val currentDate: LocalDate = LocalDate.now(),
     val records: List<DailyRecord> = emptyList(),
     val chatMessages: List<AiChatMessage> = emptyList(),
     val isAnalyzing: Boolean = false,

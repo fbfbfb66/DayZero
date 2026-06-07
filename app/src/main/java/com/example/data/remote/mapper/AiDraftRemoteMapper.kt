@@ -2,8 +2,12 @@ package com.example.data.remote.mapper
 
 import com.example.data.remote.dto.AiDraftRequestDto
 import com.example.data.remote.dto.AiDraftResponseDto
+import com.example.data.remote.dto.AiSummaryRequestDto
 import com.example.data.remote.dto.RemoteFoodDto
 import com.example.data.remote.dto.RemoteMealDto
+import com.example.domain.model.DailyRecord
+import com.example.domain.model.FoodEntry
+import com.example.domain.model.MealEntry
 import com.example.domain.model.MealType
 import com.example.domain.model.ai.AiDraftRequest
 import com.example.domain.model.ai.CheckinDraft
@@ -17,7 +21,36 @@ class AiDraftRemoteMapper {
         return AiDraftRequestDto(
             date = request.date.toString(),
             text = request.text,
-            weightKg = request.weightKg?.toDouble()
+            weightKg = request.weightKg?.toDouble(),
+            context = request.context
+        )
+    }
+
+    fun toSummaryRequestDto(record: DailyRecord): AiSummaryRequestDto {
+        return AiSummaryRequestDto(
+            meals = record.meals.map { toMealDto(it) },
+            totalCalories = record.totalCalories,
+            weightKg = record.weightKg?.toDouble()
+        )
+    }
+
+    private fun toMealDto(domain: MealEntry): RemoteMealDto {
+        return RemoteMealDto(
+            mealType = domain.mealType.name,
+            displayName = domain.mealType.displayName,
+            photoUri = null,
+            foods = domain.foods.map { toFoodDto(it) },
+            mealCalories = domain.mealCalories
+        )
+    }
+
+    private fun toFoodDto(domain: FoodEntry): RemoteFoodDto {
+        return RemoteFoodDto(
+            id = domain.id,
+            name = domain.name,
+            quantity = domain.quantity,
+            estimatedCalories = domain.estimatedCalories,
+            confidence = domain.confidence
         )
     }
 

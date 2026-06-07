@@ -15,13 +15,20 @@
 - **持久化状态**: 记录、草稿、体重、食物项、**对话记录**均已实现本地持久化，App 重启后数据保持不变。
 - **AI 架构**: **已接入真实 AI (Supabase Edge Functions)**。具备完整的 AI Draft 架构。
     - **后端代理**: 使用 Supabase Edge Function (`generate-checkin-draft`) 作为 Kimi API 的代理。
+    - **今日总结**: 使用专门的 Edge Function (`generate-daily-summary`) 基于全天记录生成个性化建议。
     - **安全性**: Kimi API Key 仅保存在 Supabase Secret 中，Android 端通过 Supabase Publishable Key 进行身份验证。
-- **运行时数据来源**: 
-    - 记录观察: `RoomRecordRepository` -> Room Database。
+- **运行数据来源**: 
+    - 记录观察: `RoomRecordRepository` -> Room Database (Flow 自动更新)。
     - 草稿生成: `RemoteAiDraftRepository` (默认启用) 或 `FakeAiDraftRepository` (调试开关)。
 - **交互特性**: **支持多次分餐录入与自动合并**。同一天只保留一条 Confirmed 记录，新草稿确认时会智能合并。所有系统交互（如冲突处理、餐次追问）均已集成在 AI 聊天窗口内作为 **ChoiceCard** 出现。
+- **数据一致性**: 
+    - 已修复确认后不同步问题。
+    - 新增 **DraftOutputSanitizer** 防护逻辑，防止上下文（已有记录）污染新生成的草稿，确保午餐录入不再误触发早餐冲突。
 - **图片功能**: **尚未接入** (UI 占位图标，`MealEntry` 仅有 `hasPhoto: Boolean` 标记)。
-- **UI 布局**: 已修复 AI 记录页底部输入栏遮挡卡片内容的问题。通过将输入栏移至 `Scaffold` 的 `bottomBar` 槽位并集成 `imePadding`，确保所有聊天消息和交互卡片在任何滚动位置及键盘弹出时均清晰可见。
+- **UI 布局与动画**: 
+    - 已修复 AI 记录页底部输入栏遮挡内容问题。
+    - **UI 动效升级**: 全面引入 `animateItem()` 列表动画、Spring 弹性卡片伸缩动画、以及 AI 思考态的“三点跳动”视觉反馈。
+    - **智能滚动**: 实现了基于用户位置和消息来源的智能自动滚动逻辑，提升对话流的丝滑感。
 - **云同步 / 登录**: **尚未接入**。
 
 ---
@@ -51,14 +58,10 @@
 | 功能 | 当前状态 | 说明 |
 | :--- | :--- | :--- |
 | **日历页** | 已完成 | 展示 Confirmed 记录详情与打卡标记。 |
-| **AI记录页** | 已完成 | **支持真实对话流**、生成/编辑草稿、**多次分餐合并**、冲突处理。 |
-| **趋势页** | 已完成 | Canvas 绘制热量和体重的变化曲线 (Confirmed 数据)。 |
-| **Room 持久化** | 已完成 | 所有记录跨 App 重启保持不变。 |
-| **真实 AI 解析** | 已完成 | 通过 Supabase 代理调用 Kimi API。 |
-| **分餐合并逻辑** | 已完成 | 支持同一天多次录入并智能处理餐次冲突。 |
-| **本地总结生成** | 已完成 | 合并后基于全天已确认食物自动生成温柔总结。 |
-| **聊天记录持久化** | 已完成 | 对话流已存入 Room，重启 App 不消失。 |
-| **交互式对话** | 已完成 | 冲突处理等操作已集成进聊天流。 |
+| **AI记录页** | 已完成 | 支持真实对话流、生成/编辑草稿、多次分餐合并、冲突处理、**平滑动画与智能滚动**。 |
+| **今日总结生成** | 已完成 | **由 AI 实时生成**。基于全天 Confirmed 数据，提供个性化、温暖的饮食建议，支持本地模板 Fallback。 |
+| **Room 持久化** | 已完成 | 所有记录及**完整对话历史**跨 App 重启保持不变。 |
+| **交互优化** | 已完成 | 移除了底部多余背景框，输入栏紧贴底部，视觉更扁平现代。 |
 | **图片选择/拍照** | 尚未实现 | 仅有 UI 图标。 |
 
 ---
@@ -71,12 +74,36 @@
 ### 4.2 录入合并流 (Merging)
 1. `用户点击确认录入` -> `ViewModel.confirmDraftWithMerge()`。
 2. 查找当天是否有 `Confirmed` 记录。
-3. 若无，直接转为 `Confirmed`。
+3. 若无，将 `Draft` 状态修改为 `Confirmed` 并 `upsert` (ID 保持不变)。
 4. 若有，判断 `mealType` 是否冲突：
-    - 无冲突：直接合并。
-    - 有冲突：弹出 `AlertDialog` 询问（覆盖/仅添加未冲突/取消）。
-5. `DailySummaryBuilder` 重新生成全天总结。
-6. 更新 `Room` 并清理 `Draft`。
+    - 无冲突：直接合并到已有记录并 `upsert`。
+    - 有冲突：弹出 `ChoiceCard` 询问（覆盖/仅添加未冲突/取消）。
+5. `completeConfirmation()` 被调用：
+    - 向用户发送确认成功消息。
+    - 异步调用 `AiSummaryRepository.generateDailySummary()` 获取基于全天记录的 AI 建议。
+    - 成功后更新 `Room` 并显示 AI 建议气泡；失败则 fallback 使用 `DailySummaryBuilder`。
+
+---
+
+## 5. 核心修复与升级记录
+
+### 5.1 数据同步修复 (Phase 6.5)
+- **现象**: 确认录入成功但日历无标记。
+- **根因**: 在 `confirmDraftWithMerge` 逻辑中，当没有已有记录时，代码先 `upsert` 了 Confirmed 记录，紧接着又调用了 `deleteRecordById(draftId)`。由于转正后的记录沿用了草稿的 ID，导致刚存入的正式记录被立刻删除。
+- **解决方案**: 移除了该场景下的冗余 `delete` 调用。
+
+### 5.3 UI 体验与动效优化 (Phase 8)
+- **丝滑滚动**: 引入智能滚动逻辑，防止 AI 回复时强行中断用户翻看历史的行为。
+- **物理动效**: 卡片伸缩采用 `Spring` 弹性模型，消除生硬的布局切换感。
+- **AI 拟人化**: 增加 `TypingIndicator`（跳动的三点动画），提供更真实的对话反馈感。
+- **布局精简**: 移除了 AI 记录页多余的底层 Surface，实现了真正的沉浸式背景。
+
+---
+
+## 6. 开发者调试指南
+- **Logcat Tag**: `DayZeroDataFlow`。
+- **核心逻辑**: 观察 `observeRecords` 与 `confirmDraftWithMerge` 的协同。
+- **AI 调试**: 通过 `RemoteAiDraftRepository` 检查 Supabase 响应。
 
 ---
 

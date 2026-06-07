@@ -6,5 +6,6 @@ import com.squareup.moshi.JsonClass
 data class AiDraftRequestDto(
     val date: String,
     val text: String,
-    val weightKg: Double?
+    val weightKg: Double?,
+    val context: String? = null
 )

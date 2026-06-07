@@ -1,5 +1,6 @@
 package com.example
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -8,6 +9,7 @@ import com.example.data.local.database.DayZeroDatabase
 import com.example.data.remote.NetworkModule
 import com.example.data.repository.FakeAiDraftRepository
 import com.example.data.repository.RemoteAiDraftRepository
+import com.example.data.repository.RemoteAiSummaryRepository
 import com.example.data.repository.RoomRecordRepository
 import com.example.domain.mapper.CheckinDraftMapper
 import com.example.domain.model.AppState
@@ -22,7 +24,9 @@ import com.example.domain.model.ai.ChatMessageType
 import com.example.domain.model.ai.ChatOption
 import com.example.domain.model.ai.ChatRole
 import com.example.domain.model.ai.ChoiceCard
+import com.example.domain.model.ai.DraftOutputSanitizer
 import com.example.domain.repository.AiDraftRepository
+import com.example.domain.repository.AiSummaryRepository
 import com.example.domain.repository.RecordRepository
 import com.example.domain.summary.DailySummaryBuilder
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -44,7 +48,8 @@ sealed interface UiEvent {
 
 class DayZeroViewModel(
     private val recordRepository: RecordRepository,
-    private val aiDraftRepository: AiDraftRepository
+    private val aiDraftRepository: AiDraftRepository,
+    private val aiSummaryRepository: AiSummaryRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(AppState(currentDate = LocalDate.now()))
@@ -63,6 +68,9 @@ class DayZeroViewModel(
     private fun observeRecords() {
         recordRepository.observeRecords()
             .onEach { allRecords ->
+                Log.d("DayZeroDataFlow", "observeRecords emitted count=${allRecords.size}")
+                val confirmedCount = allRecords.count { it.status == RecordStatus.Confirmed }
+                Log.d("DayZeroDataFlow", "confirmed records count=$confirmedCount")
                 _uiState.update { it.copy(records = allRecords) }
             }
             .launchIn(viewModelScope)
@@ -94,14 +102,18 @@ class DayZeroViewModel(
                 } ?: ""
                 
                 val recentChat = _uiState.value.chatMessages.takeLast(5).joinToString("\n") { "${it.role}: ${it.text}" }
-                val fullText = if (contextText.isNotEmpty()) "$contextText\n$recentChat\n用户新输入: $text" else "$recentChat\n用户新输入: $text"
 
                 val request = AiDraftRequest(
                     date = date,
-                    text = fullText
+                    text = text,
+                    context = if (contextText.isNotEmpty()) "$contextText\n$recentChat" else recentChat
                 )
-                val draft = aiDraftRepository.generateDraft(request)
-                val dailyRecord = draftMapper.toDailyRecord(draft).copy(date = date)
+                val rawDraft = aiDraftRepository.generateDraft(request)
+                
+                // Phase 7: Sanitize draft to prevent context pollution (duplicating existing meals)
+                val sanitizedDraft = DraftOutputSanitizer.sanitize(rawDraft, text)
+                
+                val dailyRecord = draftMapper.toDailyRecord(sanitizedDraft).copy(date = date)
                 
                 recordRepository.upsertRecord(dailyRecord)
                 
@@ -133,6 +145,7 @@ class DayZeroViewModel(
                     ))
                 }
             } catch (e: Exception) {
+                Log.e("DayZeroDataFlow", "Analysis failed", e)
                 aiDraftRepository.insertChatMessage(AiChatMessage(role = ChatRole.Assistant, text = "这次分析失败了，可以稍后再试。"))
                 _uiEvents.emit(UiEvent.Error("AI 分析暂时失败了，可以稍后再试。"))
             } finally {
@@ -143,8 +156,15 @@ class DayZeroViewModel(
 
     fun confirmDraftWithMerge(draftId: String, weightKg: Float?) {
         viewModelScope.launch {
-            val draft = recordRepository.getRecordById(draftId) ?: return@launch
+            Log.d("DayZeroDataFlow", "confirmDraftWithMerge called, draftId=$draftId")
+            val draft = recordRepository.getRecordById(draftId) ?: run {
+                Log.d("DayZeroDataFlow", "draft NOT found: $draftId")
+                return@launch
+            }
+            Log.d("DayZeroDataFlow", "draft found: id=${draft.id}/date=${draft.date}/status=${draft.status}/meals=${draft.meals.count { it.foods.isNotEmpty() }}")
+            
             val existingConfirmed = recordRepository.getRecordByDateAndStatus(draft.date, RecordStatus.Confirmed)
+            Log.d("DayZeroDataFlow", "existing confirmed found: ${existingConfirmed?.let { "id=${it.id}/date=${it.date}/meals=${it.meals.count { m -> m.foods.isNotEmpty() }}" } ?: "null"}")
 
             if (existingConfirmed == null) {
                 val confirmedRecord = draft.copy(
@@ -152,8 +172,14 @@ class DayZeroViewModel(
                     weightKg = weightKg ?: draft.weightKg
                 )
                 val finalRecord = confirmedRecord.copy(aiSummary = DailySummaryBuilder.buildSummary(confirmedRecord))
+                Log.d("DayZeroDataFlow", "final confirmed record (new): id=${finalRecord.id}/date=${finalRecord.date}/status=${finalRecord.status}/meals=${finalRecord.meals.count { it.foods.isNotEmpty() }}/total calories=${finalRecord.totalCalories}")
+                
                 recordRepository.upsertRecord(finalRecord)
-                recordRepository.deleteRecordById(draftId)
+                Log.d("DayZeroDataFlow", "upsert confirmed success (same ID as draft, no delete needed)")
+                // Note: We used to call recordRepository.deleteRecordById(draftId) here, 
+                // but since finalRecord.id == draft.id, upsert already replaced it. 
+                // Calling delete would wipe out the confirmed record!
+                
                 completeConfirmation()
             } else {
                 val draftMealTypes = draft.meals.filter { it.foods.isNotEmpty() }.map { it.mealType }.toSet()
@@ -163,6 +189,7 @@ class DayZeroViewModel(
                 if (conflicts.isEmpty()) {
                     mergeAndSave(existingConfirmed, draft, weightKg, draftMealTypes)
                     recordRepository.deleteRecordById(draftId)
+                    Log.d("DayZeroDataFlow", "upsert merged confirmed success & delete draft success")
                     completeConfirmation()
                 } else {
                     _uiState.update { 
@@ -272,6 +299,7 @@ class DayZeroViewModel(
             weightKg = newWeight ?: existing.weightKg
         )
         val finalRecord = updatedRecord.copy(aiSummary = DailySummaryBuilder.buildSummary(updatedRecord))
+        Log.d("DayZeroDataFlow", "final confirmed record (merged): id=${finalRecord.id}/date=${finalRecord.date}/status=${finalRecord.status}/meals=${finalRecord.meals.count { it.foods.isNotEmpty() }}/total calories=${finalRecord.totalCalories}")
         recordRepository.upsertRecord(finalRecord)
     }
 
@@ -279,6 +307,28 @@ class DayZeroViewModel(
         _uiState.update { it.copy(conflictState = null) }
         _uiEvents.emit(UiEvent.RecordConfirmed)
         aiDraftRepository.insertChatMessage(AiChatMessage(role = ChatRole.Assistant, text = "已更新今天的记录。"))
+
+        // Phase 7: Upgrade daily summary to real AI summary
+        viewModelScope.launch {
+            val date = _uiState.value.currentDate
+            val confirmed = recordRepository.getRecordByDateAndStatus(date, RecordStatus.Confirmed) ?: return@launch
+            
+            try {
+                val aiSummary = aiSummaryRepository.generateDailySummary(confirmed)
+                if (aiSummary.isNotBlank()) {
+                    val updatedRecord = confirmed.copy(aiSummary = aiSummary)
+                    recordRepository.upsertRecord(updatedRecord)
+                    aiDraftRepository.insertChatMessage(AiChatMessage(role = ChatRole.Assistant, text = "我已经根据今天目前记录的内容更新了总结：\n\"$aiSummary\""))
+                }
+            } catch (e: Exception) {
+                Log.e("DayZeroDataFlow", "AI Summary generation failed, using local builder", e)
+                // Fallback to local builder if not already built or as a retry
+                val fallbackSummary = DailySummaryBuilder.buildSummary(confirmed)
+                if (confirmed.aiSummary != fallbackSummary) {
+                    recordRepository.upsertRecord(confirmed.copy(aiSummary = fallbackSummary))
+                }
+            }
+        }
     }
 
     fun removeFood(recordId: String, mealType: MealType, foodId: String) {
@@ -312,9 +362,19 @@ class DayZeroViewModel(
                     FakeAiDraftRepository()
                 }
 
+                val aiSummaryRepo = if (USE_REMOTE_AI) {
+                    RemoteAiSummaryRepository(NetworkModule.aiDraftApiService)
+                } else {
+                    object : AiSummaryRepository {
+                        override suspend fun generateDailySummary(record: DailyRecord): String = 
+                            DailySummaryBuilder.buildSummary(record)
+                    }
+                }
+
                 return DayZeroViewModel(
                     recordRepository = RoomRecordRepository(database.dailyRecordDao()),
-                    aiDraftRepository = aiRepository
+                    aiDraftRepository = aiRepository,
+                    aiSummaryRepository = aiSummaryRepo
                 ) as T
             }
         }
