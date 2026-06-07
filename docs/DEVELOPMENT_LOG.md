@@ -42,6 +42,7 @@
 - **仓库切换**：实现 `RemoteAiDraftRepository` 并设置为 `DayZeroViewModel` 的默认数据源。
 - **安全性保证**：Kimi API Key 彻底从移动端移除，仅保存在云端 Secret。
 - **错误处理**：增加了针对网络和 AI 解析失败的 `UiEvent.Error` 反馈逻辑。
+- **权限修复**：在 Manifest 中补全了必要的 `INTERNET` 权限，解决了发送消息时的闪退问题。
 - **闭环达成**：用户现在可以使用真实自然语言进行饮食记录分析。
 
 ## 当前仍未完成的部分
