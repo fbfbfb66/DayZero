@@ -10,8 +10,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.calculateEndPadding
-import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -58,7 +56,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -103,152 +100,164 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = WarmBackground)
             )
         },
-        bottomBar = {
-            Surface(
-                color = Color.White,
-                shadowElevation = 8.dp, // Add shadow to separate from content
-                modifier = Modifier.imePadding()
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 12.dp) // Extra padding for safety
-                ) {
-                    Text(
-                        text = "AI 分析功能正在开发中 · 当前为本地演示逻辑",
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 8.dp),
-                        textAlign = TextAlign.Center,
-                        color = com.example.ui.theme.TextTertiary,
-                        fontSize = 10.sp
-                    )
-
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(8.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            IconButton(
-                                onClick = { /* Demo */ },
-                                enabled = !uiState.isAnalyzing
-                            ) {
-                                Icon(Icons.Filled.AddPhotoAlternate, contentDescription = "上传图片", tint = BrandGreen.copy(alpha = if (uiState.isAnalyzing) 0.5f else 1f))
-                            }
-                            OutlinedTextField(
-                                value = inputText,
-                                onValueChange = { inputText = it },
-                                modifier = Modifier.weight(1f),
-                                placeholder = { Text("告诉 AI 你今天吃了什么……", color = TextSecondary) },
-                                enabled = !uiState.isAnalyzing,
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    unfocusedBorderColor = BorderNormal,
-                                    focusedBorderColor = BrandGreen,
-                                    unfocusedContainerColor = WarmBackground,
-                                    focusedContainerColor = WarmBackground
-                                ),
-                                shape = RoundedCornerShape(24.dp)
-                            )
-                            IconButton(
-                                onClick = { 
-                                    viewModel.generateDraftFromText(inputText)
-                                    inputText = ""
-                                },
-                                enabled = !uiState.isAnalyzing && inputText.isNotBlank()
-                            ) {
-                                Icon(Icons.Filled.Send, contentDescription = "发送", tint = if (inputText.isNotBlank()) BrandGreen else TextSecondary)
-                            }
-                        }
-                    }
-                }
-            }
-        },
         containerColor = WarmBackground,
         contentWindowInsets = WindowInsets(0, 0, 0, 0)
     ) { innerPadding ->
-        val layoutDirection = LocalLayoutDirection.current
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(
-                start = 16.dp + innerPadding.calculateStartPadding(layoutDirection),
-                top = 16.dp + innerPadding.calculateTopPadding(),
-                end = 16.dp + innerPadding.calculateEndPadding(layoutDirection),
-                bottom = 16.dp + innerPadding.calculateBottomPadding()
-            ),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(top = innerPadding.calculateTopPadding())
         ) {
-            if (uiState.chatMessages.isEmpty()) {
-                item {
-                    AiMessage("你好！我是你的饮食助手。你可以直接告诉我你吃了什么，我会帮你记录下来。", 0L)
+            // Layer 1: Data Window (Bottom-most layer)
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(
+                    start = 16.dp, 
+                    top = 16.dp, 
+                    end = 16.dp, 
+                    bottom = 140.dp // Extra space to scroll above the floating input area
+                ),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                if (uiState.chatMessages.isEmpty()) {
+                    item {
+                        AiMessage("你好！我是你的饮食助手。你可以直接告诉我你吃了什么，我会帮你记录下来。", 0L)
+                    }
                 }
-            }
 
-            items(uiState.chatMessages) { message ->
-                when (message.messageType) {
-                    ChatMessageType.Text -> {
-                        if (message.role == ChatRole.User) {
-                            UserMessage(message.text, message.createdAt)
-                        } else {
-                            AiMessage(message.text, message.createdAt)
+                items(uiState.chatMessages) { message ->
+                    when (message.messageType) {
+                        ChatMessageType.Text -> {
+                            if (message.role == ChatRole.User) {
+                                UserMessage(message.text, message.createdAt)
+                            } else {
+                                AiMessage(message.text, message.createdAt)
+                            }
+                        }
+                        ChatMessageType.ChoiceCard -> {
+                            ChoiceCardMessage(
+                                message = message,
+                                onOptionSelected = { option -> viewModel.handleChatAction(message.id, option) }
+                            )
+                        }
+                        else -> {}
+                    }
+                }
+
+                if (uiState.isAnalyzing) {
+                    item {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            AiMessage("正在分析中...", System.currentTimeMillis())
+                            Spacer(modifier = Modifier.width(8.dp))
+                            androidx.compose.material3.CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = BrandGreen
+                            )
                         }
                     }
-                    ChatMessageType.ChoiceCard -> {
-                        ChoiceCardMessage(
-                            message = message,
-                            onOptionSelected = { option -> viewModel.handleChatAction(message.id, option) }
-                        )
-                    }
-                    else -> {}
                 }
-            }
 
-            if (uiState.isAnalyzing) {
-                item {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        AiMessage("正在分析中...", System.currentTimeMillis())
-                        Spacer(modifier = Modifier.width(8.dp))
-                        androidx.compose.material3.CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp,
-                            color = BrandGreen
-                        )
+                val draftRecord = uiState.records.find { it.status == RecordStatus.Draft }
+                if (draftRecord != null) {
+                    item {
+                        DraftCard(draftRecord, viewModel)
                     }
                 }
-            }
 
-            val draftRecord = uiState.records.find { it.status == RecordStatus.Draft }
-            if (draftRecord != null) {
-                item {
-                    DraftCard(draftRecord, viewModel)
+                val confirmedToday = uiState.records.find { it.date == uiState.currentDate && it.status == RecordStatus.Confirmed }
+                if (confirmedToday != null) {
+                    item {
+                        ConfirmedSummaryCard(confirmedToday)
+                    }
+                }
+
+                if (draftRecord == null && !uiState.isAnalyzing && uiState.chatMessages.isNotEmpty()) {
+                    item {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                "暂无待确认草稿",
+                                color = TextPrimary,
+                                fontWeight = FontWeight.Medium,
+                                fontSize = 14.sp
+                            )
+                        }
+                    }
                 }
             }
 
-            val confirmedToday = uiState.records.find { it.date == uiState.currentDate && it.status == RecordStatus.Confirmed }
-            if (confirmedToday != null) {
-                item {
-                    ConfirmedSummaryCard(confirmedToday)
-                }
-            }
+            // Layer 2: Floating Input Area (Top layer)
+            // This replaces the solid white bar and removes the "beige middle layer"
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .background(Color.Transparent) // Clean!
+                    .imePadding()
+                    .navigationBarsPadding()
+            ) {
+                // Disclaimer (Optional: can be translucent)
+                Text(
+                    text = "AI 分析功能正在开发中 · 当前为本地演示逻辑",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                    textAlign = TextAlign.Center,
+                    color = com.example.ui.theme.TextTertiary.copy(alpha = 0.8f),
+                    fontSize = 10.sp
+                )
 
-            if (draftRecord == null && !uiState.isAnalyzing && uiState.chatMessages.isNotEmpty()) {
-                item {
-                    Column(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
+                Surface(
+                    modifier = Modifier.padding(12.dp),
+                    shape = RoundedCornerShape(28.dp),
+                    color = Color.White,
+                    shadowElevation = 6.dp
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            "暂无待确认草稿",
-                            color = TextPrimary,
-                            fontWeight = FontWeight.Medium,
-                            fontSize = 14.sp
+                        IconButton(
+                            onClick = { /* Demo */ },
+                            enabled = !uiState.isAnalyzing
+                        ) {
+                            Icon(Icons.Filled.AddPhotoAlternate, contentDescription = "上传图片", tint = BrandGreen.copy(alpha = if (uiState.isAnalyzing) 0.5f else 1f))
+                        }
+                        OutlinedTextField(
+                            value = inputText,
+                            onValueChange = { inputText = it },
+                            modifier = Modifier.weight(1f),
+                            placeholder = { Text("告诉 AI 你今天吃了什么……", color = TextSecondary) },
+                            enabled = !uiState.isAnalyzing,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                unfocusedBorderColor = Color.Transparent, // Clean borderless style
+                                focusedBorderColor = Color.Transparent,
+                                unfocusedContainerColor = Color.Transparent,
+                                focusedContainerColor = Color.Transparent
+                            ),
+                            maxLines = 3
                         )
+                        IconButton(
+                            onClick = { 
+                                viewModel.generateDraftFromText(inputText)
+                                inputText = ""
+                            },
+                            enabled = !uiState.isAnalyzing && inputText.isNotBlank()
+                        ) {
+                            Icon(
+                                Icons.Filled.Send, 
+                                contentDescription = "发送", 
+                                tint = if (inputText.isNotBlank()) BrandGreen else TextSecondary.copy(alpha = 0.4f)
+                            )
+                        }
                     }
                 }
+                // Small spacer for rounded aesthetics near bottom
+                Spacer(modifier = Modifier.height(4.dp))
             }
         }
     }
@@ -390,7 +399,7 @@ fun DraftCard(draft: DailyRecord, viewModel: DayZeroViewModel) {
         colors = CardDefaults.cardColors(containerColor = CardBackground),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
-        Column(modifier = Modifier.padding(20.dp).padding(bottom = 8.dp)) { // Added extra bottom padding
+        Column(modifier = Modifier.padding(20.dp).padding(bottom = 8.dp)) {
             // Header
             Row(
                 modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
