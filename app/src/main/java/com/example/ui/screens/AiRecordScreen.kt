@@ -9,11 +9,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -98,150 +99,146 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = WarmBackground)
             )
         },
+        bottomBar = {
+            // Move input bar to bottomBar slot for correct padding/occlusion handling
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color.White)
+                    .imePadding() // Essential for keyboard handling
+            ) {
+                Text(
+                    text = "AI 分析功能正在开发中 · 当前为本地演示逻辑",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                    textAlign = TextAlign.Center,
+                    color = com.example.ui.theme.TextTertiary,
+                    fontSize = 10.sp
+                )
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(
+                            onClick = { /* Demo */ },
+                            enabled = !uiState.isAnalyzing
+                        ) {
+                            Icon(Icons.Filled.AddPhotoAlternate, contentDescription = "上传图片", tint = BrandGreen.copy(alpha = if (uiState.isAnalyzing) 0.5f else 1f))
+                        }
+                        OutlinedTextField(
+                            value = inputText,
+                            onValueChange = { inputText = it },
+                            modifier = Modifier.weight(1f),
+                            placeholder = { Text("告诉 AI 你今天吃了什么……", color = TextSecondary) },
+                            enabled = !uiState.isAnalyzing,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                unfocusedBorderColor = BorderNormal,
+                                focusedBorderColor = BrandGreen,
+                                unfocusedContainerColor = WarmBackground,
+                                focusedContainerColor = WarmBackground
+                            ),
+                            shape = RoundedCornerShape(24.dp)
+                        )
+                        IconButton(
+                            onClick = { 
+                                viewModel.generateDraftFromText(inputText)
+                                inputText = ""
+                            },
+                            enabled = !uiState.isAnalyzing && inputText.isNotBlank()
+                        ) {
+                            Icon(Icons.Filled.Send, contentDescription = "发送", tint = if (inputText.isNotBlank()) BrandGreen else TextSecondary)
+                        }
+                    }
+                }
+                // Add spacer to clear system navigation bar if not already handled
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+        },
         containerColor = WarmBackground,
-        modifier = Modifier.imePadding()
+        contentWindowInsets = WindowInsets(0, 0, 0, 0) // Prevent double padding
     ) { innerPadding ->
-        Column(
+        LazyColumn(
+            state = listState,
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
+                .padding(innerPadding),
+            contentPadding = PaddingValues(16.dp, 16.dp, 16.dp, 16.dp), // Normal padding
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
-                contentPadding = PaddingValues(16.dp, 16.dp, 16.dp, 80.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                if (uiState.chatMessages.isEmpty()) {
-                    item {
-                        AiMessage("你好！我是你的饮食助手。你可以直接告诉我你吃了什么，我会帮你记录下来。", 0L)
-                    }
+            if (uiState.chatMessages.isEmpty()) {
+                item {
+                    AiMessage("你好！我是你的饮食助手。你可以直接告诉我你吃了什么，我会帮你记录下来。", 0L)
                 }
+            }
 
-                items(uiState.chatMessages) { message ->
-                    when (message.messageType) {
-                        ChatMessageType.Text -> {
-                            if (message.role == ChatRole.User) {
-                                UserMessage(message.text, message.createdAt)
-                            } else {
-                                AiMessage(message.text, message.createdAt)
-                            }
-                        }
-                        ChatMessageType.ChoiceCard -> {
-                            ChoiceCardMessage(
-                                message = message,
-                                onOptionSelected = { option -> viewModel.handleChatAction(message.id, option) }
-                            )
-                        }
-                        ChatMessageType.DraftCard -> {
-                            // Handled separately below or can be integrated here
+            items(uiState.chatMessages) { message ->
+                when (message.messageType) {
+                    ChatMessageType.Text -> {
+                        if (message.role == ChatRole.User) {
+                            UserMessage(message.text, message.createdAt)
+                        } else {
+                            AiMessage(message.text, message.createdAt)
                         }
                     }
-                }
-
-                if (uiState.isAnalyzing) {
-                    item {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            AiMessage("正在分析中...", System.currentTimeMillis())
-                            Spacer(modifier = Modifier.width(8.dp))
-                            androidx.compose.material3.CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                strokeWidth = 2.dp,
-                                color = BrandGreen
-                            )
-                        }
+                    ChatMessageType.ChoiceCard -> {
+                        ChoiceCardMessage(
+                            message = message,
+                            onOptionSelected = { option -> viewModel.handleChatAction(message.id, option) }
+                        )
                     }
-                }
-
-                val draftRecord = uiState.records.find { it.status == RecordStatus.Draft }
-                if (draftRecord != null) {
-                    item {
-                        DraftCard(draftRecord, viewModel)
-                    }
-                }
-
-                val confirmedToday = uiState.records.find { it.date == uiState.currentDate && it.status == RecordStatus.Confirmed }
-                if (confirmedToday != null) {
-                    item {
-                        ConfirmedSummaryCard(confirmedToday)
-                    }
-                }
-
-                if (draftRecord == null && !uiState.isAnalyzing && uiState.chatMessages.isNotEmpty()) {
-                    item {
-                        Column(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Text(
-                                "暂无待确认草稿",
-                                color = TextPrimary,
-                                fontWeight = FontWeight.Medium,
-                                fontSize = 14.sp
-                            )
-                        }
+                    ChatMessageType.DraftCard -> {
+                        // Draft is shown separately below for now
                     }
                 }
             }
 
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color.White)
-                    .navigationBarsPadding()
-            ) {
-                Column {
-                    Text(
-                        text = "AI 分析功能正在开发中 · 当前为本地演示逻辑",
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 8.dp),
-                        textAlign = TextAlign.Center,
-                        color = com.example.ui.theme.TextTertiary,
-                        fontSize = 10.sp
-                    )
+            if (uiState.isAnalyzing) {
+                item {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        AiMessage("正在分析中...", System.currentTimeMillis())
+                        Spacer(modifier = Modifier.width(8.dp))
+                        androidx.compose.material3.CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = BrandGreen
+                        )
+                    }
+                }
+            }
 
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(8.dp)
+            val draftRecord = uiState.records.find { it.status == RecordStatus.Draft }
+            if (draftRecord != null) {
+                item {
+                    DraftCard(draftRecord, viewModel)
+                }
+            }
+
+            val confirmedToday = uiState.records.find { it.date == uiState.currentDate && it.status == RecordStatus.Confirmed }
+            if (confirmedToday != null) {
+                item {
+                    ConfirmedSummaryCard(confirmedToday)
+                }
+            }
+
+            if (draftRecord == null && !uiState.isAnalyzing && uiState.chatMessages.isNotEmpty()) {
+                item {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            IconButton(
-                                onClick = { /* Demo */ },
-                                enabled = !uiState.isAnalyzing
-                            ) {
-                                Icon(Icons.Filled.AddPhotoAlternate, contentDescription = "上传图片", tint = BrandGreen.copy(alpha = if (uiState.isAnalyzing) 0.5f else 1f))
-                            }
-                            OutlinedTextField(
-                                value = inputText,
-                                onValueChange = { inputText = it },
-                                modifier = Modifier.weight(1f),
-                                placeholder = { Text("告诉 AI 你今天吃了什么……", color = TextSecondary) },
-                                enabled = !uiState.isAnalyzing,
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    unfocusedBorderColor = BorderNormal,
-                                    focusedBorderColor = BrandGreen,
-                                    unfocusedContainerColor = WarmBackground,
-                                    focusedContainerColor = WarmBackground
-                                ),
-                                shape = RoundedCornerShape(24.dp)
-                            )
-                            IconButton(
-                                onClick = { 
-                                    viewModel.generateDraftFromText(inputText)
-                                    inputText = ""
-                                },
-                                enabled = !uiState.isAnalyzing && inputText.isNotBlank()
-                            ) {
-                                Icon(Icons.Filled.Send, contentDescription = "发送", tint = if (inputText.isNotBlank()) BrandGreen else TextSecondary)
-                            }
-                        }
+                        Text(
+                            "暂无待确认草稿",
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 14.sp
+                        )
                     }
                 }
             }
@@ -307,7 +304,7 @@ fun AiMessage(text: String, createdAt: Long) {
 }
 
 @Composable
-fun ChoiceCardMessage(message: AiChatMessage, onOptionSelected: (ChatOption) -> Unit) {
+fun ChoiceCardMessage(message: AiChatMessage, onOptionSelected: (com.example.domain.model.ai.ChatOption) -> Unit) {
     val choiceCard = message.choiceCard ?: return
     
     Column(
@@ -320,24 +317,26 @@ fun ChoiceCardMessage(message: AiChatMessage, onOptionSelected: (ChatOption) -> 
             Spacer(modifier = Modifier.height(8.dp))
             Card(
                 shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = CardBackground),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
                 border = androidx.compose.foundation.BorderStroke(1.dp, BorderNormal),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Column(modifier = Modifier.padding(12.dp)) {
-                    Text(choiceCard.title, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = TextPrimary)
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(choiceCard.title, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = TextPrimary)
                     Spacer(modifier = Modifier.height(12.dp))
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         choiceCard.options.forEach { option ->
-                            OutlinedButton(
+                            Button(
                                 onClick = { onOptionSelected(option) },
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(12.dp),
-                                colors = ButtonDefaults.outlinedButtonColors(contentColor = BrandGreen),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, BrandGreen.copy(alpha = 0.3f)),
-                                contentPadding = PaddingValues(vertical = 8.dp)
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (option.label.contains("覆盖")) Color(0xFFE57373) else BrandGreen
+                                ),
+                                contentPadding = PaddingValues(vertical = 10.dp)
                             ) {
-                                Text(option.label, fontSize = 13.sp)
+                                Text(option.label, fontSize = 14.sp, color = Color.White, fontWeight = FontWeight.Medium)
                             }
                         }
                     }
@@ -350,9 +349,10 @@ fun ChoiceCardMessage(message: AiChatMessage, onOptionSelected: (ChatOption) -> 
 @Composable
 fun ConfirmedSummaryCard(record: DailyRecord) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
         shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = LightGreen.copy(alpha = 0.5f))
+        colors = CardDefaults.cardColors(containerColor = LightGreen.copy(alpha = 0.7f)),
+        border = androidx.compose.foundation.BorderStroke(1.dp, BrandGreen.copy(alpha = 0.2f))
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
