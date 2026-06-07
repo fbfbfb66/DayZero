@@ -8,6 +8,8 @@ import kotlinx.coroutines.flow.Flow
 interface RecordRepository {
     fun observeRecords(): Flow<List<DailyRecord>>
 
+    suspend fun upsertRecord(record: DailyRecord)
+
     suspend fun updateRecordStatus(
         recordId: String,
         status: RecordStatus,

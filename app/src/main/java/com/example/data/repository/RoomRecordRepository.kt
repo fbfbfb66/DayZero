@@ -30,6 +30,10 @@ class RoomRecordRepository(
             }
     }
 
+    override suspend fun upsertRecord(record: DailyRecord) {
+        dao.upsertRecord(mapper.toEntity(record))
+    }
+
     override suspend fun updateRecordStatus(recordId: String, status: RecordStatus, weightKg: Float?) {
         val entity = dao.getRecordById(recordId)
         if (entity != null) {

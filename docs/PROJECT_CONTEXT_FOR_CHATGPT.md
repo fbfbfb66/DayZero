@@ -27,16 +27,16 @@
     - `DailyRecord.kt`, `MealEntry.kt`, `FoodEntry.kt`: 核心业务模型。
     - `RecordStatus.kt`, `MealType.kt`: 枚举定义。
     - `AppState.kt`: UI 状态封装。
+- **`com.example.domain.model.ai`**: AI 草稿相关的领域模型包。
+    - `CheckinDraft.kt`, `DraftMeal.kt`, `DraftFood.kt`, `AiDraftRequest.kt`。
+- **`com.example.domain.mapper`**:
+    - `CheckinDraftMapper.kt`: 负责将 AI 草稿转换为核心业务模型 `DailyRecord`。
 - **`com.example.domain.repository`**: 仓库接口包。
-    - `RecordRepository.kt`: 定义数据操作契约（Flow 观察、异步更新）。
-- **`com.example.data.local`**: 本地存储实现包。
-    - **`dao/`**: `DailyRecordDao.kt` (Room DAO)。
-    - **`database/`**: `DayZeroDatabase.kt` (Room Database 单例)。
-    - **`entity/`**: `DailyRecordEntity.kt` (Room Entity，含 `mealsJson`)。
-    - **`mapper/`**: `DailyRecordMapper.kt` (实体与模型转换，使用 Moshi 处理 JSON)。
+    - `RecordRepository.kt`: 定义数据操作契约。
+    - `AiDraftRepository.kt`: 定义 AI 草稿生成契约。
 - **`com.example.data.repository`**: 仓库实现包。
-    - `RoomRecordRepository.kt`: **当前主仓库**，负责 Room 交互及首次启动数据初始化逻辑。
-    - `MockRecordRepository.kt`: 旧仓库实现，目前保留作为备用参考。
+    - `RoomRecordRepository.kt`: 主仓库，负责 Room 持久化。
+    - `FakeAiDraftRepository.kt`: **AI 草稿生成实现**，当前为本地模拟逻辑，未来可替换为真实 AI。
 - **`com.example.data.mock`**:
     - `MockRecords.kt`: 提供 `createMockRecords()` 用于首次运行的数据预填充。
 - **`com.example`**:
@@ -94,9 +94,14 @@
 `Room Database` -> `DailyRecordDao` -> `RoomRecordRepository` -> `RecordRepository` (接口) -> `DayZeroViewModel` -> `uiState` (Flow) -> `UI Screens`
 
 **操作流向**:
-1. 用户在 UI 点击（如“确认录入”）。
-2. ViewModel 调用 `repository.updateRecordStatus(id, Confirmed)`。
-3. ViewModel 发射 `UiEvent.RecordConfirmed` 一次性事件。
+1. 用户在 UI 输入文本并点击“发送”。
+2. ViewModel 调用 `aiDraftRepository.generateDraft(text)`。
+3. `FakeAiDraftRepository` 模拟分析并返回 `CheckinDraft`。
+4. ViewModel 使用 `CheckinDraftMapper` 转换为 `DailyRecord(status = Draft)`。
+5. ViewModel 调用 `recordRepository.upsertRecord(dailyRecord)`。
+6. UI 自动显示新草稿卡片。
+7. 用户点击“确认录入”后，ViewModel 调用 `repository.updateRecordStatus(id, Confirmed)`。
+8. ViewModel 发射 `UiEvent.RecordConfirmed` 一次性事件。
 4. 顶层 UI (`MainApp`) 监听到事件，显示 `SuccessConfirmOverlay` 动画。
 5. Room 数据库更新，触发 `observeAllRecords` 的 Flow 发射新数据。
 6. ViewModel 监听到新数据，更新 `uiState`。

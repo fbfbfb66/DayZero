@@ -27,11 +27,17 @@
 - **依赖注入升级**：创建 `DayZeroViewModel.Factory`，在 `AppNavigation` 中手动注入数据库依赖。
 - **数据初始化**：实现 **Database Seeding** 策略。首次启动且数据库为空时，自动将 Mock 数据插入 Room，确保初次安装体验。
 - **持久化闭环**：确认录入状态、删除食物、修改体重、趋势图更新等行为现在均可**跨 App 重启持久化**。
-- **UI 优化**：引入 `UiEvent` 系统，将“确认成功”提示从黑色 Snackbar 替换为居中、主题一致的成功动画组件 (`SuccessConfirmOverlay`)，并解决了导航切换导致的提示重复弹出问题。
-- **当前状态**：项目已从内存演示版转变为功能完备的本地工具版。
+- **UI 优化**：引入 `UiEvent` 系统，将“确认成功”提示从黑色 Snackbar 替换为居中、主题一致的成功动画组件 (`SuccessConfirmOverlay`)。
+
+## 阶段 4：AI Draft 架构建立
+- **AI 抽象层**：创建了 `AiDraftRepository` 接口，定义了从文本生成草稿的标准契约。
+- **模拟 AI 实现**：实现了 `FakeAiDraftRepository`，基于关键词匹配模拟 AI 分析饮食并生成结构化草稿。
+- **数据转换**：引入 `CheckinDraftMapper`，实现了 AI 草稿到 Room 持久化模型 `DailyRecord` 的无缝转换。
+- **流程跑通**：用户在 AI 记录页输入文本，点击发送即可在本地生成并持久化一个新的 Draft，随后可继续编辑并确认录入。
+- **UI 集成**：发送按钮集成了 `isAnalyzing` 状态，显示加载动画并防止重复提交。
 
 ## 当前仍未完成的部分
-- **真实 AI**：对话解析仍为 Mock 逻辑。
+- **真实 AI**：底层已具备切换能力，但目前仍是本地 Fake 逻辑。
 - **图片功能**：`MealEntry` 中仅有 `hasPhoto` 标记，尚无真实图片存储。
 - **云同步**：暂无登录及多端同步。
 

@@ -5,10 +5,14 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.CreationExtras
 import com.example.data.local.database.DayZeroDatabase
+import com.example.data.repository.FakeAiDraftRepository
 import com.example.data.repository.RoomRecordRepository
+import com.example.domain.mapper.CheckinDraftMapper
 import com.example.domain.model.AppState
 import com.example.domain.model.MealType
 import com.example.domain.model.RecordStatus
+import com.example.domain.model.ai.AiDraftRequest
+import com.example.domain.repository.AiDraftRepository
 import com.example.domain.repository.RecordRepository
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,7 +30,8 @@ sealed interface UiEvent {
 }
 
 class DayZeroViewModel(
-    private val recordRepository: RecordRepository
+    private val recordRepository: RecordRepository,
+    private val aiDraftRepository: AiDraftRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(AppState())
@@ -34,6 +39,8 @@ class DayZeroViewModel(
 
     private val _uiEvents = MutableSharedFlow<UiEvent>()
     val uiEvents: SharedFlow<UiEvent> = _uiEvents.asSharedFlow()
+    
+    private val draftMapper = CheckinDraftMapper()
 
     init {
         observeRecords()
@@ -47,6 +54,32 @@ class DayZeroViewModel(
             .launchIn(viewModelScope)
     }
 
+    fun generateDraftFromText(text: String) {
+        if (text.isBlank()) return
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(isAnalyzing = true) }
+            try {
+                val request = AiDraftRequest(
+                    date = _uiState.value.currentDate,
+                    text = text
+                )
+                val draft = aiDraftRepository.generateDraft(request)
+                val dailyRecord = draftMapper.toDailyRecord(draft)
+                
+                // Save as Draft to Room
+                recordRepository.upsertRecord(dailyRecord)
+            } catch (e: Exception) {
+                // Handle error
+            } finally {
+                _uiState.update { it.copy(isAnalyzing = false) }
+            }
+        }
+    }
+    
+    // I need to add upsertRecord to RecordRepository interface if it's not there.
+    // Wait, let's check RecordRepository.kt content.
+    
     fun confirmDraft(recordId: String, newWeight: Float?) {
         viewModelScope.launch {
             recordRepository.updateRecordStatus(
@@ -78,7 +111,8 @@ class DayZeroViewModel(
                 val application = checkNotNull(extras[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY])
                 val database = DayZeroDatabase.getDatabase(application)
                 return DayZeroViewModel(
-                    recordRepository = RoomRecordRepository(database.dailyRecordDao())
+                    recordRepository = RoomRecordRepository(database.dailyRecordDao()),
+                    aiDraftRepository = FakeAiDraftRepository()
                 ) as T
             }
         }

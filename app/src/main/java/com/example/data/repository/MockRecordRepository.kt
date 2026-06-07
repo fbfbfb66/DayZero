@@ -15,6 +15,17 @@ class MockRecordRepository : RecordRepository {
 
     override fun observeRecords(): Flow<List<DailyRecord>> = _records.asStateFlow()
 
+    override suspend fun upsertRecord(record: DailyRecord) {
+        _records.update { currentRecords ->
+            val index = currentRecords.indexOfFirst { it.id == record.id }
+            if (index >= 0) {
+                currentRecords.toMutableList().apply { set(index, record) }
+            } else {
+                currentRecords + record
+            }
+        }
+    }
+
     override suspend fun updateRecordStatus(recordId: String, status: RecordStatus, weightKg: Float?) {
         _records.update { currentRecords ->
             currentRecords.map { record ->

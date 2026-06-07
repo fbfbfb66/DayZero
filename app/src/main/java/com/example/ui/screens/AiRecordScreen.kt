@@ -158,14 +158,18 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        IconButton(onClick = { /* Demo */ }) {
-                            Icon(Icons.Filled.AddPhotoAlternate, contentDescription = "上传图片", tint = BrandGreen)
+                        IconButton(
+                            onClick = { /* Demo */ },
+                            enabled = !uiState.isAnalyzing
+                        ) {
+                            Icon(Icons.Filled.AddPhotoAlternate, contentDescription = "上传图片", tint = BrandGreen.copy(alpha = if (uiState.isAnalyzing) 0.5f else 1f))
                         }
                         OutlinedTextField(
                             value = inputText,
                             onValueChange = { inputText = it },
                             modifier = Modifier.weight(1f),
                             placeholder = { Text("告诉 AI 你今天吃了什么……", color = TextSecondary) },
+                            enabled = !uiState.isAnalyzing,
                             colors = OutlinedTextFieldDefaults.colors(
                                 unfocusedBorderColor = BorderNormal,
                                 focusedBorderColor = BrandGreen,
@@ -174,8 +178,22 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
                             ),
                             shape = RoundedCornerShape(24.dp)
                         )
-                        IconButton(onClick = { /* Demo */ }) {
-                            Icon(Icons.Filled.Send, contentDescription = "发送", tint = BrandGreen)
+                        IconButton(
+                            onClick = { 
+                                viewModel.generateDraftFromText(inputText)
+                                inputText = ""
+                            },
+                            enabled = !uiState.isAnalyzing && inputText.isNotBlank()
+                        ) {
+                            if (uiState.isAnalyzing) {
+                                androidx.compose.material3.CircularProgressIndicator(
+                                    modifier = Modifier.size(24.dp),
+                                    strokeWidth = 2.dp,
+                                    color = BrandGreen
+                                )
+                            } else {
+                                Icon(Icons.Filled.Send, contentDescription = "发送", tint = if (inputText.isNotBlank()) BrandGreen else TextSecondary)
+                            }
                         }
                     }
                 }
