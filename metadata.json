@@ -1,0 +1,6 @@
+{
+  "name": "DayZero",
+  "description": "A fresh green AI-based diet tracking application prototype",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
