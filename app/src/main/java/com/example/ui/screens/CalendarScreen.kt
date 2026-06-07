@@ -71,6 +71,7 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.WarmBackground
 import java.time.LocalDate
+import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -79,8 +80,10 @@ fun CalendarScreen(viewModel: DayZeroViewModel, onNavigateToAi: () -> Unit) {
     val uiState by viewModel.uiState.collectAsState()
     var selectedDate by remember { mutableStateOf(uiState.currentDate) }
 
-    val daysInMonth = 30 // Simplified for prototype
-    val firstDayOffset = 1 // Assuming 1st is Tuesday
+    val yearMonth = remember(selectedDate) { YearMonth.from(selectedDate) }
+    val daysInMonth = yearMonth.lengthOfMonth()
+    val firstDayOfMonth = yearMonth.atDay(1)
+    val firstDayOffset = firstDayOfMonth.dayOfWeek.value - 1 // 0 for Monday
 
     val confirmedRecords = uiState.records.filter { it.status == RecordStatus.Confirmed }
     val recordForSelectedDate = confirmedRecords.find { it.date == selectedDate }
@@ -169,7 +172,7 @@ fun CalendarScreen(viewModel: DayZeroViewModel, onNavigateToAi: () -> Unit) {
                 }
             }
 
-            // Simple Calendar Grid
+            // Calendar Grid
             Card(
                 colors = CardDefaults.cardColors(containerColor = CardBackground),
                 elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
@@ -185,13 +188,13 @@ fun CalendarScreen(viewModel: DayZeroViewModel, onNavigateToAi: () -> Unit) {
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                     
-                    val weeks = (daysInMonth + firstDayOffset) / 7 + 1
+                    val weeks = (daysInMonth + firstDayOffset + 6) / 7
                     for (week in 0 until weeks) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
                             for (dayOfWeek in 0..6) {
                                 val dayNum = week * 7 + dayOfWeek - firstDayOffset + 1
                                 if (dayNum in 1..daysInMonth) {
-                                    val date = LocalDate.of(2026, 6, dayNum)
+                                    val date = yearMonth.atDay(dayNum)
                                     val hasRecord = confirmedRecords.any { it.date == date }
                                     val isSelected = date == selectedDate
                                     

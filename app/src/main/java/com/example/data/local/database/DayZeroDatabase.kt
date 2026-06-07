@@ -4,12 +4,15 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import com.example.data.local.dao.AiChatMessageDao
 import com.example.data.local.dao.DailyRecordDao
+import com.example.data.local.entity.AiChatMessageEntity
 import com.example.data.local.entity.DailyRecordEntity
 
-@Database(entities = [DailyRecordEntity::class], version = 1, exportSchema = false)
+@Database(entities = [DailyRecordEntity::class, AiChatMessageEntity::class], version = 1, exportSchema = false)
 abstract class DayZeroDatabase : RoomDatabase() {
     abstract fun dailyRecordDao(): DailyRecordDao
+    abstract fun aiChatMessageDao(): AiChatMessageDao
 
     companion object {
         @Volatile

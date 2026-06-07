@@ -17,6 +17,7 @@ import com.example.domain.model.MealType
 import com.example.domain.model.RecordStatus
 import com.example.domain.model.ai.AiChatMessage
 import com.example.domain.model.ai.AiDraftRequest
+import com.example.domain.model.ai.ChatActionType
 import com.example.domain.model.ai.ChatRole
 import com.example.domain.repository.AiDraftRepository
 import com.example.domain.repository.RecordRepository
@@ -52,6 +53,7 @@ class DayZeroViewModel(
 
     init {
         observeRecords()
+        observeChatMessages()
     }
 
     private fun observeRecords() {
@@ -62,13 +64,21 @@ class DayZeroViewModel(
             .launchIn(viewModelScope)
     }
 
+    private fun observeChatMessages() {
+        aiDraftRepository.observeChatMessages()
+            .onEach { messages ->
+                _uiState.update { it.copy(chatMessages = messages) }
+            }
+            .launchIn(viewModelScope)
+    }
+
     fun generateDraftFromText(text: String) {
         if (text.isBlank()) return
 
-        val userMessage = AiChatMessage(role = ChatRole.User, text = text)
-        addChatMessage(userMessage)
-
         viewModelScope.launch {
+            val userMessage = AiChatMessage(role = ChatRole.User, text = text)
+            aiDraftRepository.insertChatMessage(userMessage)
+
             _uiState.update { it.copy(isAnalyzing = true) }
             try {
                 val request = AiDraftRequest(
@@ -80,22 +90,18 @@ class DayZeroViewModel(
                 
                 recordRepository.upsertRecord(dailyRecord)
                 
-                addChatMessage(AiChatMessage(
+                aiDraftRepository.insertChatMessage(AiChatMessage(
                     role = ChatRole.Assistant, 
                     text = "我先帮你估算了一版，你可以修改后再确认。",
                     relatedDraftId = dailyRecord.id
                 ))
             } catch (e: Exception) {
-                addChatMessage(AiChatMessage(role = ChatRole.Assistant, text = "这次分析失败了，可以稍后再试。"))
+                aiDraftRepository.insertChatMessage(AiChatMessage(role = ChatRole.Assistant, text = "这次分析失败了，可以稍后再试。"))
                 _uiEvents.emit(UiEvent.Error("AI 分析暂时失败了，可以稍后再试。"))
             } finally {
                 _uiState.update { it.copy(isAnalyzing = false) }
             }
         }
-    }
-
-    private fun addChatMessage(message: AiChatMessage) {
-        _uiState.update { it.copy(chatMessages = it.chatMessages + message) }
     }
 
     fun confirmDraftWithMerge(draftId: String, weightKg: Float?) {
@@ -104,7 +110,6 @@ class DayZeroViewModel(
             val existingConfirmed = recordRepository.getRecordByDateAndStatus(draft.date, RecordStatus.Confirmed)
 
             if (existingConfirmed == null) {
-                // Case A: No existing record, just confirm this one
                 val confirmedRecord = draft.copy(
                     status = RecordStatus.Confirmed,
                     weightKg = weightKg ?: draft.weightKg
@@ -114,18 +119,15 @@ class DayZeroViewModel(
                 recordRepository.deleteRecordById(draftId)
                 completeConfirmation()
             } else {
-                // Check for conflicts
                 val draftMealTypes = draft.meals.map { it.mealType }.toSet()
                 val existingMealTypes = existingConfirmed.meals.filter { it.foods.isNotEmpty() }.map { it.mealType }.toSet()
                 val conflicts = draftMealTypes.intersect(existingMealTypes)
 
                 if (conflicts.isEmpty()) {
-                    // Case B: No conflicts, merge directly
-                    mergeAndSave(existingConfirmed, draft, weightKg, emptySet())
+                    mergeAndSave(existingConfirmed, draft, weightKg, draftMealTypes)
                     recordRepository.deleteRecordById(draftId)
                     completeConfirmation()
                 } else {
-                    // Case C: Conflicts exist, show dialog
                     _uiState.update { 
                         it.copy(conflictState = ConflictState(
                             draftId = draftId,
@@ -133,7 +135,13 @@ class DayZeroViewModel(
                             weightKg = weightKg
                         ))
                     }
-                    addChatMessage(AiChatMessage(role = ChatRole.Assistant, text = "我发现今天已经有这些餐次记录，需要你确认如何处理。"))
+                    val conflictNames = conflicts.joinToString("、") { it.displayName }
+                    aiDraftRepository.insertChatMessage(AiChatMessage(
+                        role = ChatRole.Assistant, 
+                        text = "我发现今天已经有 $conflictNames 的记录，需要你确认如何处理。",
+                        actionType = ChatActionType.MealConflict,
+                        relatedDraftId = draftId
+                    ))
                 }
             }
         }
@@ -201,7 +209,7 @@ class DayZeroViewModel(
     private suspend fun completeConfirmation() {
         _uiState.update { it.copy(conflictState = null) }
         _uiEvents.emit(UiEvent.RecordConfirmed)
-        addChatMessage(AiChatMessage(role = ChatRole.Assistant, text = "已更新今天的记录。"))
+        aiDraftRepository.insertChatMessage(AiChatMessage(role = ChatRole.Assistant, text = "已更新今天的记录。"))
     }
 
     fun removeFood(recordId: String, mealType: MealType, foodId: String) {
@@ -227,7 +235,10 @@ class DayZeroViewModel(
                 val database = DayZeroDatabase.getDatabase(application)
                 
                 val aiRepository = if (USE_REMOTE_AI) {
-                    RemoteAiDraftRepository(NetworkModule.aiDraftApiService)
+                    RemoteAiDraftRepository(
+                        NetworkModule.aiDraftApiService,
+                        database.aiChatMessageDao()
+                    )
                 } else {
                     FakeAiDraftRepository()
                 }

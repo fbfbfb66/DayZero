@@ -7,5 +7,10 @@ data class AiChatMessage(
     val role: ChatRole,
     val text: String,
     val createdAt: Long = System.currentTimeMillis(),
-    val relatedDraftId: String? = null
+    val relatedDraftId: String? = null,
+    val actionType: ChatActionType? = null
 )
+
+enum class ChatActionType {
+    None, MealConflict
+}

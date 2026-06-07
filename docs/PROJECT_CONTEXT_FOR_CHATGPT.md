@@ -11,7 +11,8 @@
 - **当前技术栈**: Kotlin + Jetpack Compose + Material 3 + Room + Repository + Retrofit + ViewModel + Navigation Compose
 - **Kotlin 版本**: `2.2.10`
 - **AGP 版本**: `9.2.1`
-- **本地数据库**: **已接入 (Room)**。实现记录、草稿、体重、食物项的本地持久化。
+- **本地数据库**: **已接入 (Room)**。实现记录、草稿、体重、食物项、**聊天消息**的本地持久化。
+- **持久化状态**: 记录、草稿、体重、食物项、**对话记录**均已实现本地持久化，App 重启后数据保持不变。
 - **AI 架构**: **已接入真实 AI (Supabase Edge Functions)**。具备完整的 AI Draft 架构。
     - **后端代理**: 使用 Supabase Edge Function (`generate-checkin-draft`) 作为 Kimi API 的代理。
     - **安全性**: Kimi API Key 仅保存在 Supabase Secret 中，Android 端通过 Supabase Publishable Key 进行身份验证。
@@ -35,7 +36,7 @@
     - **`repository/`**: `RecordRepository.kt`, `AiDraftRepository.kt` (接口定义)。
     - **`summary/`**: `DailySummaryBuilder.kt` (本地饮食总结生成逻辑)。
 - **`com.example.data`**: 数据层 (实现细节)
-    - **`local/`**: Room 实现 (dao, database, entity, mapper)。
+    - **`local/`**: Room 实现 (dao, database, entity, mapper, **ChatMessage**)。
     - **`remote/`**: 远程实现 (Supabase)。
     - **`repository/`**: `RoomRecordRepository.kt`, `RemoteAiDraftRepository.kt`, `FakeAiDraftRepository.kt`, `MockRecordRepository.kt`。
 - **`com.example.ui`**: UI 层
@@ -55,6 +56,8 @@
 | **真实 AI 解析** | 已完成 | 通过 Supabase 代理调用 Kimi API。 |
 | **分餐合并逻辑** | 已完成 | 支持同一天多次录入并智能处理餐次冲突。 |
 | **本地总结生成** | 已完成 | 合并后基于全天已确认食物自动生成温柔总结。 |
+| **聊天记录持久化** | 已完成 | 对话流已存入 Room，重启 App 不消失。 |
+| **交互式对话** | 已完成 | 冲突处理等操作已集成进聊天流。 |
 | **图片选择/拍照** | 尚未实现 | 仅有 UI 图标。 |
 
 ---
@@ -79,7 +82,7 @@
 ## 5. 当前数据模型
 
 - **`DailyRecord`**: 持久化核心模型。
-- **`AiChatMessage`**: 聊天记录模型（目前仅在 ViewModel 内存中，不持久化）。
+- **`AiChatMessage`**: 聊天记录模型（已通过 Room 持久化，支持跨重启保留）。
 - **`ConflictState`**: 用于管理冲突对话框的显示状态。
 
 ---
@@ -101,7 +104,7 @@
 
 ## 8. 当前 Mock / Fake 状态
 
-- **聊天记录**: 重启 App 后消失（内存存储）。
+- **聊天记录**: 已实现 Room 持久化，App 重启后保留历史记录。
 - **图片功能**: 仍为占位。
 - **总结逻辑**: 目前在 Android 端本地生成，不再完全依赖 Kimi 返回的单次总结。
 

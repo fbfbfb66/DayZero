@@ -1,16 +1,22 @@
 package com.example.data.repository
 
 import com.example.domain.model.MealType
+import com.example.domain.model.ai.AiChatMessage
 import com.example.domain.model.ai.AiDraftRequest
 import com.example.domain.model.ai.CheckinDraft
 import com.example.domain.model.ai.DraftFood
 import com.example.domain.model.ai.DraftMeal
 import com.example.domain.repository.AiDraftRepository
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 
 class FakeAiDraftRepository : AiDraftRepository {
+    private val _messages = MutableStateFlow<List<AiChatMessage>>(emptyList())
+
     override suspend fun generateDraft(request: AiDraftRequest): CheckinDraft {
-        // Simulate network/AI delay
         delay(1500)
 
         val text = request.text
@@ -36,8 +42,6 @@ class FakeAiDraftRepository : AiDraftRepository {
             foods.add(DraftFood(name = "未识别食物", quantity = "1份", estimatedCalories = 500, confidence = "low"))
         }
 
-        // Logic to group foods into meals - for fake, we just put everything in Lunch if not specified, 
-        // or Breakfast if it contains breakfast items
         val mealType = if (text.contains("早")) MealType.Breakfast else MealType.Lunch
         
         val draftMeal = DraftMeal(
@@ -55,5 +59,15 @@ class FakeAiDraftRepository : AiDraftRepository {
             aiSummary = "这是根据你的描述生成的本地演示估算，你可以修改后再确认。",
             sourceText = text
         )
+    }
+
+    override fun observeChatMessages(): Flow<List<AiChatMessage>> = _messages.asStateFlow()
+
+    override suspend fun insertChatMessage(message: AiChatMessage) {
+        _messages.update { it + message }
+    }
+
+    override suspend fun clearChatMessages() {
+        _messages.update { emptyList() }
     }
 }

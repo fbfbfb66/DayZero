@@ -61,9 +61,19 @@ fun TrendsScreen(viewModel: DayZeroViewModel) {
     val uiState by viewModel.uiState.collectAsState()
     var selectedRange by remember { mutableStateOf("7天") }
 
-    val confirmedRecords = uiState.records
-        .filter { it.status == RecordStatus.Confirmed }
-        .sortedBy { it.date }
+    // Aggregate records by date to avoid duplicate X-axis labels
+    val aggregatedRecords = remember(uiState.records) {
+        uiState.records
+            .filter { it.status == RecordStatus.Confirmed }
+            .groupBy { it.date }
+            .map { (date, records) ->
+                // If there are multiple (though there should only be one after our merge logic), 
+                // we take the first or sum them up. For total calories, summing or taking the merged one.
+                // After Phase 6, there's only one confirmed record per date.
+                records.first() 
+            }
+            .sortedBy { it.date }
+    }
 
     Scaffold(
         topBar = {
@@ -121,7 +131,7 @@ fun TrendsScreen(viewModel: DayZeroViewModel) {
                     Spacer(modifier = Modifier.height(16.dp))
                     
                     val formatter = DateTimeFormatter.ofPattern("M/d")
-                    val points = confirmedRecords.map { 
+                    val points = aggregatedRecords.map { 
                         ChartDataPoint(
                             dateLabel = it.date.format(formatter),
                             value = it.totalCalories.toFloat(),
@@ -147,7 +157,7 @@ fun TrendsScreen(viewModel: DayZeroViewModel) {
                     Spacer(modifier = Modifier.height(16.dp))
 
                     val formatter = DateTimeFormatter.ofPattern("M/d")
-                    val points = confirmedRecords.mapNotNull { record ->
+                    val points = aggregatedRecords.mapNotNull { record ->
                         record.weightKg?.let { weight ->
                             ChartDataPoint(
                                 dateLabel = record.date.format(formatter),
