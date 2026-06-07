@@ -3,6 +3,7 @@ package com.example.ui.screens
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,9 +23,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DeleteOutline
@@ -203,8 +206,8 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .imePadding(),
-            color = Color.White,
-            shadowElevation = 12.dp
+            color = Color.Transparent, // Clean and Transparent!
+            shadowElevation = 0.dp
         ) {
             Column(
                 modifier = Modifier
@@ -220,29 +223,34 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
                     fontSize = 10.sp
                 )
 
-                Row(
+                // The Pill Container
+                Surface(
                     modifier = Modifier
+                        .padding(horizontal = 12.dp)
                         .fillMaxWidth()
-                        .padding(horizontal = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        .animateContentSize(),
+                    shape = RoundedCornerShape(28.dp),
+                    color = Color.White,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, BorderNormal.copy(alpha = 0.5f)),
+                    shadowElevation = 4.dp
                 ) {
-                    IconButton(
-                        onClick = { /* Demo */ },
-                        enabled = !uiState.isAnalyzing
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Filled.AddPhotoAlternate, contentDescription = "上传图片", tint = BrandGreen.copy(alpha = if (uiState.isAnalyzing) 0.5f else 1f))
-                    }
-                    
-                    Surface(
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(24.dp),
-                        color = WarmBackground,
-                        border = androidx.compose.foundation.BorderStroke(1.dp, BorderNormal.copy(alpha = 0.5f))
-                    ) {
+                        IconButton(
+                            onClick = { /* Demo */ },
+                            enabled = !uiState.isAnalyzing
+                        ) {
+                            Icon(Icons.Filled.Add, contentDescription = "更多", tint = TextSecondary)
+                        }
+                        
                         OutlinedTextField(
                             value = inputText,
                             onValueChange = { inputText = it },
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier.weight(1f),
                             placeholder = { Text("告诉 AI 你今天吃了什么……", color = TextSecondary) },
                             enabled = !uiState.isAnalyzing,
                             colors = OutlinedTextFieldDefaults.colors(
@@ -253,20 +261,35 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
                             ),
                             maxLines = 4
                         )
-                    }
 
-                    IconButton(
-                        onClick = { 
-                            viewModel.generateDraftFromText(inputText)
-                            inputText = ""
-                        },
-                        enabled = !uiState.isAnalyzing && inputText.isNotBlank()
-                    ) {
-                        Icon(
-                            Icons.Filled.Send, 
-                            contentDescription = "发送", 
-                            tint = if (inputText.isNotBlank()) BrandGreen else TextSecondary.copy(alpha = 0.3f)
-                        )
+                        // Circular Send Button
+                        Box(
+                            modifier = Modifier
+                                .padding(end = 6.dp)
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .background(if (inputText.isNotBlank()) BrandGreen else BrandGreen.copy(alpha = 0.3f))
+                                .clickable(enabled = inputText.isNotBlank() && !uiState.isAnalyzing) { 
+                                    viewModel.generateDraftFromText(inputText)
+                                    inputText = ""
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (uiState.isAnalyzing) {
+                                androidx.compose.material3.CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    strokeWidth = 2.dp,
+                                    color = Color.White
+                                )
+                            } else {
+                                Icon(
+                                    Icons.Filled.Send, 
+                                    contentDescription = "发送", 
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
                     }
                 }
             }
