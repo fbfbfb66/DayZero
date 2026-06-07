@@ -1,9 +1,6 @@
 package com.example.ui.screens
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -29,7 +26,6 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Send
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -67,6 +63,7 @@ import com.example.DayZeroViewModel
 import com.example.domain.model.DailyRecord
 import com.example.domain.model.RecordStatus
 import com.example.domain.model.ai.AiChatMessage
+import com.example.domain.model.ai.ChatActionType
 import com.example.domain.model.ai.ChatRole
 import com.example.ui.theme.CardBackground
 import com.example.ui.theme.TextPrimary
@@ -125,7 +122,11 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
                     if (message.role == ChatRole.User) {
                         UserMessage(message.text)
                     } else {
-                        AiMessage(message.text)
+                        AiMessage(
+                            text = message.text,
+                            actionType = message.actionType,
+                            onAction = { action -> viewModel.handleConflictResolution(action) }
+                        )
                     }
                 }
 
@@ -238,33 +239,6 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
             }
         }
     }
-
-    // Conflict Dialog
-    uiState.conflictState?.let { state ->
-        val conflictNames = state.existingMealTypes.joinToString("、") { it.displayName }
-        AlertDialog(
-            onDismissRequest = { viewModel.handleConflictResolution(ConflictAction.Cancel) },
-            title = { Text("已有餐次记录") },
-            text = { Text("今天已经记录过：$conflictNames。你想如何处理本次 AI 生成的这些餐次？") },
-            confirmButton = {
-                TextButton(onClick = { viewModel.handleConflictResolution(ConflictAction.Overwrite) }) {
-                    Text("覆盖并录入", color = Color.Red)
-                }
-            },
-            dismissButton = {
-                Row {
-                    TextButton(onClick = { viewModel.handleConflictResolution(ConflictAction.Cancel) }) {
-                        Text("取消")
-                    }
-                    TextButton(onClick = { viewModel.handleConflictResolution(ConflictAction.AddNonConflicting) }) {
-                        Text("仅添加未冲突餐次")
-                    }
-                }
-            },
-            shape = RoundedCornerShape(24.dp),
-            containerColor = CardBackground
-        )
-    }
 }
 
 @Composable
@@ -286,10 +260,14 @@ fun UserMessage(text: String) {
 }
 
 @Composable
-fun AiMessage(text: String) {
-    Row(
+fun AiMessage(
+    text: String,
+    actionType: ChatActionType? = null,
+    onAction: (ConflictAction) -> Unit = {}
+) {
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.Start
+        horizontalAlignment = Alignment.Start
     ) {
         Box(
             modifier = Modifier
@@ -300,6 +278,44 @@ fun AiMessage(text: String) {
                 .padding(12.dp)
         ) {
             Text(text, color = TextPrimary, fontSize = 15.sp)
+        }
+        
+        if (actionType == ChatActionType.MealConflict) {
+            Row(
+                modifier = Modifier
+                    .padding(top = 8.dp)
+                    .fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = { onAction(ConflictAction.Cancel) },
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = TextSecondary),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, BorderNormal),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                ) {
+                    Text("取消", fontSize = 12.sp)
+                }
+                
+                OutlinedButton(
+                    onClick = { onAction(ConflictAction.AddNonConflicting) },
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = BrandGreen),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, BrandGreen.copy(alpha = 0.5f)),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                ) {
+                    Text("仅添加未冲突", fontSize = 12.sp)
+                }
+
+                Button(
+                    onClick = { onAction(ConflictAction.Overwrite) },
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = BrandGreen),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                ) {
+                    Text("覆盖并录入", fontSize = 12.sp, color = Color.White)
+                }
+            }
         }
     }
 }

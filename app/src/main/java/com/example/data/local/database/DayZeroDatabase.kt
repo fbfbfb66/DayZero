@@ -9,7 +9,7 @@ import com.example.data.local.dao.DailyRecordDao
 import com.example.data.local.entity.AiChatMessageEntity
 import com.example.data.local.entity.DailyRecordEntity
 
-@Database(entities = [DailyRecordEntity::class, AiChatMessageEntity::class], version = 1, exportSchema = false)
+@Database(entities = [DailyRecordEntity::class, AiChatMessageEntity::class], version = 2, exportSchema = false)
 abstract class DayZeroDatabase : RoomDatabase() {
     abstract fun dailyRecordDao(): DailyRecordDao
     abstract fun aiChatMessageDao(): AiChatMessageDao
@@ -24,7 +24,9 @@ abstract class DayZeroDatabase : RoomDatabase() {
                     context.applicationContext,
                     DayZeroDatabase::class.java,
                     "dayzero_database"
-                ).build()
+                )
+                .fallbackToDestructiveMigration()
+                .build()
                 INSTANCE = instance
                 instance
             }
