@@ -11,6 +11,8 @@ interface AiDraftRepository {
     fun observeChatMessages(): Flow<List<AiChatMessage>>
     
     suspend fun insertChatMessage(message: AiChatMessage)
+
+    suspend fun updateChatMessage(message: AiChatMessage)
     
     suspend fun clearChatMessages()
 }

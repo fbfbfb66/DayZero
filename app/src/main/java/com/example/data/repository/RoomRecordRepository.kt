@@ -17,10 +17,14 @@ class RoomRecordRepository(
 ) : RecordRepository {
     private val mapper = DailyRecordMapper()
 
+    companion object {
+        private const val ENABLE_DEMO_SEEDING = false
+    }
+
     override fun observeRecords(): Flow<List<DailyRecord>> {
         return dao.observeAllRecords()
             .onStart {
-                if (dao.getRecordCount() == 0) {
+                if (ENABLE_DEMO_SEEDING && dao.getRecordCount() == 0) {
                     createMockRecords().forEach { 
                         dao.upsertRecord(mapper.toEntity(it))
                     }

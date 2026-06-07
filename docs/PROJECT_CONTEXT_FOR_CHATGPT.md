@@ -19,7 +19,7 @@
 - **运行时数据来源**: 
     - 记录观察: `RoomRecordRepository` -> Room Database。
     - 草稿生成: `RemoteAiDraftRepository` (默认启用) 或 `FakeAiDraftRepository` (调试开关)。
-- **交互特性**: **支持多次分餐录入与自动合并**。同一天只保留一条 Confirmed 记录，新草稿确认时会智能合并。
+- **交互特性**: **支持多次分餐录入与自动合并**。同一天只保留一条 Confirmed 记录，新草稿确认时会智能合并。所有系统交互（如冲突处理、餐次追问）均已集成在 AI 聊天窗口内作为 **ChoiceCard** 出现。
 - **图片功能**: **尚未接入** (UI 占位图标，`MealEntry` 仅有 `hasPhoto: Boolean` 标记)。
 - **云同步 / 登录**: **尚未接入**。
 

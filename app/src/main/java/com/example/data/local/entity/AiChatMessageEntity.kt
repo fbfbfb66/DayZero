@@ -10,5 +10,6 @@ data class AiChatMessageEntity(
     val text: String,
     val createdAt: Long,
     val relatedDraftId: String?,
-    val actionType: String? = null // For interactive messages like conflicts
+    val messageType: String,
+    val contentJson: String? = null // For ChoiceCard details
 )

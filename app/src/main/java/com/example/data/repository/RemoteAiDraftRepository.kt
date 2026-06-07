@@ -35,6 +35,10 @@ class RemoteAiDraftRepository(
         chatDao.insertMessage(chatMapper.toEntity(message))
     }
 
+    override suspend fun updateChatMessage(message: AiChatMessage) {
+        chatDao.updateMessage(chatMapper.toEntity(message))
+    }
+
     override suspend fun clearChatMessages() {
         chatDao.deleteAllMessages()
     }

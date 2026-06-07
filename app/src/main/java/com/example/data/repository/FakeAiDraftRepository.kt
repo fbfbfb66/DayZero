@@ -67,6 +67,12 @@ class FakeAiDraftRepository : AiDraftRepository {
         _messages.update { it + message }
     }
 
+    override suspend fun updateChatMessage(message: AiChatMessage) {
+        _messages.update { current ->
+            current.map { if (it.id == message.id) message else it }
+        }
+    }
+
     override suspend fun clearChatMessages() {
         _messages.update { emptyList() }
     }

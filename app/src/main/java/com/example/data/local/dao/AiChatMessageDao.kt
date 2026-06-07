@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Update
 import com.example.data.local.entity.AiChatMessageEntity
 import kotlinx.coroutines.flow.Flow
 
@@ -14,6 +15,9 @@ interface AiChatMessageDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMessage(message: AiChatMessageEntity)
+
+    @Update
+    suspend fun updateMessage(message: AiChatMessageEntity)
 
     @Query("DELETE FROM ai_chat_messages")
     suspend fun deleteAllMessages()
