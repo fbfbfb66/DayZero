@@ -23,4 +23,7 @@ interface DailyRecordDao {
     
     @Query("SELECT COUNT(*) FROM daily_records")
     suspend fun getRecordCount(): Int
+
+    @Query("SELECT * FROM daily_records WHERE date = :date AND status = :status LIMIT 1")
+    suspend fun getRecordByDateAndStatus(date: String, status: String): DailyRecordEntity?
 }

@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import java.time.LocalDate
 
 class MockRecordRepository : RecordRepository {
     private val _records = MutableStateFlow(createMockRecords())
@@ -24,6 +25,20 @@ class MockRecordRepository : RecordRepository {
                 currentRecords + record
             }
         }
+    }
+
+    override suspend fun deleteRecordById(recordId: String) {
+        _records.update { currentRecords ->
+            currentRecords.filterNot { it.id == recordId }
+        }
+    }
+
+    override suspend fun getRecordById(recordId: String): DailyRecord? {
+        return _records.value.find { it.id == recordId }
+    }
+
+    override suspend fun getRecordByDateAndStatus(date: LocalDate, status: RecordStatus): DailyRecord? {
+        return _records.value.find { it.date == date && it.status == status }
     }
 
     override suspend fun updateRecordStatus(recordId: String, status: RecordStatus, weightKg: Float?) {

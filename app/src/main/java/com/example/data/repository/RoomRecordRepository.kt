@@ -10,6 +10,7 @@ import com.example.domain.repository.RecordRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onStart
+import java.time.LocalDate
 
 class RoomRecordRepository(
     private val dao: DailyRecordDao
@@ -32,6 +33,18 @@ class RoomRecordRepository(
 
     override suspend fun upsertRecord(record: DailyRecord) {
         dao.upsertRecord(mapper.toEntity(record))
+    }
+
+    override suspend fun deleteRecordById(recordId: String) {
+        dao.deleteRecordById(recordId)
+    }
+
+    override suspend fun getRecordById(recordId: String): DailyRecord? {
+        return dao.getRecordById(recordId)?.let { mapper.toDomain(it) }
+    }
+
+    override suspend fun getRecordByDateAndStatus(date: LocalDate, status: RecordStatus): DailyRecord? {
+        return dao.getRecordByDateAndStatus(date.toString(), status.name)?.let { mapper.toDomain(it) }
     }
 
     override suspend fun updateRecordStatus(recordId: String, status: RecordStatus, weightKg: Float?) {

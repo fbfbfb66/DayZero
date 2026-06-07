@@ -11,11 +11,16 @@ import com.example.data.repository.RemoteAiDraftRepository
 import com.example.data.repository.RoomRecordRepository
 import com.example.domain.mapper.CheckinDraftMapper
 import com.example.domain.model.AppState
+import com.example.domain.model.ConflictState
+import com.example.domain.model.DailyRecord
 import com.example.domain.model.MealType
 import com.example.domain.model.RecordStatus
+import com.example.domain.model.ai.AiChatMessage
 import com.example.domain.model.ai.AiDraftRequest
+import com.example.domain.model.ai.ChatRole
 import com.example.domain.repository.AiDraftRepository
 import com.example.domain.repository.RecordRepository
+import com.example.domain.summary.DailySummaryBuilder
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -60,6 +65,9 @@ class DayZeroViewModel(
     fun generateDraftFromText(text: String) {
         if (text.isBlank()) return
 
+        val userMessage = AiChatMessage(role = ChatRole.User, text = text)
+        addChatMessage(userMessage)
+
         viewModelScope.launch {
             _uiState.update { it.copy(isAnalyzing = true) }
             try {
@@ -70,9 +78,15 @@ class DayZeroViewModel(
                 val draft = aiDraftRepository.generateDraft(request)
                 val dailyRecord = draftMapper.toDailyRecord(draft)
                 
-                // Save as Draft to Room
                 recordRepository.upsertRecord(dailyRecord)
+                
+                addChatMessage(AiChatMessage(
+                    role = ChatRole.Assistant, 
+                    text = "我先帮你估算了一版，你可以修改后再确认。",
+                    relatedDraftId = dailyRecord.id
+                ))
             } catch (e: Exception) {
+                addChatMessage(AiChatMessage(role = ChatRole.Assistant, text = "这次分析失败了，可以稍后再试。"))
                 _uiEvents.emit(UiEvent.Error("AI 分析暂时失败了，可以稍后再试。"))
             } finally {
                 _uiState.update { it.copy(isAnalyzing = false) }
@@ -80,15 +94,114 @@ class DayZeroViewModel(
         }
     }
 
-    fun confirmDraft(recordId: String, newWeight: Float?) {
+    private fun addChatMessage(message: AiChatMessage) {
+        _uiState.update { it.copy(chatMessages = it.chatMessages + message) }
+    }
+
+    fun confirmDraftWithMerge(draftId: String, weightKg: Float?) {
         viewModelScope.launch {
-            recordRepository.updateRecordStatus(
-                recordId = recordId,
-                status = RecordStatus.Confirmed,
-                weightKg = newWeight
-            )
-            _uiEvents.emit(UiEvent.RecordConfirmed)
+            val draft = recordRepository.getRecordById(draftId) ?: return@launch
+            val existingConfirmed = recordRepository.getRecordByDateAndStatus(draft.date, RecordStatus.Confirmed)
+
+            if (existingConfirmed == null) {
+                // Case A: No existing record, just confirm this one
+                val confirmedRecord = draft.copy(
+                    status = RecordStatus.Confirmed,
+                    weightKg = weightKg ?: draft.weightKg
+                )
+                val finalRecord = confirmedRecord.copy(aiSummary = DailySummaryBuilder.buildSummary(confirmedRecord))
+                recordRepository.upsertRecord(finalRecord)
+                recordRepository.deleteRecordById(draftId)
+                completeConfirmation()
+            } else {
+                // Check for conflicts
+                val draftMealTypes = draft.meals.map { it.mealType }.toSet()
+                val existingMealTypes = existingConfirmed.meals.filter { it.foods.isNotEmpty() }.map { it.mealType }.toSet()
+                val conflicts = draftMealTypes.intersect(existingMealTypes)
+
+                if (conflicts.isEmpty()) {
+                    // Case B: No conflicts, merge directly
+                    mergeAndSave(existingConfirmed, draft, weightKg, emptySet())
+                    recordRepository.deleteRecordById(draftId)
+                    completeConfirmation()
+                } else {
+                    // Case C: Conflicts exist, show dialog
+                    _uiState.update { 
+                        it.copy(conflictState = ConflictState(
+                            draftId = draftId,
+                            existingMealTypes = conflicts.toList(),
+                            weightKg = weightKg
+                        ))
+                    }
+                    addChatMessage(AiChatMessage(role = ChatRole.Assistant, text = "我发现今天已经有这些餐次记录，需要你确认如何处理。"))
+                }
+            }
         }
+    }
+
+    fun handleConflictResolution(action: ConflictAction) {
+        val state = _uiState.value.conflictState ?: return
+        viewModelScope.launch {
+            val draft = recordRepository.getRecordById(state.draftId) ?: return@launch
+            val existingConfirmed = recordRepository.getRecordByDateAndStatus(draft.date, RecordStatus.Confirmed) ?: return@launch
+
+            when (action) {
+                ConflictAction.Cancel -> {
+                    _uiState.update { it.copy(conflictState = null) }
+                }
+                ConflictAction.AddNonConflicting -> {
+                    val draftMealTypes = draft.meals.map { it.mealType }.toSet()
+                    val existingMealTypes = existingConfirmed.meals.filter { it.foods.isNotEmpty() }.map { it.mealType }.toSet()
+                    val nonConflicting = draftMealTypes.subtract(existingMealTypes)
+                    
+                    if (nonConflicting.isEmpty()) {
+                        _uiEvents.emit(UiEvent.Error("没有新的餐次可添加"))
+                    } else {
+                        mergeAndSave(existingConfirmed, draft, state.weightKg, nonConflicting)
+                        recordRepository.deleteRecordById(state.draftId)
+                        completeConfirmation()
+                    }
+                }
+                ConflictAction.Overwrite -> {
+                    mergeAndSave(existingConfirmed, draft, state.weightKg, draft.meals.map { it.mealType }.toSet())
+                    recordRepository.deleteRecordById(state.draftId)
+                    completeConfirmation()
+                }
+            }
+        }
+    }
+
+    private suspend fun mergeAndSave(
+        existing: DailyRecord, 
+        draft: DailyRecord, 
+        newWeight: Float?, 
+        mealsToTakeFromDraft: Set<MealType>
+    ) {
+        val mergedMeals = existing.meals.toMutableList()
+        
+        draft.meals.forEach { draftMeal ->
+            if (mealsToTakeFromDraft.contains(draftMeal.mealType)) {
+                val index = mergedMeals.indexOfFirst { it.mealType == draftMeal.mealType }
+                if (index >= 0) {
+                    mergedMeals[index] = draftMeal
+                } else {
+                    mergedMeals.add(draftMeal)
+                }
+            }
+        }
+
+        val updatedRecord = existing.copy(
+            meals = mergedMeals,
+            weightKg = newWeight ?: existing.weightKg
+        )
+        val finalRecord = updatedRecord.copy(aiSummary = DailySummaryBuilder.buildSummary(updatedRecord))
+        recordRepository.upsertRecord(finalRecord)
+    }
+
+    private suspend fun completeConfirmation() {
+        _uiState.update { it.copy(conflictState = null) }
+        _uiEvents.emit(UiEvent.RecordConfirmed)
+        addChatMessage(AiChatMessage(role = ChatRole.Assistant, text = "已更新今天的记录。"))
     }
 
     fun removeFood(recordId: String, mealType: MealType, foodId: String) {
@@ -126,4 +239,8 @@ class DayZeroViewModel(
             }
         }
     }
+}
+
+enum class ConflictAction {
+    Cancel, AddNonConflicting, Overwrite
 }

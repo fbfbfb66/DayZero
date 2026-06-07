@@ -1,6 +1,9 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -16,13 +19,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddPhotoAlternate
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -36,9 +43,11 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -53,13 +62,17 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.ConflictAction
 import com.example.DayZeroViewModel
 import com.example.domain.model.DailyRecord
 import com.example.domain.model.RecordStatus
+import com.example.domain.model.ai.AiChatMessage
+import com.example.domain.model.ai.ChatRole
 import com.example.ui.theme.CardBackground
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.BrandGreen
 import com.example.ui.theme.BorderNormal
+import com.example.ui.theme.LightGreen
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.WarmBackground
 import java.time.format.DateTimeFormatter
@@ -69,6 +82,14 @@ import java.time.format.DateTimeFormatter
 fun AiRecordScreen(viewModel: DayZeroViewModel) {
     val uiState by viewModel.uiState.collectAsState()
     var inputText by remember { mutableStateOf("") }
+    val listState = rememberLazyListState()
+
+    // Scroll to bottom when messages change
+    LaunchedEffect(uiState.chatMessages.size) {
+        if (uiState.chatMessages.isNotEmpty()) {
+            listState.animateScrollToItem(uiState.chatMessages.size - 1)
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -85,47 +106,72 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
                 .padding(innerPadding)
         ) {
             LazyColumn(
+                state = listState,
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                // Pre-populated User Message
-                item {
-                    UserMessage("早餐吃了两个肉包子和一根香蕉，中午吃了一碗猪肉肠粉。")
+                // Intro Message
+                if (uiState.chatMessages.isEmpty()) {
+                    item {
+                        AiMessage("你好！我是你的饮食助手。你可以直接告诉我你吃了什么，我会帮你记录下来。")
+                    }
                 }
 
-                // AI Response
-                item {
-                    AiMessage("我先帮你估算了一版，你可以修改后再确认。")
+                // Chat Messages
+                items(uiState.chatMessages) { message ->
+                    if (message.role == ChatRole.User) {
+                        UserMessage(message.text)
+                    } else {
+                        AiMessage(message.text)
+                    }
                 }
 
-                // Draft Card
+                // Analyzing indicator in list
+                if (uiState.isAnalyzing) {
+                    item {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            AiMessage("正在分析中...")
+                            Spacer(modifier = Modifier.width(8.dp))
+                            androidx.compose.material3.CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = BrandGreen
+                            )
+                        }
+                    }
+                }
+
+                // Draft Card Area
                 val draftRecord = uiState.records.find { it.status == RecordStatus.Draft }
                 if (draftRecord != null) {
                     item {
                         DraftCard(draftRecord, viewModel)
                     }
-                } else {
+                }
+
+                // Daily Summary if exists
+                val confirmedToday = uiState.records.find { it.date == uiState.currentDate && it.status == RecordStatus.Confirmed }
+                if (confirmedToday != null) {
+                    item {
+                        ConfirmedSummaryCard(confirmedToday)
+                    }
+                }
+
+                // Empty State if nothing is happening
+                if (draftRecord == null && !uiState.isAnalyzing) {
                     item {
                         Column(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             Text(
-                                "今天的草稿已确认 ✨",
+                                "暂无待确认草稿",
                                 color = TextPrimary,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 16.sp
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                "可以继续告诉 AI 你还吃了什么，\n我会帮你记录下来。",
-                                color = TextSecondary,
-                                fontSize = 14.sp,
-                                textAlign = TextAlign.Center,
-                                lineHeight = 20.sp
+                                fontWeight = FontWeight.Medium,
+                                fontSize = 14.sp
                             )
                         }
                     }
@@ -185,20 +231,39 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
                             },
                             enabled = !uiState.isAnalyzing && inputText.isNotBlank()
                         ) {
-                            if (uiState.isAnalyzing) {
-                                androidx.compose.material3.CircularProgressIndicator(
-                                    modifier = Modifier.size(24.dp),
-                                    strokeWidth = 2.dp,
-                                    color = BrandGreen
-                                )
-                            } else {
-                                Icon(Icons.Filled.Send, contentDescription = "发送", tint = if (inputText.isNotBlank()) BrandGreen else TextSecondary)
-                            }
+                            Icon(Icons.Filled.Send, contentDescription = "发送", tint = if (inputText.isNotBlank()) BrandGreen else TextSecondary)
                         }
                     }
                 }
             }
         }
+    }
+
+    // Conflict Dialog
+    uiState.conflictState?.let { state ->
+        val conflictNames = state.existingMealTypes.joinToString("、") { it.displayName }
+        AlertDialog(
+            onDismissRequest = { viewModel.handleConflictResolution(ConflictAction.Cancel) },
+            title = { Text("已有餐次记录") },
+            text = { Text("今天已经记录过：$conflictNames。你想如何处理本次 AI 生成的这些餐次？") },
+            confirmButton = {
+                TextButton(onClick = { viewModel.handleConflictResolution(ConflictAction.Overwrite) }) {
+                    Text("覆盖并录入", color = Color.Red)
+                }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { viewModel.handleConflictResolution(ConflictAction.Cancel) }) {
+                        Text("取消")
+                    }
+                    TextButton(onClick = { viewModel.handleConflictResolution(ConflictAction.AddNonConflicting) }) {
+                        Text("仅添加未冲突餐次")
+                    }
+                }
+            },
+            shape = RoundedCornerShape(24.dp),
+            containerColor = CardBackground
+        )
     }
 }
 
@@ -210,11 +275,12 @@ fun UserMessage(text: String) {
     ) {
         Box(
             modifier = Modifier
+                .padding(start = 48.dp)
                 .clip(RoundedCornerShape(20.dp, 20.dp, 4.dp, 20.dp))
                 .background(BrandGreen)
                 .padding(12.dp)
         ) {
-            Text(text, color = Color.White)
+            Text(text, color = Color.White, fontSize = 15.sp)
         }
     }
 }
@@ -227,12 +293,32 @@ fun AiMessage(text: String) {
     ) {
         Box(
             modifier = Modifier
+                .padding(end = 48.dp)
                 .clip(RoundedCornerShape(20.dp, 20.dp, 20.dp, 4.dp))
                 .background(CardBackground)
                 .border(1.dp, com.example.ui.theme.BorderNormal, RoundedCornerShape(20.dp, 20.dp, 20.dp, 4.dp))
                 .padding(12.dp)
         ) {
-            Text(text, color = TextPrimary)
+            Text(text, color = TextPrimary, fontSize = 15.sp)
+        }
+    }
+}
+
+@Composable
+fun ConfirmedSummaryCard(record: DailyRecord) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = LightGreen.copy(alpha = 0.5f))
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Check, contentDescription = null, tint = BrandGreen, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("今日已记录摘要", fontWeight = FontWeight.Bold, color = BrandGreen, fontSize = 14.sp)
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(record.aiSummary, color = TextPrimary, fontSize = 13.sp, lineHeight = 18.sp)
         }
     }
 }
@@ -382,7 +468,7 @@ fun DraftCard(draft: DailyRecord, viewModel: DayZeroViewModel) {
             Spacer(modifier = Modifier.height(8.dp))
             
             Button(
-                onClick = { viewModel.confirmDraft(draft.id, weightInput.toFloatOrNull()) },
+                onClick = { viewModel.confirmDraftWithMerge(draft.id, weightInput.toFloatOrNull()) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(50.dp),
