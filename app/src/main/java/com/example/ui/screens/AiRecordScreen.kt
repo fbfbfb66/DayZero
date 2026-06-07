@@ -197,32 +197,33 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
             }
         }
 
-        // LAYER 3: FLOATING PILL (Floating at bottom)
-        Column(
+        // LAYER 3: FIXED BOTTOM BAR (Attached to bottom)
+        Surface(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .imePadding()
-                .navigationBarsPadding()
+                .imePadding(),
+            color = Color.White,
+            shadowElevation = 12.dp
         ) {
-            Text(
-                text = "AI 分析功能正在开发中 · 当前为本地演示逻辑",
-                modifier = Modifier.fillMaxWidth(),
-                textAlign = TextAlign.Center,
-                color = com.example.ui.theme.TextTertiary.copy(alpha = 0.6f),
-                fontSize = 10.sp
-            )
-
-            Surface(
+            Column(
                 modifier = Modifier
-                    .padding(16.dp)
-                    .border(1.dp, BorderNormal.copy(alpha = 0.5f), RoundedCornerShape(32.dp)),
-                shape = RoundedCornerShape(32.dp),
-                color = Color.White,
-                shadowElevation = 8.dp
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(bottom = 12.dp)
             ) {
+                Text(
+                    text = "AI 分析功能正在开发中 · 当前为本地演示逻辑",
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    textAlign = TextAlign.Center,
+                    color = com.example.ui.theme.TextTertiary.copy(alpha = 0.6f),
+                    fontSize = 10.sp
+                )
+
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(
@@ -231,20 +232,29 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
                     ) {
                         Icon(Icons.Filled.AddPhotoAlternate, contentDescription = "上传图片", tint = BrandGreen.copy(alpha = if (uiState.isAnalyzing) 0.5f else 1f))
                     }
-                    OutlinedTextField(
-                        value = inputText,
-                        onValueChange = { inputText = it },
+                    
+                    Surface(
                         modifier = Modifier.weight(1f),
-                        placeholder = { Text("告诉 AI 你今天吃了什么……", color = TextSecondary) },
-                        enabled = !uiState.isAnalyzing,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            unfocusedBorderColor = Color.Transparent,
-                            focusedBorderColor = Color.Transparent,
-                            unfocusedContainerColor = Color.Transparent,
-                            focusedContainerColor = Color.Transparent
-                        ),
-                        maxLines = 4
-                    )
+                        shape = RoundedCornerShape(24.dp),
+                        color = WarmBackground,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, BorderNormal.copy(alpha = 0.5f))
+                    ) {
+                        OutlinedTextField(
+                            value = inputText,
+                            onValueChange = { inputText = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            placeholder = { Text("告诉 AI 你今天吃了什么……", color = TextSecondary) },
+                            enabled = !uiState.isAnalyzing,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                unfocusedBorderColor = Color.Transparent,
+                                focusedBorderColor = Color.Transparent,
+                                unfocusedContainerColor = Color.Transparent,
+                                focusedContainerColor = Color.Transparent
+                            ),
+                            maxLines = 4
+                        )
+                    }
+
                     IconButton(
                         onClick = { 
                             viewModel.generateDraftFromText(inputText)
