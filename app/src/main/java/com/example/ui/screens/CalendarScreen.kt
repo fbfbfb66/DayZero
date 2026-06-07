@@ -61,7 +61,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import com.example.DayZeroViewModel
-import com.example.RecordStatus
+import com.example.domain.model.MealEntry
+import com.example.domain.model.RecordStatus
 import com.example.ui.theme.CardBackground
 import com.example.ui.theme.LightGreen
 import com.example.ui.theme.BrandGreen
@@ -330,7 +331,7 @@ fun CalendarScreen(viewModel: DayZeroViewModel, onNavigateToAi: () -> Unit) {
 }
 
 @Composable
-fun ExpandableMealItem(meal: com.example.MealEntry) {
+fun ExpandableMealItem(meal: MealEntry) {
     var expanded by remember { mutableStateOf(false) }
 
     Column(

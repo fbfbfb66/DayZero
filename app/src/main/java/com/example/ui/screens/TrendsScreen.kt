@@ -47,7 +47,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.DayZeroViewModel
-import com.example.RecordStatus
+import com.example.domain.model.RecordStatus
 import com.example.ui.theme.CardBackground
 import com.example.ui.theme.LightGreen
 import com.example.ui.theme.BrandGreen

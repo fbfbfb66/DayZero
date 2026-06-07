@@ -57,9 +57,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.DailyRecord
 import com.example.DayZeroViewModel
-import com.example.RecordStatus
+import com.example.domain.model.DailyRecord
+import com.example.domain.model.RecordStatus
 import com.example.ui.theme.CardBackground
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.LightGreen

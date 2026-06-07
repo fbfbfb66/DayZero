@@ -23,6 +23,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.DayZeroViewModel
+import com.example.domain.model.RecordStatus
 import com.example.ui.screens.AiRecordScreen
 import com.example.ui.screens.CalendarScreen
 import com.example.ui.screens.TrendsScreen
@@ -44,7 +45,7 @@ val items = listOf(
 @Composable
 fun MainApp() {
     val navController = rememberNavController()
-    val viewModel: DayZeroViewModel = viewModel()
+    val viewModel: DayZeroViewModel = viewModel(factory = DayZeroViewModel.Factory)
 
     Scaffold(
         bottomBar = {
