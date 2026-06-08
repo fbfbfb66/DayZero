@@ -212,7 +212,7 @@ class RemoteAiAssistantRepository(
                         }
 
                         val items = payload.items.map { item ->
-                            if (item.name.isNullOrBlank() || item.calories == null || item.calorieConfidence.isNullOrBlank()) {
+                            if (item.name.isNullOrBlank() || item.calorieConfidence.isNullOrBlank()) {
                                 Log.e("DayZeroAiV2", "parse AssistantTurnResponse error: show_confirm_card item missing required fields.")
                                 throw ProtocolException("协议错误")
                             }
