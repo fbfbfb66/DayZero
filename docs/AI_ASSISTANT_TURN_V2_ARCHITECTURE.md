@@ -159,5 +159,9 @@ As of 2026-06-08, DayZero Phase 2 and Phase 3 have been fully verified and compl
   - Supabase Edge Function `assistant-turn-v2` updated to prompt version `missing_info_v1`.
   - Currently, `ask_missing_info_card` only supports querying `mealType`.
   - This phase does NOT generate a `DraftCard`, does NOT write to the database, and does NOT estimate calories.
-- **Next Phase**: The next phase is **Phase 4B-2** (`show_confirm_card` minimal confirmation card).
-
+- **Phase 4B-2 Completed**: The `show_confirm_card` tool has been fully integrated.
+  - Client parses and renders `show_confirm_card`.
+  - Edge function prompt updated to `confirm_card_v1`.
+  - Currently only supports `confirmType=food_record`.
+  - This phase ONLY displays the confirmation draft card without writing to the database.
+- **Next Phase**: The real save to the database will be implemented in **Phase 4C**.

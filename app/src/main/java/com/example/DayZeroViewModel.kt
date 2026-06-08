@@ -142,7 +142,9 @@ class DayZeroViewModel(
         optionId: String,
         optionLabel: String,
         field: String? = null,
-        originalText: String? = null
+        originalText: String? = null,
+        confirmType: String? = null,
+        payloadSummary: com.example.domain.model.ai.assistant.PayloadSummary? = null
     ) {
         Log.d("DayZeroAiV2", "interaction_result created")
         Log.d("DayZeroAiV2", "interaction_result actionType=$actionType")
@@ -173,7 +175,9 @@ class DayZeroViewModel(
                         selectedOptionId = optionId,
                         selectedOptionLabel = optionLabel,
                         field = field,
-                        originalText = originalText
+                        originalText = originalText,
+                        confirmType = confirmType,
+                        payloadSummary = payloadSummary
                     )
                 )
 

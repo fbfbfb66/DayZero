@@ -112,3 +112,28 @@ data class AskMissingInfoOption(
     val id: String,
     val label: String
 )
+
+data class ShowConfirmCardPayload(
+    override val id: String,
+    val confirmType: String,
+    val title: String,
+    val message: String,
+    val originalText: String,
+    val mealType: String,
+    val items: List<ConfirmCardItem>,
+    val buttons: List<ConfirmCardOption>,
+    val resolved: Boolean = false,
+    override val type: AiCardType = AiCardType.ShowConfirmCard
+) : AiChatCard
+
+data class ConfirmCardItem(
+    val name: String,
+    val amountText: String?,
+    val calories: Int,
+    val calorieConfidence: String
+)
+
+data class ConfirmCardOption(
+    val id: String,
+    val label: String
+)

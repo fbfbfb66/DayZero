@@ -43,5 +43,14 @@ data class InteractionResultDto(
     val selectedOptionId: String,
     val selectedOptionLabel: String,
     val field: String? = null,
-    val originalText: String? = null
+    val originalText: String? = null,
+    val confirmType: String? = null,
+    val payloadSummary: PayloadSummaryDto? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class PayloadSummaryDto(
+    val originalText: String? = null,
+    val mealType: String? = null,
+    val items: List<ConfirmCardItemDto>? = null
 )

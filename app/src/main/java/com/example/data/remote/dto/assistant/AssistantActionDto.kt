@@ -13,6 +13,7 @@ data class AssistantActionDto(
 data class AssistantActionPayloadDto(
     val title: String? = null,
     val message: String? = null,
+    val field: String? = null,
     val originalText: String? = null,
     val options: List<AssistantActionOptionDto>? = null
 )

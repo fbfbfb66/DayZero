@@ -26,5 +26,13 @@ data class InteractionResult(
     val selectedOptionId: String,
     val selectedOptionLabel: String,
     val field: String? = null,
-    val originalText: String? = null
+    val originalText: String? = null,
+    val confirmType: String? = null,
+    val payloadSummary: PayloadSummary? = null
+)
+
+data class PayloadSummary(
+    val originalText: String? = null,
+    val mealType: String? = null,
+    val items: List<ConfirmCardItem>? = null
 )

@@ -9,5 +9,6 @@ enum class AiCardType {
     DeleteConfirmCard,
     DebugChoiceCard,
     AskRecordIntentCard,
-    AskMissingInfoCard
+    AskMissingInfoCard,
+    ShowConfirmCard
 }

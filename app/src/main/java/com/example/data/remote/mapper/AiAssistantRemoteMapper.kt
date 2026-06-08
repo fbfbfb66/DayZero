@@ -28,7 +28,22 @@ class AiAssistantRemoteMapper {
                     selectedOptionId = it.selectedOptionId,
                     selectedOptionLabel = it.selectedOptionLabel,
                     field = it.field,
-                    originalText = it.originalText
+                    originalText = it.originalText,
+                    confirmType = it.confirmType,
+                    payloadSummary = it.payloadSummary?.let { summary ->
+                        PayloadSummaryDto(
+                            originalText = summary.originalText,
+                            mealType = summary.mealType,
+                            items = summary.items?.map { item ->
+                                ConfirmCardItemDto(
+                                    name = item.name,
+                                    amountText = item.amountText,
+                                    calories = item.calories,
+                                    calorieConfidence = item.calorieConfidence
+                                )
+                            }
+                        )
+                    }
                 )
             },
             primaryIntent = request.primaryIntent,
@@ -161,6 +176,24 @@ class AiAssistantRemoteMapper {
                 options = dto.options?.map { AskMissingInfoOption(id = it.id, label = it.label) } ?: emptyList(),
                 resolved = dto.resolved ?: false
             )
+            "show_confirm_card" -> ShowConfirmCardPayload(
+                id = dto.id,
+                confirmType = dto.confirmType ?: "food_record",
+                title = dto.title ?: "确认",
+                message = dto.message ?: "",
+                originalText = dto.originalText ?: "",
+                mealType = dto.mealType ?: "",
+                items = dto.items?.map { 
+                    ConfirmCardItem(
+                        name = it.name,
+                        amountText = it.amountText,
+                        calories = it.calories,
+                        calorieConfidence = it.calorieConfidence
+                    )
+                } ?: emptyList(),
+                buttons = dto.buttons?.map { ConfirmCardOption(id = it.id, label = it.label) } ?: emptyList(),
+                resolved = dto.resolved ?: false
+            )
             else -> null
         }
     }
@@ -273,6 +306,25 @@ class AiAssistantRemoteMapper {
                 field = card.field,
                 originalText = card.originalText,
                 options = card.options.map { AiChoiceOptionDto(id = it.id, label = it.label) },
+                resolved = card.resolved
+            )
+            is ShowConfirmCardPayload -> AiChatCardDto(
+                type = "show_confirm_card",
+                id = card.id,
+                confirmType = card.confirmType,
+                title = card.title,
+                message = card.message,
+                originalText = card.originalText,
+                mealType = card.mealType,
+                items = card.items.map {
+                    ConfirmCardItemDto(
+                        name = it.name,
+                        amountText = it.amountText,
+                        calories = it.calories,
+                        calorieConfidence = it.calorieConfidence
+                    )
+                },
+                buttons = card.buttons.map { AiChoiceOptionDto(id = it.id, label = it.label) },
                 resolved = card.resolved
             )
             else -> null

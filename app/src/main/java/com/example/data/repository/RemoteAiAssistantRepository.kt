@@ -192,6 +192,67 @@ class RemoteAiAssistantRepository(
                                 options = options
                             )
                         )
+                    } else if (action.type == "show_confirm_card") {
+                        Log.d("DayZeroAiV2", "action type = show_confirm_card")
+                        val interactionId = action.interactionId
+                        val payload = action.payload
+
+                        if (interactionId.isNullOrBlank() ||
+                            payload == null ||
+                            payload.confirmType != "food_record" ||
+                            payload.title.isNullOrBlank() ||
+                            payload.message.isNullOrBlank() ||
+                            payload.originalText.isNullOrBlank() ||
+                            payload.mealType.isNullOrBlank() ||
+                            payload.items.isNullOrEmpty() ||
+                            payload.buttons.isNullOrEmpty()
+                        ) {
+                            Log.e("DayZeroAiV2", "parse AssistantTurnResponse error: show_confirm_card missing required fields.")
+                            throw ProtocolException("协议错误")
+                        }
+
+                        val items = payload.items.map { item ->
+                            if (item.name.isNullOrBlank() || item.calories == null || item.calorieConfidence.isNullOrBlank()) {
+                                Log.e("DayZeroAiV2", "parse AssistantTurnResponse error: show_confirm_card item missing required fields.")
+                                throw ProtocolException("协议错误")
+                            }
+                            com.example.domain.model.ai.assistant.ConfirmCardItem(
+                                name = item.name!!,
+                                amountText = item.amountText,
+                                calories = item.calories.toInt(),
+                                calorieConfidence = item.calorieConfidence!!
+                            )
+                        }
+
+                        val buttons = payload.buttons.map { btn ->
+                            if (btn.id.isNullOrBlank() || btn.label.isNullOrBlank()) {
+                                Log.e("DayZeroAiV2", "parse AssistantTurnResponse error: show_confirm_card button missing id or label")
+                                throw ProtocolException("协议错误")
+                            }
+                            com.example.domain.model.ai.assistant.ConfirmCardOption(
+                                id = btn.id!!,
+                                label = btn.label!!
+                            )
+                        }
+                        
+                        val buttonIds = buttons.map { it.id }
+                        if (!buttonIds.containsAll(listOf("confirm", "cancel"))) {
+                            Log.e("DayZeroAiV2", "parse AssistantTurnResponse error: show_confirm_card missing confirm/cancel buttons")
+                            throw ProtocolException("协议错误")
+                        }
+
+                        mappedCards.add(
+                            com.example.domain.model.ai.assistant.ShowConfirmCardPayload(
+                                id = interactionId,
+                                confirmType = payload.confirmType,
+                                title = payload.title,
+                                message = payload.message,
+                                originalText = payload.originalText,
+                                mealType = payload.mealType,
+                                items = items,
+                                buttons = buttons
+                            )
+                        )
                     } else {
                         Log.e("DayZeroAiV2", "parse AssistantTurnResponse error: invalid action type = ${action.type}")
                         throw ProtocolException("协议错误")

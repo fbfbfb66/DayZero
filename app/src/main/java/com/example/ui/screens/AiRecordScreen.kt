@@ -172,6 +172,21 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
                                         )
                                     }
                                 )
+                            } else if (card is com.example.domain.model.ai.assistant.ShowConfirmCardPayload) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                ShowConfirmCard(
+                                    card = card,
+                                    onOptionSelected = { interactionId, optionId, optionLabel, payloadSummary ->
+                                        viewModel.sendInteractionResult(
+                                            interactionId = interactionId,
+                                            actionType = "show_confirm_card",
+                                            optionId = optionId,
+                                            optionLabel = optionLabel,
+                                            confirmType = "food_record",
+                                            payloadSummary = payloadSummary
+                                        )
+                                    }
+                                )
                             }
                         }
                     }
@@ -631,6 +646,122 @@ private fun AskMissingInfoCard(
                                 color = BrandGreen
                             )
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ShowConfirmCard(
+    card: com.example.domain.model.ai.assistant.ShowConfirmCardPayload,
+    onOptionSelected: (interactionId: String, optionId: String, optionLabel: String, payloadSummary: com.example.domain.model.ai.assistant.PayloadSummary) -> Unit
+) {
+    val context = LocalContext.current
+
+    LaunchedEffect(card.id) {
+        Log.d("DayZeroAiV2", "render show_confirm_card")
+    }
+
+    Box(
+        modifier = Modifier
+            .padding(end = 48.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color.White)
+            .border(1.dp, BorderNormal, RoundedCornerShape(16.dp))
+            .padding(16.dp)
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Text(
+                text = card.title,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                color = TextPrimary
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = card.message,
+                fontSize = 14.sp,
+                color = TextSecondary
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0xFFF7F8F9))
+                    .padding(12.dp)
+            ) {
+                Column {
+                    Text(
+                        text = "餐次: ${card.mealType}",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = BrandGreen
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    card.items.forEach { item ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "${item.name} x ${item.amountText ?: "1"}",
+                                fontSize = 14.sp,
+                                color = TextPrimary
+                            )
+                            Text(
+                                text = "${item.calories} 千卡",
+                                fontSize = 14.sp,
+                                color = TextPrimary,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                }
+            }
+            
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                card.buttons.forEach { option ->
+                    val isConfirm = option.id == "confirm"
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(40.dp)
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(if (isConfirm) BrandGreen else Color.Transparent)
+                            .border(
+                                1.dp,
+                                if (isConfirm) Color.Transparent else BorderNormal,
+                                RoundedCornerShape(20.dp)
+                            )
+                            .clickable {
+                                Log.d("DayZeroAiV2", "confirm card clicked interactionId=${card.id} optionId=${option.id}")
+                                onOptionSelected(
+                                    card.id,
+                                    option.id,
+                                    option.label,
+                                    com.example.domain.model.ai.assistant.PayloadSummary(
+                                        originalText = card.originalText,
+                                        mealType = card.mealType,
+                                        items = card.items
+                                    )
+                                )
+                                Toast.makeText(context, "已选择: ${option.label}", Toast.LENGTH_SHORT).show()
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = option.label,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = if (isConfirm) Color.White else TextPrimary
+                        )
                     }
                 }
             }
