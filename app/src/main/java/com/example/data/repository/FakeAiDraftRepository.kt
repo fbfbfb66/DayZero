@@ -28,8 +28,14 @@ class FakeAiDraftRepository : AiDraftRepository {
         if (text.contains("香蕉")) {
             foods.add(DraftFood(name = "香蕉", quantity = "1根", estimatedCalories = 105, confidence = "high"))
         }
+        if (text.contains("苹果")) {
+            foods.add(DraftFood(name = "苹果", quantity = "1个", estimatedCalories = 95, confidence = "high"))
+        }
         if (text.contains("肠粉")) {
             foods.add(DraftFood(name = "猪肉肠粉", quantity = "1碗", estimatedCalories = 450, confidence = "medium"))
+        }
+        if (text.contains("炸鸡")) {
+            foods.add(DraftFood(name = "炸鸡", quantity = "1份", estimatedCalories = 520, confidence = "medium"))
         }
         if (text.contains("米粉")) {
             foods.add(DraftFood(name = "炒米粉", quantity = "1份", estimatedCalories = 550, confidence = "medium"))
@@ -38,11 +44,27 @@ class FakeAiDraftRepository : AiDraftRepository {
             foods.add(DraftFood(name = "鸡腿饭", quantity = "1份", estimatedCalories = 650, confidence = "medium"))
         }
 
+        if (text == "trigger_empty_draft") {
+            return CheckinDraft(
+                date = request.date,
+                meals = emptyList(),
+                totalCalories = 0,
+                weightKg = request.weightKg,
+                aiSummary = "",
+                sourceText = text
+            )
+        }
+
         if (foods.isEmpty()) {
             foods.add(DraftFood(name = "未识别食物", quantity = "1份", estimatedCalories = 500, confidence = "low"))
         }
 
-        val mealType = if (text.contains("早")) MealType.Breakfast else MealType.Lunch
+        val mealType = when {
+            text.contains("早") -> MealType.Breakfast
+            text.contains("午") || text.contains("中") -> MealType.Lunch
+            text.contains("晚") -> MealType.Dinner
+            else -> MealType.Snack
+        }
         
         val draftMeal = DraftMeal(
             mealType = mealType,

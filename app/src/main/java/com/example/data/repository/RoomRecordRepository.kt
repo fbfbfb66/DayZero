@@ -80,4 +80,8 @@ class RoomRecordRepository(
             }
         }
     }
+
+    override suspend fun clearAllRecords() {
+        dao.deleteAllRecords()
+    }
 }

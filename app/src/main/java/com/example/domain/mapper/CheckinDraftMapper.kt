@@ -15,7 +15,7 @@ class CheckinDraftMapper {
             id = draft.id,
             date = draft.date,
             status = RecordStatus.Draft,
-            meals = draft.meals.map { toMealEntry(it) },
+            meals = com.example.domain.model.MealSortPolicy.sortMeals(draft.meals.map { toMealEntry(it) }),
             weightKg = draft.weightKg,
             aiSummary = draft.aiSummary
         )

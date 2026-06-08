@@ -28,4 +28,6 @@ interface RecordRepository {
         mealType: MealType,
         foodId: String
     )
+
+    suspend fun clearAllRecords()
 }

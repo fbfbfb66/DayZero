@@ -63,6 +63,7 @@ import androidx.compose.ui.text.font.FontStyle
 import com.example.DayZeroViewModel
 import com.example.domain.model.MealEntry
 import com.example.domain.model.RecordStatus
+import com.example.domain.model.formatWeightKg
 import com.example.ui.theme.CardBackground
 import com.example.ui.theme.LightGreen
 import com.example.ui.theme.BrandGreen
@@ -301,7 +302,7 @@ fun CalendarScreen(viewModel: DayZeroViewModel, onNavigateToAi: () -> Unit) {
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
                                     Text("体重", color = TextSecondary)
-                                    Text("${targetRecord.weightKg} kg", color = TextPrimary)
+                                    Text("${formatWeightKg(targetRecord.weightKg.toDouble())} kg", color = TextPrimary)
                                 }
                             }
                             

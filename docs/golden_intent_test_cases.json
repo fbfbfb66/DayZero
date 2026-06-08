@@ -1,0 +1,563 @@
+[
+  {
+    "input": "今天中午吃了一个苹果",
+    "expected": {
+      "primaryIntent": "food_logging",
+      "speechAct": "logging",
+      "consumptionStatus": "consumed",
+      "shouldCreateDraft": true,
+      "shouldAskMealTime": false,
+      "containsFood": true,
+      "mealTimeMentioned": true
+    }
+  },
+  {
+    "input": "吃了一碗螺蛳粉",
+    "expected": {
+      "primaryIntent": "food_logging",
+      "speechAct": "logging",
+      "consumptionStatus": "consumed",
+      "shouldCreateDraft": true,
+      "shouldAskMealTime": true,
+      "containsFood": true,
+      "mealTimeMentioned": false
+    }
+  },
+  {
+    "input": "晚饭打算吃沙拉",
+    "expected": {
+      "primaryIntent": "food_logging",
+      "speechAct": "logging",
+      "consumptionStatus": "planning",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false,
+      "containsFood": true,
+      "mealTimeMentioned": true
+    }
+  },
+  {
+    "input": "好想吃炸鸡啊",
+    "expected": {
+      "primaryIntent": "craving_support",
+      "speechAct": "expression",
+      "consumptionStatus": "craving",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false,
+      "containsFood": true,
+      "containsEmotion": true
+    }
+  },
+  {
+    "input": "忍不住吃了一个大汉堡，感觉减脂计划彻底崩了，好烦",
+    "expected": {
+      "primaryIntent": "emotional_food_logging",
+      "speechAct": "expression",
+      "consumptionStatus": "consumed",
+      "shouldCreateDraft": true,
+      "shouldAskMealTime": true,
+      "containsFood": true,
+      "containsEmotion": true
+    }
+  },
+  {
+    "input": "苹果热量多少？",
+    "expected": {
+      "primaryIntent": "food_info_query",
+      "speechAct": "question",
+      "consumptionStatus": "unknown",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false,
+      "containsFood": true
+    }
+  },
+  {
+    "input": "减脂期晚上能吃香蕉吗？",
+    "expected": {
+      "primaryIntent": "food_info_query",
+      "speechAct": "question",
+      "consumptionStatus": "unknown",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false,
+      "containsFood": true,
+      "mealTimeMentioned": true
+    }
+  },
+  {
+    "input": "今天体重75.5kg",
+    "expected": {
+      "primaryIntent": "weight_logging",
+      "speechAct": "logging",
+      "consumptionStatus": "unknown",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false,
+      "weightMentioned": true
+    }
+  },
+  {
+    "input": "今天吃得怎么样？",
+    "expected": {
+      "primaryIntent": "daily_advice",
+      "speechAct": "question",
+      "consumptionStatus": "unknown",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false
+    }
+  },
+  {
+    "input": "帮我看看今天的热量超标了吗",
+    "expected": {
+      "primaryIntent": "daily_summary",
+      "speechAct": "question",
+      "consumptionStatus": "unknown",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false
+    }
+  },
+  {
+    "input": "把早上的鸡蛋删掉",
+    "expected": {
+      "primaryIntent": "food_delete",
+      "speechAct": "command",
+      "consumptionStatus": "consumed",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false,
+      "containsFood": true,
+      "mealTimeMentioned": true
+    }
+  },
+  {
+    "input": "刚刚说错了，我吃的是两个苹果",
+    "expected": {
+      "primaryIntent": "food_edit",
+      "speechAct": "command",
+      "consumptionStatus": "consumed",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false,
+      "containsFood": true
+    }
+  },
+  {
+    "input": "你好，你能做什么？",
+    "expected": {
+      "primaryIntent": "general_chat",
+      "speechAct": "question",
+      "consumptionStatus": "unknown",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false
+    }
+  },
+  {
+    "input": "好累啊今天",
+    "expected": {
+      "primaryIntent": "general_chat",
+      "speechAct": "expression",
+      "consumptionStatus": "unknown",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false,
+      "containsEmotion": true
+    }
+  },
+  {
+    "input": "上午加餐吃了一小把坚果",
+    "expected": {
+      "primaryIntent": "food_logging",
+      "speechAct": "logging",
+      "consumptionStatus": "consumed",
+      "shouldCreateDraft": true,
+      "shouldAskMealTime": false,
+      "containsFood": true,
+      "mealTimeMentioned": true
+    }
+  },
+  {
+    "input": "昨晚吃了烧烤",
+    "expected": {
+      "primaryIntent": "food_logging",
+      "speechAct": "logging",
+      "consumptionStatus": "consumed",
+      "shouldCreateDraft": true,
+      "shouldAskMealTime": false,
+      "containsFood": true,
+      "mealTimeMentioned": true
+    }
+  },
+  {
+    "input": "中午吃了轻食外卖",
+    "expected": {
+      "primaryIntent": "food_logging",
+      "speechAct": "logging",
+      "consumptionStatus": "consumed",
+      "shouldCreateDraft": true,
+      "shouldAskMealTime": false,
+      "containsFood": true,
+      "mealTimeMentioned": true
+    }
+  },
+  {
+    "input": "刚炫完一杯奶茶",
+    "expected": {
+      "primaryIntent": "food_logging",
+      "speechAct": "logging",
+      "consumptionStatus": "consumed",
+      "shouldCreateDraft": true,
+      "shouldAskMealTime": true,
+      "containsFood": true
+    }
+  },
+  {
+    "input": "完了，晚上没忍住吃了顿火锅，好有罪恶感",
+    "expected": {
+      "primaryIntent": "emotional_food_logging",
+      "speechAct": "expression",
+      "consumptionStatus": "consumed",
+      "shouldCreateDraft": true,
+      "shouldAskMealTime": false,
+      "containsFood": true,
+      "containsEmotion": true,
+      "mealTimeMentioned": true
+    }
+  },
+  {
+    "input": "我好想喝可乐啊怎么办",
+    "expected": {
+      "primaryIntent": "craving_support",
+      "speechAct": "question",
+      "consumptionStatus": "craving",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false,
+      "containsFood": true,
+      "containsEmotion": true
+    }
+  },
+  {
+    "input": "这蛋糕吃了会不会长胖？",
+    "expected": {
+      "primaryIntent": "food_info_query",
+      "speechAct": "question",
+      "consumptionStatus": "unknown",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false,
+      "containsFood": true
+    }
+  },
+  {
+    "input": "今天55kg",
+    "expected": {
+      "primaryIntent": "weight_logging",
+      "speechAct": "logging",
+      "consumptionStatus": "unknown",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false,
+      "weightMentioned": true
+    }
+  },
+  {
+    "input": "晚上还能吃点啥吗，有点饿",
+    "expected": {
+      "primaryIntent": "daily_advice",
+      "speechAct": "question",
+      "consumptionStatus": "planning",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false,
+      "mealTimeMentioned": true
+    }
+  },
+  {
+    "input": "帮我看看还有多少热量额度",
+    "expected": {
+      "primaryIntent": "daily_summary",
+      "speechAct": "question",
+      "consumptionStatus": "unknown",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false
+    }
+  },
+  {
+    "input": "哎，心好累",
+    "expected": {
+      "primaryIntent": "general_chat",
+      "speechAct": "expression",
+      "consumptionStatus": "unknown",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false,
+      "containsEmotion": true
+    }
+  },
+  {
+    "input": "早餐喝了杯脱脂奶",
+    "expected": {
+      "primaryIntent": "food_logging",
+      "speechAct": "logging",
+      "consumptionStatus": "consumed",
+      "shouldCreateDraft": true,
+      "shouldAskMealTime": false,
+      "containsFood": true,
+      "mealTimeMentioned": true
+    }
+  },
+  {
+    "input": "吃了一小块黑巧克力",
+    "expected": {
+      "primaryIntent": "food_logging",
+      "speechAct": "logging",
+      "consumptionStatus": "consumed",
+      "shouldCreateDraft": true,
+      "shouldAskMealTime": true,
+      "containsFood": true
+    }
+  },
+  {
+    "input": "打算等下吃点水果",
+    "expected": {
+      "primaryIntent": "food_logging",
+      "speechAct": "logging",
+      "consumptionStatus": "planning",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false,
+      "containsFood": true
+    }
+  },
+  {
+    "input": "好饿，疯狂想吃薯条",
+    "expected": {
+      "primaryIntent": "craving_support",
+      "speechAct": "expression",
+      "consumptionStatus": "craving",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false,
+      "containsFood": true,
+      "containsEmotion": true
+    }
+  },
+  {
+    "input": "压力太大了，中午暴吃了两碗饭，全毁了",
+    "expected": {
+      "primaryIntent": "emotional_food_logging",
+      "speechAct": "expression",
+      "consumptionStatus": "consumed",
+      "shouldCreateDraft": true,
+      "shouldAskMealTime": false,
+      "containsFood": true,
+      "containsEmotion": true,
+      "mealTimeMentioned": true
+    }
+  },
+  {
+    "input": "全麦面包热量高吗？",
+    "expected": {
+      "primaryIntent": "food_info_query",
+      "speechAct": "question",
+      "consumptionStatus": "unknown",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false,
+      "containsFood": true
+    }
+  },
+  {
+    "input": "减脂期可以喝可乐吗",
+    "expected": {
+      "primaryIntent": "food_info_query",
+      "speechAct": "question",
+      "consumptionStatus": "unknown",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false,
+      "containsFood": true
+    }
+  },
+  {
+    "input": "早起称体重 60公斤",
+    "expected": {
+      "primaryIntent": "weight_logging",
+      "speechAct": "logging",
+      "consumptionStatus": "unknown",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false,
+      "weightMentioned": true
+    }
+  },
+  {
+    "input": "今天吃的好少，够基础代谢吗？",
+    "expected": {
+      "primaryIntent": "daily_summary",
+      "speechAct": "question",
+      "consumptionStatus": "unknown",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false
+    }
+  },
+  {
+    "input": "删掉刚才的记录",
+    "expected": {
+      "primaryIntent": "food_delete",
+      "speechAct": "command",
+      "consumptionStatus": "unknown",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false
+    }
+  },
+  {
+    "input": "不是的，我吃的是半份",
+    "expected": {
+      "primaryIntent": "food_edit",
+      "speechAct": "command",
+      "consumptionStatus": "consumed",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false
+    }
+  },
+  {
+    "input": "哈喽",
+    "expected": {
+      "primaryIntent": "general_chat",
+      "speechAct": "unknown",
+      "consumptionStatus": "unknown",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false
+    }
+  },
+  {
+    "input": "今天好开心",
+    "expected": {
+      "primaryIntent": "general_chat",
+      "speechAct": "expression",
+      "consumptionStatus": "unknown",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false,
+      "containsEmotion": true
+    }
+  },
+  {
+    "input": "下午茶吃了一块提拉米苏",
+    "expected": {
+      "primaryIntent": "food_logging",
+      "speechAct": "logging",
+      "consumptionStatus": "consumed",
+      "shouldCreateDraft": true,
+      "shouldAskMealTime": false,
+      "containsFood": true,
+      "mealTimeMentioned": true
+    }
+  },
+  {
+    "input": "吃了点牛肉",
+    "expected": {
+      "primaryIntent": "food_logging",
+      "speechAct": "logging",
+      "consumptionStatus": "consumed",
+      "shouldCreateDraft": true,
+      "shouldAskMealTime": true,
+      "containsFood": true
+    }
+  },
+  {
+    "input": "明早想吃燕麦粥",
+    "expected": {
+      "primaryIntent": "food_logging",
+      "speechAct": "logging",
+      "consumptionStatus": "planning",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false,
+      "containsFood": true,
+      "mealTimeMentioned": true
+    }
+  },
+  {
+    "input": "特别想吃泡面，快忍不住了",
+    "expected": {
+      "primaryIntent": "craving_support",
+      "speechAct": "expression",
+      "consumptionStatus": "craving",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false,
+      "containsFood": true,
+      "containsEmotion": true
+    }
+  },
+  {
+    "input": "半夜偷偷吃了一包薯片，好讨厌这样的自己",
+    "expected": {
+      "primaryIntent": "emotional_food_logging",
+      "speechAct": "expression",
+      "consumptionStatus": "consumed",
+      "shouldCreateDraft": true,
+      "shouldAskMealTime": false,
+      "containsFood": true,
+      "containsEmotion": true,
+      "mealTimeMentioned": true
+    }
+  },
+  {
+    "input": "牛肉面卡路里高吗",
+    "expected": {
+      "primaryIntent": "food_info_query",
+      "speechAct": "question",
+      "consumptionStatus": "unknown",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false,
+      "containsFood": true
+    }
+  },
+  {
+    "input": "苹果和香蕉哪个更适合减脂",
+    "expected": {
+      "primaryIntent": "food_info_query",
+      "speechAct": "question",
+      "consumptionStatus": "unknown",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false,
+      "containsFood": true
+    }
+  },
+  {
+    "input": "体重没掉，还是 50 斤",
+    "expected": {
+      "primaryIntent": "weight_logging",
+      "speechAct": "logging",
+      "consumptionStatus": "unknown",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false,
+      "weightMentioned": true
+    }
+  },
+  {
+    "input": "今天这样吃可以不",
+    "expected": {
+      "primaryIntent": "daily_advice",
+      "speechAct": "question",
+      "consumptionStatus": "unknown",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false
+    }
+  },
+  {
+    "input": "看下今天的总热量",
+    "expected": {
+      "primaryIntent": "daily_summary",
+      "speechAct": "command",
+      "consumptionStatus": "unknown",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false
+    }
+  },
+  {
+    "input": "不对，不是今天中午，是昨晚",
+    "expected": {
+      "primaryIntent": "food_edit",
+      "speechAct": "command",
+      "consumptionStatus": "unknown",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false,
+      "mealTimeMentioned": true
+    }
+  },
+  {
+    "input": "你是谁开发的",
+    "expected": {
+      "primaryIntent": "general_chat",
+      "speechAct": "question",
+      "consumptionStatus": "unknown",
+      "shouldCreateDraft": false,
+      "shouldAskMealTime": false
+    }
+  }
+]

@@ -9,7 +9,7 @@ import com.example.data.local.dao.DailyRecordDao
 import com.example.data.local.entity.AiChatMessageEntity
 import com.example.data.local.entity.DailyRecordEntity
 
-@Database(entities = [DailyRecordEntity::class, AiChatMessageEntity::class], version = 3, exportSchema = false)
+@Database(entities = [DailyRecordEntity::class, AiChatMessageEntity::class], version = 5, exportSchema = false)
 abstract class DayZeroDatabase : RoomDatabase() {
     abstract fun dailyRecordDao(): DailyRecordDao
     abstract fun aiChatMessageDao(): AiChatMessageDao

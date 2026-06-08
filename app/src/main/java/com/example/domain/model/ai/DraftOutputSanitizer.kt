@@ -1,5 +1,6 @@
 package com.example.domain.model.ai
 
+import android.util.Log
 import com.example.domain.model.MealType
 
 object DraftOutputSanitizer {
@@ -24,9 +25,11 @@ object DraftOutputSanitizer {
         val sanitizedMeals = draft.meals.filter { it.mealType in userMentionedMealTypes }
         
         // If filtering would make it empty, it might be a mapping issue (e.g., user said "吃了包子" and AI guessed Snack)
-        // In this case, we prefer keeping AI's guess but we might have a risk of context pollution.
-        // However, the improved prompt in Edge Function should handle most cases.
-        if (sanitizedMeals.isEmpty()) return draft
+        // In this case, we prefer keeping AI's guess because it's better than an empty draft.
+        if (sanitizedMeals.isEmpty()) {
+            Log.d("DayZeroAssistantFlow", "DraftOutputSanitizer: Sanitization resulted in empty meals for text '$userText', keeping original AI guess.")
+            return draft
+        }
 
         return draft.copy(
             meals = sanitizedMeals,

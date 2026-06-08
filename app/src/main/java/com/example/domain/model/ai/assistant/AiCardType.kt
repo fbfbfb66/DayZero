@@ -6,5 +6,7 @@ enum class AiCardType {
     SummaryCard,
     WeightCard,
     EditConfirmCard,
-    DeleteConfirmCard
+    DeleteConfirmCard,
+    DebugChoiceCard,
+    AskRecordIntentCard
 }

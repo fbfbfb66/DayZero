@@ -1,9 +1,10 @@
 package com.example.ui.screens
 
-import androidx.compose.animation.AnimatedVisibility
+import android.util.Log
+import android.widget.Toast
+import androidx.compose.ui.platform.LocalContext
+
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.InfiniteTransition
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
@@ -11,9 +12,20 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.ui.text.input.KeyboardType
+import com.example.domain.model.DailyRecord
+import com.example.domain.model.RecordStatus
+import com.example.domain.model.ai.AiChatMessage
+import com.example.ui.theme.LightGreen
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -23,46 +35,31 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.AddPhotoAlternate
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.DeleteOutline
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Send
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -74,24 +71,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.DayZeroViewModel
-import com.example.domain.model.DailyRecord
-import com.example.domain.model.RecordStatus
-import com.example.domain.model.ai.AiChatMessage
-import com.example.domain.model.ai.ChatMessageType
-import com.example.domain.model.ai.ChatOption
 import com.example.domain.model.ai.ChatRole
+import com.example.ui.theme.BorderNormal
+import com.example.ui.theme.BrandGreen
 import com.example.ui.theme.CardBackground
 import com.example.ui.theme.TextPrimary
-import com.example.ui.theme.BrandGreen
-import com.example.ui.theme.BorderNormal
-import com.example.ui.theme.LightGreen
 import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.TextTertiary
 import com.example.ui.theme.WarmBackground
 import java.time.Instant
 import java.time.ZoneId
@@ -105,15 +97,9 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
     var inputText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
 
-    // Smart Auto-scroll: Only scroll if we are near the bottom or it's a user message
-    val lastMessageIsUser = uiState.chatMessages.lastOrNull()?.role == ChatRole.User
-    
     LaunchedEffect(uiState.chatMessages.size, uiState.isAnalyzing) {
         if (uiState.chatMessages.isNotEmpty()) {
-            val isAtBottom = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index == listState.layoutInfo.totalItemsCount - 1
-            if (isAtBottom || lastMessageIsUser || uiState.isAnalyzing) {
-                listState.animateScrollToItem(listState.layoutInfo.totalItemsCount)
-            }
+            listState.animateScrollToItem(uiState.chatMessages.lastIndex)
         }
     }
 
@@ -122,116 +108,108 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
             .fillMaxSize()
             .background(WarmBackground)
     ) {
-        // LAYER 1: DATA WINDOW (Absolute bottom layer)
         LazyColumn(
             state = listState,
             modifier = Modifier
                 .fillMaxSize()
                 .imePadding(),
-            userScrollEnabled = true,
-            contentPadding = PaddingValues(
-                start = 16.dp, 
-                top = 110.dp,
-                end = 16.dp, 
-                bottom = 180.dp 
-            ),
+            contentPadding = PaddingValues(start = 16.dp, top = 110.dp, end = 16.dp, bottom = 180.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             if (uiState.chatMessages.isEmpty()) {
                 item {
-                    AiMessage("你好！我是你的饮食助手。你可以直接告诉我你吃了什么，我会帮你记录下来。", 0L)
+                    AiMessage("Pure chat mode is active for Phase 1.", 0L)
                 }
             }
 
-            items(
-                items = uiState.chatMessages,
-                key = { it.id }
-            ) { message ->
-                Column(modifier = Modifier.animateItem()) {
-                    when (message.messageType) {
-                        ChatMessageType.Text -> {
-                            if (message.role == ChatRole.User) {
-                                UserMessage(message.text, message.createdAt)
-                            } else {
-                                AiMessage(message.text, message.createdAt)
+            items(items = uiState.chatMessages, key = { it.id }) { message ->
+                if (message.role == ChatRole.User) {
+                    UserMessage(message.text, message.createdAt)
+                } else {
+                    Column {
+                        if (message.text.isNotBlank()) {
+                            AiMessage(message.text, message.createdAt)
+                        }
+                        message.assistantCards.forEach { card ->
+                            if (card is com.example.domain.model.ai.assistant.DebugChoiceCardPayload) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                DebugChoiceCard(
+                                    card = card,
+                                    onOptionSelected = { interactionId, optionId, optionLabel ->
+                                        viewModel.sendInteractionResult(
+                                            interactionId = interactionId,
+                                            actionType = "debug_show_choice_card",
+                                            optionId = optionId,
+                                            optionLabel = optionLabel
+                                        )
+                                    }
+                                )
+                            } else if (card is com.example.domain.model.ai.assistant.AskRecordIntentCardPayload) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                AskRecordIntentCard(
+                                    card = card,
+                                    onOptionSelected = { interactionId, optionId, optionLabel ->
+                                        viewModel.sendInteractionResult(
+                                            interactionId = interactionId,
+                                            actionType = "ask_record_intent_card",
+                                            optionId = optionId,
+                                            optionLabel = optionLabel
+                                        )
+                                    }
+                                )
                             }
                         }
-                        ChatMessageType.ChoiceCard -> {
-                            ChoiceCardMessage(
-                                message = message,
-                                onOptionSelected = { option -> viewModel.handleChatAction(message.id, option) }
-                            )
-                        }
-                        else -> {}
                     }
                 }
             }
 
             if (uiState.isAnalyzing) {
                 item(key = "analyzing") {
-                    Row(
-                        modifier = Modifier.animateItem(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         AiMessageComponent {
                             TypingIndicator()
                         }
                     }
                 }
             }
-
-            val draftRecord = uiState.records.find { it.status == RecordStatus.Draft }
-            if (draftRecord != null) {
-                item(key = draftRecord.id) {
-                    Box(modifier = Modifier.animateItem()) {
-                        DraftCard(draftRecord, viewModel)
-                    }
-                }
-            }
-
-            val confirmedToday = uiState.records.find { it.date == uiState.currentDate && it.status == RecordStatus.Confirmed }
-            if (confirmedToday != null) {
-                item(key = confirmedToday.id) {
-                    Box(modifier = Modifier.animateItem()) {
-                        ConfirmedSummaryCard(confirmedToday)
-                    }
-                }
-            }
-
-            if (draftRecord == null && !uiState.isAnalyzing && uiState.chatMessages.isNotEmpty()) {
-                item {
-                    Column(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            "暂无待确认草稿",
-                            color = TextPrimary,
-                            fontWeight = FontWeight.Medium,
-                            fontSize = 14.sp
-                        )
-                    }
-                }
-            }
         }
 
-        // LAYER 2: APP BAR (Floating at top)
         Surface(
             modifier = Modifier.fillMaxWidth(),
             color = WarmBackground.copy(alpha = 0.96f),
             shadowElevation = 0.dp
         ) {
-            Box(modifier = Modifier.statusBarsPadding().height(40.dp).padding(horizontal = 16.dp), contentAlignment = Alignment.CenterStart) {
-                Text(
-                    text = "AI记录", 
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold, 
-                    color = TextPrimary
-                )
+            Box(
+                modifier = Modifier
+                    .statusBarsPadding()
+                    .height(40.dp)
+                    .padding(horizontal = 16.dp),
+                contentAlignment = Alignment.CenterStart
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "AI Record",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
+
+                    Text(
+                        text = "Clear",
+                        fontSize = 12.sp,
+                        color = TextSecondary,
+                        modifier = Modifier
+                            .clickable { viewModel.clearAllData() }
+                            .padding(4.dp)
+                    )
+                }
             }
         }
 
-        // LAYER 3: FIXED BOTTOM BAR (Attached to bottom)
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -239,14 +217,15 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
                 .imePadding()
         ) {
             Text(
-                text = "AI 分析功能正在开发中 · 当前为本地演示逻辑",
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                text = "assistant-turn-v2 pure chat entrypoint",
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
                 textAlign = TextAlign.Center,
-                color = com.example.ui.theme.TextTertiary.copy(alpha = 0.6f),
+                color = TextTertiary.copy(alpha = 0.7f),
                 fontSize = 10.sp
             )
 
-            // The Pill Container
             Surface(
                 modifier = Modifier
                     .padding(horizontal = 12.dp)
@@ -257,70 +236,69 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
                 border = androidx.compose.foundation.BorderStroke(1.dp, BorderNormal.copy(alpha = 0.5f)),
                 shadowElevation = 0.dp
             ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 4.dp, vertical = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(
+                        onClick = {},
+                        enabled = false
                     ) {
-                        IconButton(
-                            onClick = { /* Demo */ },
-                            enabled = !uiState.isAnalyzing
-                        ) {
-                            Icon(Icons.Filled.Add, contentDescription = "更多", tint = TextSecondary)
-                        }
-                        
-                        OutlinedTextField(
-                            value = inputText,
-                            onValueChange = { inputText = it },
-                            modifier = Modifier.weight(1f),
-                            placeholder = { Text("告诉 AI 你今天吃了什么……", color = TextSecondary) },
-                            enabled = !uiState.isAnalyzing,
-                            colors = OutlinedTextFieldDefaults.colors(
-                                unfocusedBorderColor = Color.Transparent,
-                                focusedBorderColor = Color.Transparent,
-                                unfocusedContainerColor = Color.Transparent,
-                                focusedContainerColor = Color.Transparent
-                            ),
-                            maxLines = 4
-                        )
+                        Icon(Icons.Filled.Add, contentDescription = "More", tint = TextSecondary.copy(alpha = 0.5f))
+                    }
 
-                        // Circular Send Button
-                        Box(
-                            modifier = Modifier
-                                .padding(end = 6.dp)
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .background(if (inputText.isNotBlank()) BrandGreen else BrandGreen.copy(alpha = 0.3f))
-                                .clickable(enabled = inputText.isNotBlank() && !uiState.isAnalyzing) { 
-                                    viewModel.generateDraftFromText(inputText)
-                                    inputText = ""
-                                },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            if (uiState.isAnalyzing) {
-                                androidx.compose.material3.CircularProgressIndicator(
-                                    modifier = Modifier.size(20.dp),
-                                    strokeWidth = 2.dp,
-                                    color = Color.White
-                                )
-                            } else {
-                                Icon(
-                                    Icons.Filled.Send, 
-                                    contentDescription = "发送", 
-                                    tint = Color.White,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
+                    OutlinedTextField(
+                        value = inputText,
+                        onValueChange = { inputText = it },
+                        modifier = Modifier.weight(1f),
+                        placeholder = { Text("Chat with DayZero...", color = TextSecondary) },
+                        enabled = !uiState.isAnalyzing,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            unfocusedBorderColor = Color.Transparent,
+                            focusedBorderColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent,
+                            focusedContainerColor = Color.Transparent
+                        ),
+                        maxLines = 4
+                    )
+
+                    Box(
+                        modifier = Modifier
+                            .padding(end = 6.dp)
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(if (inputText.isNotBlank()) BrandGreen else BrandGreen.copy(alpha = 0.3f))
+                            .clickable(enabled = inputText.isNotBlank() && !uiState.isAnalyzing) {
+                                viewModel.sendAiMessage(inputText)
+                                inputText = ""
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (uiState.isAnalyzing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                                color = Color.White
+                            )
+                        } else {
+                            Icon(
+                                Icons.AutoMirrored.Filled.Send,
+                                contentDescription = "Send",
+                                tint = Color.White,
+                                modifier = Modifier.size(20.dp)
+                            )
                         }
                     }
                 }
             }
         }
     }
+}
 
 @Composable
-fun AiMessageComponent(content: @Composable () -> Unit) {
+private fun AiMessageComponent(content: @Composable () -> Unit) {
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.Start
@@ -339,9 +317,9 @@ fun AiMessageComponent(content: @Composable () -> Unit) {
 }
 
 @Composable
-fun TypingIndicator() {
+private fun TypingIndicator() {
     val infiniteTransition = rememberInfiniteTransition(label = "typing")
-    
+
     @Composable
     fun Dot(delay: Int) {
         val yOffset by infiniteTransition.animateFloat(
@@ -357,7 +335,7 @@ fun TypingIndicator() {
             modifier = Modifier
                 .padding(horizontal = 2.dp)
                 .size(6.dp)
-                .absoluteOffset(y = yOffset.dp)
+                .graphicsLayer { translationY = yOffset }
                 .background(TextSecondary.copy(alpha = 0.4f), CircleShape)
         )
     }
@@ -373,7 +351,7 @@ fun TypingIndicator() {
 }
 
 @Composable
-fun UserMessage(text: String, createdAt: Long) {
+private fun UserMessage(text: String, createdAt: Long) {
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.End
@@ -392,7 +370,9 @@ fun UserMessage(text: String, createdAt: Long) {
                         text = formatTime(createdAt),
                         color = Color.White.copy(alpha = 0.7f),
                         fontSize = 10.sp,
-                        modifier = Modifier.align(Alignment.End).padding(top = 2.dp)
+                        modifier = Modifier
+                            .align(Alignment.End)
+                            .padding(top = 2.dp)
                     )
                 }
             }
@@ -401,7 +381,7 @@ fun UserMessage(text: String, createdAt: Long) {
 }
 
 @Composable
-fun AiMessage(text: String, createdAt: Long) {
+private fun AiMessage(text: String, createdAt: Long) {
     AiMessageComponent {
         Column {
             Text(text, color = TextPrimary, fontSize = 15.sp)
@@ -410,8 +390,159 @@ fun AiMessage(text: String, createdAt: Long) {
                     text = formatTime(createdAt),
                     color = TextSecondary.copy(alpha = 0.6f),
                     fontSize = 10.sp,
-                    modifier = Modifier.align(Alignment.End).padding(top = 2.dp)
+                    modifier = Modifier
+                        .align(Alignment.End)
+                        .padding(top = 2.dp)
                 )
+            }
+        }
+    }
+}
+
+private fun formatTime(timestamp: Long): String {
+    val instant = Instant.ofEpochMilli(timestamp)
+    val dateTime = instant.atZone(ZoneId.systemDefault()).toLocalTime()
+    return dateTime.format(DateTimeFormatter.ofPattern("h:mm a", Locale.ENGLISH)).lowercase()
+}
+
+@Composable
+private fun DebugChoiceCard(
+    card: com.example.domain.model.ai.assistant.DebugChoiceCardPayload,
+    onOptionSelected: (interactionId: String, optionId: String, optionLabel: String) -> Unit
+) {
+    val context = LocalContext.current
+
+    LaunchedEffect(card.id) {
+        Log.d("DayZeroAiV2", "render debug_show_choice_card")
+    }
+
+    Box(
+        modifier = Modifier
+            .padding(end = 48.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color.White)
+            .border(1.dp, BorderNormal, RoundedCornerShape(16.dp))
+            .padding(16.dp)
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Text(
+                text = card.title,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                color = TextPrimary
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = card.message,
+                fontSize = 14.sp,
+                color = TextSecondary
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                card.options.forEach { option ->
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                Log.d("DayZeroAiV2", "debug option clicked interactionId=${card.id} optionId=${option.id} optionLabel=${option.label}")
+                                Toast.makeText(context, "已选择：${option.label}", Toast.LENGTH_SHORT).show()
+                                onOptionSelected(card.id, option.id, option.label)
+                            },
+                        shape = RoundedCornerShape(8.dp),
+                        color = WarmBackground,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, BorderNormal.copy(alpha = 0.5f))
+                    ) {
+                        Box(
+                            modifier = Modifier.padding(vertical = 10.dp, horizontal = 16.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = option.label,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = BrandGreen
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AskRecordIntentCard(
+    card: com.example.domain.model.ai.assistant.AskRecordIntentCardPayload,
+    onOptionSelected: (interactionId: String, optionId: String, optionLabel: String) -> Unit
+) {
+    val context = LocalContext.current
+
+    LaunchedEffect(card.id) {
+        Log.d("DayZeroAiV2", "render ask_record_intent_card")
+    }
+
+    Box(
+        modifier = Modifier
+            .padding(end = 48.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color.White)
+            .border(1.dp, BorderNormal, RoundedCornerShape(16.dp))
+            .padding(16.dp)
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Text(
+                text = card.title,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                color = TextPrimary
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = card.message,
+                fontSize = 14.sp,
+                color = TextSecondary
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "\"${card.originalText}\"",
+                fontSize = 13.sp,
+                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                color = TextSecondary.copy(alpha = 0.8f)
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                card.options.forEach { option ->
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                Log.d("DayZeroAiV2", "record intent option clicked interactionId=${card.id} optionId=${option.id}")
+                                Toast.makeText(context, "已选择：${option.label}", Toast.LENGTH_SHORT).show()
+                                onOptionSelected(card.id, option.id, option.label)
+                            },
+                        shape = RoundedCornerShape(8.dp),
+                        color = WarmBackground,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, BorderNormal.copy(alpha = 0.5f))
+                    ) {
+                        Box(
+                            modifier = Modifier.padding(vertical = 10.dp, horizontal = 16.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = option.label,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = BrandGreen
+                            )
+                        }
+                    }
+                }
             }
         }
     }
@@ -447,7 +578,7 @@ fun ChoiceCardMessage(message: AiChatMessage, onOptionSelected: (com.example.dom
                                     modifier = Modifier.fillMaxWidth(),
                                     shape = RoundedCornerShape(12.dp),
                                     colors = ButtonDefaults.buttonColors(
-                                        containerColor = if (option.label.contains("覆盖")) Color(0xFFE57373) else BrandGreen
+                                        containerColor = BrandGreen
                                     ),
                                     contentPadding = PaddingValues(vertical = 10.dp)
                                 ) {
@@ -484,12 +615,6 @@ fun ConfirmedSummaryCard(record: DailyRecord) {
     }
 }
 
-private fun formatTime(timestamp: Long): String {
-    val instant = Instant.ofEpochMilli(timestamp)
-    val dateTime = instant.atZone(ZoneId.systemDefault()).toLocalTime()
-    return dateTime.format(DateTimeFormatter.ofPattern("h:mm a", Locale.ENGLISH)).lowercase()
-}
-
 @Composable
 fun DraftCard(draft: DailyRecord, viewModel: DayZeroViewModel) {
     var weightInput by remember { mutableStateOf(draft.weightKg?.toString() ?: "") }
@@ -508,7 +633,6 @@ fun DraftCard(draft: DailyRecord, viewModel: DayZeroViewModel) {
             elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
         ) {
             Column(modifier = Modifier.padding(20.dp).padding(bottom = 12.dp)) {
-                // Header
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -533,7 +657,6 @@ fun DraftCard(draft: DailyRecord, viewModel: DayZeroViewModel) {
                     }
                 }
 
-                // Weight Optional
                 Row(
                     modifier = Modifier.fillMaxWidth().background(com.example.ui.theme.SurfaceSecondary, RoundedCornerShape(12.dp)).padding(12.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -556,7 +679,6 @@ fun DraftCard(draft: DailyRecord, viewModel: DayZeroViewModel) {
                 }
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Meals
                 draft.meals.forEach { meal ->
                     if (meal.foods.isNotEmpty()) {
                         Card(
@@ -595,7 +717,7 @@ fun DraftCard(draft: DailyRecord, viewModel: DayZeroViewModel) {
                                             Icon(Icons.Filled.Edit, contentDescription = "编辑", tint = TextSecondary, modifier = Modifier.size(16.dp))
                                         }
                                         Spacer(modifier = Modifier.width(8.dp))
-                                        IconButton(onClick = { viewModel.removeFood(draft.id, meal.mealType, food.id) }, modifier = Modifier.size(24.dp)) {
+                                        IconButton(onClick = { /* TODO Phase 4B */ }, modifier = Modifier.size(24.dp)) {
                                             Icon(Icons.Filled.DeleteOutline, contentDescription = "删除", tint = Color.Red.copy(alpha = 0.6f), modifier = Modifier.size(16.dp))
                                         }
                                     }
@@ -618,7 +740,6 @@ fun DraftCard(draft: DailyRecord, viewModel: DayZeroViewModel) {
 
                 Spacer(modifier = Modifier.height(24.dp))
 
-                // Actions
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -642,7 +763,7 @@ fun DraftCard(draft: DailyRecord, viewModel: DayZeroViewModel) {
                 Spacer(modifier = Modifier.height(8.dp))
                 
                 Button(
-                    onClick = { viewModel.confirmDraftWithMerge(draft.id, weightInput.toFloatOrNull()) },
+                    onClick = { /* TODO Phase 4B */ },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(50.dp),

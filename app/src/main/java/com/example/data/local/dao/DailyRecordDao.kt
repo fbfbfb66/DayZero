@@ -26,4 +26,7 @@ interface DailyRecordDao {
 
     @Query("SELECT * FROM daily_records WHERE date = :date AND status = :status LIMIT 1")
     suspend fun getRecordByDateAndStatus(date: String, status: String): DailyRecordEntity?
+
+    @Query("DELETE FROM daily_records")
+    suspend fun deleteAllRecords()
 }

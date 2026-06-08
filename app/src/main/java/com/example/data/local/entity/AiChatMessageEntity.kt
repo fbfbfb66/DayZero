@@ -11,5 +11,7 @@ data class AiChatMessageEntity(
     val createdAt: Long,
     val relatedDraftId: String?,
     val messageType: String,
-    val contentJson: String? = null // For ChoiceCard details
+    val contentJson: String? = null, // For ChoiceCard details
+    val assistantCardsJson: String? = null, // New: For complex assistant cards
+    val suggestedRepliesJson: String? = null // New: For quick replies
 )

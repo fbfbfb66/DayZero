@@ -1,6 +1,7 @@
 package com.example.domain.model.ai.assistant
 
 enum class AiChoiceAction {
+    Unknown,
     Cancel,
     Confirm,
     AddToMeal,

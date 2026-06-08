@@ -9,5 +9,20 @@ data class AiAssistantRequest(
     val userText: String,
     val todayRecord: DailyRecord? = null,
     val pendingDraft: DailyRecord? = null,
-    val recentMessages: List<AiChatMessage> = emptyList()
+    val recentMessages: List<AiChatMessage> = emptyList(),
+    val turnType: String = "user_message", // "user_message" or "interaction_result"
+    val interactionResult: InteractionResult? = null,
+    val primaryIntent: String? = null,
+    val speechAct: String? = null,
+    val consumptionStatus: String? = null,
+    val shouldCreateDraft: Boolean? = null,
+    val shouldAskMealTime: Boolean? = null,
+    val extractedFoodText: String? = null
+)
+
+data class InteractionResult(
+    val interactionId: String,
+    val actionType: String,
+    val selectedOptionId: String,
+    val selectedOptionLabel: String
 )

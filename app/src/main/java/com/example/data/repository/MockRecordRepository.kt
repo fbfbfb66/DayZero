@@ -71,4 +71,8 @@ class MockRecordRepository : RecordRepository {
             }
         }
     }
+
+    override suspend fun clearAllRecords() {
+        _records.value = emptyList()
+    }
 }

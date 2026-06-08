@@ -14,6 +14,7 @@ import com.example.domain.model.ai.CheckinDraft
 import com.example.domain.model.ai.DraftFood
 import com.example.domain.model.ai.DraftMeal
 import java.time.LocalDate
+import java.util.UUID
 
 class AiDraftRemoteMapper {
 
@@ -28,7 +29,7 @@ class AiDraftRemoteMapper {
 
     fun toSummaryRequestDto(record: DailyRecord): AiSummaryRequestDto {
         return AiSummaryRequestDto(
-            meals = record.meals.map { toMealDto(it) },
+            meals = com.example.domain.model.MealSortPolicy.sortMeals(record.meals).map { toMealDto(it) },
             totalCalories = record.totalCalories,
             weightKg = record.weightKg?.toDouble()
         )
@@ -55,33 +56,39 @@ class AiDraftRemoteMapper {
     }
 
     fun toDomain(dto: AiDraftResponseDto): CheckinDraft {
+        val meals = dto.meals.orEmpty().map { toMealDomain(it) }
+        val sortedMeals = com.example.domain.model.MealSortPolicy.sortDraftMeals(meals)
+        val recalculatedTotalCalories = sortedMeals.sumOf { it.mealCalories }
         return CheckinDraft(
-            id = dto.id,
-            date = LocalDate.parse(dto.date),
-            meals = dto.meals.map { toMealDomain(it) },
-            totalCalories = dto.totalCalories,
+            id = dto.id ?: UUID.randomUUID().toString(),
+            date = dto.date?.let { runCatching { LocalDate.parse(it) }.getOrNull() } ?: LocalDate.now(),
+            meals = sortedMeals,
+            totalCalories = dto.totalCalories?.takeIf { it > 0 } ?: recalculatedTotalCalories,
             weightKg = dto.weightKg?.toFloat(),
-            aiSummary = dto.aiSummary,
+            aiSummary = dto.aiSummary.orEmpty(),
             sourceText = dto.sourceText
         )
     }
 
     private fun toMealDomain(dto: RemoteMealDto): DraftMeal {
+        val mealType = mapToMealType(dto.mealType.orEmpty())
+        val foods = dto.foods.orEmpty().map { toFoodDomain(it) }
+        val recalculatedMealCalories = foods.sumOf { it.estimatedCalories }
         return DraftMeal(
-            mealType = mapToMealType(dto.mealType),
-            displayName = dto.displayName,
+            mealType = mealType,
+            displayName = dto.displayName ?: mealType.displayName,
             photoUri = dto.photoUri,
-            foods = dto.foods.map { toFoodDomain(it) },
-            mealCalories = dto.mealCalories
+            foods = foods,
+            mealCalories = dto.mealCalories?.takeIf { it > 0 } ?: recalculatedMealCalories
         )
     }
 
     private fun toFoodDomain(dto: RemoteFoodDto): DraftFood {
         return DraftFood(
-            id = dto.id,
-            name = dto.name,
-            quantity = dto.quantity,
-            estimatedCalories = dto.estimatedCalories,
+            id = dto.id ?: UUID.randomUUID().toString(),
+            name = dto.name.orEmpty(),
+            quantity = dto.quantity ?: "1份",
+            estimatedCalories = dto.estimatedCalories ?: 0,
             confidence = dto.confidence
         )
     }

@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.DayZeroViewModel
 import com.example.domain.model.RecordStatus
+import com.example.domain.model.formatWeightKg
 import com.example.ui.theme.CardBackground
 import com.example.ui.theme.LightGreen
 import com.example.ui.theme.BrandGreen
@@ -162,7 +163,7 @@ fun TrendsScreen(viewModel: DayZeroViewModel) {
                             ChartDataPoint(
                                 dateLabel = record.date.format(formatter),
                                 value = weight,
-                                tooltipText = "${record.date.format(formatter)}\n${weight} kg"
+                                tooltipText = "${record.date.format(formatter)}\n${formatWeightKg(weight.toDouble())} kg"
                             )
                         }
                     }

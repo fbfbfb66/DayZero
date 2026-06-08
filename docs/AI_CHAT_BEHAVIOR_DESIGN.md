@@ -28,34 +28,34 @@
 
 ---
 
-## 3. 意图分类 (Intent Classification)
+## 3. 意图分类 (Intent Classification - 多维语义模型)
 
-| 意图 (Intent) | 说明 | 预期行为 |
-| :--- | :--- | :--- |
-| `FoodLogging` | 记录饮食 | 解析食物，生成 `DraftCard`。 |
-| `MealTimeClarification` | 补充餐次信息 | 针对缺乏餐次信息的记录，发送 `ChoiceCard` 询问。 |
-| `FoodEdit` | 修改已记录的内容 | 识别修改目标，生成 `EditConfirmCard`。 |
-| `FoodDelete` | 删除记录 | 识别删除目标，生成 `DeleteConfirmCard`。 |
-| `WeightLogging` | 记录体重 | 解析数字，生成 `WeightCard`。 |
-| `DailyAdvice` | 寻求饮食建议 | 结合今日已记录内容及趋势，给出文本回复。 |
-| `DailySummary` | 索要今日总结 | 汇总今日饮食，生成 `SummaryCard`。 |
-| `Motivation` | 寻求鼓励/吐槽 | 给予情绪支持，不生成数据卡片。 |
-| `GeneralChat` | 普通闲聊 | 礼貌回应，引导回到健康记录。 |
-| `Unsupported` | 无法处理的请求 | 温柔提示超出了处理范围。 |
+从原先单一的 `Intent` 枚举，现已全面升级为包含多个正交维度的语义判断。当用户输入经过客户端 `HybridIntentRouter` 和 Kimi Edge Function (`classify-user-intent`) 处理后，会返回以下核心维度：
+
+- **primaryIntent (主意图)**: 涵盖 `food_logging`, `food_info_query`, `craving_support`, `emotional_food_logging`, `weight_logging`, `general_chat` 等。
+- **speechAct (言语行为)**: 表明句式是陈述(`logging`)、询问(`question`)、命令(`command`) 还是情绪发泄(`expression`)。
+- **consumptionStatus (进食状态)**: **核心拦截点**。区分用户是“已发生进食”(`consumed`)，“想吃但没吃”(`craving`)，还是“计划要吃”(`planning`)。
+- **shouldCreateDraft (是否开启草稿流)**: 布尔值。仅当 `consumptionStatus` 为 `consumed` 且意图包含饮食记录时为 `true`。这是 ViewModel 决定是否弹出 DraftCard 的第一道防线。
+- **shouldAskMealTime (是否追问餐次)**: 布尔值。若为 `true`，则直接下发 ChoiceCard 询问是在哪一餐吃的。
+- **isFollowUp (是否为追问)**: 布尔值。自动识别“意思是、所以、那我可以”等追问特征，并强制 Companion 回复层参考上一轮助手回复进行针对性解答。
 
 ---
 
-## 4. 交互协议 (Protocol)
+## 4. 架构与交互协议 (Architecture)
 
-使用 `AiAssistantTurn` 对象作为交互单元，支持文本回复与多卡片组合。
+### 4.1 核心路由与分流机制 (Phase 21)
+- **正式入口**: `HybridIntentRouter` 是正式的消息处理入口，结合了本地高置信规则（`LocalIntentRouter`）与远程 Kimi LLM。
+- **职责解耦**:
+    - **意图分类**: `classify-user-intent` 仅负责意图分类并返回语义 JSON。
+    - **流程控制**: 客户端状态机 `AiRecordConversationState` 和 `DayZeroViewModel` 全权控制对话交互流程。
+    - **历史记录**: `ai-assistant-turn` 协议仅作为历史保留或调试，**目前并非正式交互主入口**。
 
-### 卡片类型 (Card Types)
+### 4.2 卡片类型 (Card Types)
 - **DraftCard**: 饮食草稿，包含食物清单与热量预估。
 - **ChoiceCard**: 交互按钮组，用于追问或决策。
 - **SummaryCard**: 今日汇总，包含热量环形图与文字建议。
 - **WeightCard**: 体重确认卡。
-- **EditConfirmCard**: 修改确认卡。
-- **DeleteConfirmCard**: 删除确认卡。
+- **EditConfirmCard / DeleteConfirmCard**: 修改与删除确认卡（目前以界面预留与交互提示为主）。
 
 ---
 
@@ -66,44 +66,25 @@
 - **AI**: “收到，已经帮你整理好午餐草稿了，看起来很诱人呀。”
 - **卡片**: `DraftCard` (包含 Lunch: 猪肉肠粉)
 
-### 示例 B: 信息模糊
+### 示例 B: 信息模糊 (AmbiguousFoodLogging)
 - **用户**: “今天吃了个苹果”
 - **AI**: “记录好啦！不过这个苹果是在哪一餐吃的呀？”
 - **卡片**: `ChoiceCard` (选项：早餐 / 午餐 / 晚餐 / 加餐)
 
-### 示例 C: 情绪表达
-- **用户**: “今天吃了炸鸡奶茶，感觉白减了，心态崩了”
-- **AI**: “抱抱你，偶尔的小放纵完全没问题的，身体也需要快乐水呀！我们明天稍微多喝点水，保持规律就好，不要有压力哦。”
-- **卡片**: (无)
+### 示例 C: 情绪表达与实际进食分流 (Craving vs Consumed)
+**场景 1：嘴馋但没吃 (Craving)**
+- **用户**: “控制不住想吃炸鸡怎么办，特别想吃”
+- **AI 内部状态**: `primaryIntent`=craving_support, `shouldCreateDraft`=false
+- **AI (Companion)**: “特别想吃是正常的...你可以安排在明天的午餐吃一小块解解馋哦，不要有太大压力。”
 
-### 示例 D: 寻求建议
-- **用户**: “今天吃得怎么样？”
-- **AI**: “今天早餐和午餐营养很均衡呢！目前热量还在稳健区间，晚餐可以多补充一点绿叶蔬菜。”
-- **卡片**: `SummaryCard`
-
----
-
-## 6. 后续 System Prompt 草案 (Backend Hint)
-
-```text
-你是 DayZero 的 AI 营养师助手。
-你的角色：专业、温柔、低压力、擅长鼓励人的减脂记录助手。
-你的目标：帮助用户轻松记录、理解趋势、稳定坚持。
-
-行为规则：
-1. 意图判断：先判断用户是在记录、询问还是吐槽。
-2. 记录逻辑：识别食物、数量、热量，并归类餐次。
-3. 追问逻辑：餐次不明时，使用交互选项追问。
-4. 修改/删除逻辑：必须引导用户通过卡片确认，禁止直接执行。
-5. 情绪价值：用户受挫时提供情绪疏导，不准审判。
-6. 输出规范：仅输出 JSON 对象，遵循 AiAssistantTurn 协议。
-```
+**场景 2：追问 (Follow-up)**
+- **用户**: “意思是我可以吃炸鸡是吗”
+- **AI 内部状态**: `isFollowUp`=true
+- **AI (Companion)**: “可以吃，但不是无限量。建议把它安排成正餐，少量吃，别配含糖饮料...”
 
 ---
 
-## 7. 实现路线图 (Roadmap)
+## 6. 后续规划 (Roadmap)
 
-- [ ] **Phase A**: 建立模型与 Fake 实现 (当前阶段)。
-- [ ] **Phase B**: 开发 `ai-assistant-turn` Edge Function。
-- [ ] **Phase C**: 接入真实远程协议并替换旧流程。
-- [ ] **Phase D**: 引入长期记忆，支持上下文关联。
+- **activeInteractionId 机制**: (待实现) 引入该机制以防止用户在连续发送指令时误点历史卡片导致状态混乱，当前被列为最大剩余风险。
+- **图片功能**: UI 占位中，底层数据结构已支持，待逻辑接入。

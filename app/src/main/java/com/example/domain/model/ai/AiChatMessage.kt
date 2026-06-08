@@ -1,5 +1,6 @@
 package com.example.domain.model.ai
 
+import com.example.domain.model.ai.assistant.AiChatCard
 import java.util.UUID
 
 data class AiChatMessage(
@@ -9,7 +10,9 @@ data class AiChatMessage(
     val createdAt: Long = System.currentTimeMillis(),
     val relatedDraftId: String? = null,
     val messageType: ChatMessageType = ChatMessageType.Text,
-    val choiceCard: ChoiceCard? = null
+    val choiceCard: ChoiceCard? = null,
+    val assistantCards: List<AiChatCard> = emptyList(),
+    val suggestedReplies: List<String> = emptyList()
 )
 
 enum class ChatMessageType {
@@ -32,8 +35,12 @@ enum class ChatAction {
     Cancel, 
     AddNonConflictingMeals, 
     OverrideConflictingMeals, 
+    AppendToExistingMeals,
     SetMealTypeBreakfast, 
     SetMealTypeLunch, 
     SetMealTypeDinner, 
-    SetMealTypeSnack
+    SetMealTypeSnack,
+    ConfirmWeight,
+    ConfirmEdit,
+    ConfirmDelete
 }

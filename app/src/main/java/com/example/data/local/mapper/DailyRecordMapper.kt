@@ -26,14 +26,15 @@ class DailyRecordMapper {
             id = entity.id,
             date = LocalDate.parse(entity.date),
             status = status,
-            meals = meals,
+            meals = com.example.domain.model.MealSortPolicy.sortMeals(meals),
             weightKg = entity.weightKg,
             aiSummary = entity.aiSummary ?: ""
         )
     }
 
     fun toEntity(domain: DailyRecord): DailyRecordEntity {
-        val mealsJson = adapter.toJson(domain.meals)
+        val sortedMeals = com.example.domain.model.MealSortPolicy.sortMeals(domain.meals)
+        val mealsJson = adapter.toJson(sortedMeals)
         val now = System.currentTimeMillis()
         return DailyRecordEntity(
             id = domain.id,
