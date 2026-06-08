@@ -45,7 +45,7 @@ Deno.serve(async (req) => {
       `[AssistantTurnV2] start userTextLength=${userText.length} recentMessages=${recentContext ? "yes" : "no"}`,
     );
 
-    const promptVersion = "record_intent_v1";
+    const promptVersion = "missing_info_v1";
 
     const systemPrompt = `你是 DayZero 的 AI 饮食助手。
 
@@ -93,13 +93,35 @@ DayZero 是一个帮助用户轻松记录饮食、理解热量、稳定减脂的
 - 用户要求总结。
 - 用户普通闲聊或表达情绪但没有具体已吃内容。
 
+3. ask_missing_info_card
+用途：
+当用户已经表示要记录饮食，但缺少餐次时，询问这次饮食算在哪一餐。
+
+适合调用的情况：
+- 用户点击 ask_record_intent_card 的“帮我记录”。
+- 原始饮食文本里没有明确餐次。
+- 用户明确说“帮我记录刚吃的苹果”，但没说早餐/午餐/晚餐/加餐。
+
+不适合调用的情况：
+- 用户只是分享饮食，还没表示要记录，这时用 ask_record_intent_card。
+- 用户只是问热量或能不能吃。
+- 用户只是想吃但还没吃。
+- 用户已经给出明确餐次，例如“中午吃了肠粉”。
+- 用户说体重、总结、闲聊。
+
 当你收到 TurnType = interaction_result 时，说明用户刚刚完成了一个工具卡片操作。
 你需要自然承接用户刚才的选择，生成一条 reply。
 如果这次不需要继续调用工具，actions 返回 []。
 
 对于 ask_record_intent_card 的 interaction_result：
-- 如果用户点击了“帮我记录”，本阶段不需要生成 DraftCard，你只需回复“好，我知道你想记录，下一步会继续帮你整理”或类似自然承接的话。
-- 如果用户点击了“只是聊聊”或“先不用”，你只需自然回复，不用进行任何记录。
+- 如果用户点击了“帮我记录”：
+  - 但原始文本已经包含明确餐次（例如“中午吃了一碗肠粉”），本阶段不要调用 show_confirm_card，只让 Kimi 自然 reply，actions=[]。
+  - 且原始文本缺少餐次，则返回 reply + ask_missing_info_card。
+- 如果用户点击了“只是聊聊”或“先不用”，你只需自然回复，不用进行任何记录，actions=[]。
+
+对于 ask_missing_info_card 的 interaction_result：
+- 自然承接用户选择，说明已经知道餐次。
+- 本阶段 actions=[]，不生成 DraftCard，不写库。
 
 输出格式要求：
 你必须只返回一个 JSON 对象，不要输出 JSON 之外的任何内容。
@@ -133,10 +155,34 @@ DayZero 是一个帮助用户轻松记录饮食、理解热量、稳定减脂的
   ]
 }
 
+如果需要调用 ask_missing_info_card 工具，格式是：
+
+{
+  "reply": "给用户看的自然语言回复",
+  "actions": [
+    {
+      "type": "ask_missing_info_card",
+      "interactionId": "missing_info_xxx",
+      "payload": {
+        "title": "补充一下餐次",
+        "message": "这次饮食算在哪一餐呀？",
+        "field": "mealType",
+        "originalText": "用户原始输入",
+        "options": [
+          { "id": "breakfast", "label": "早餐" },
+          { "id": "lunch", "label": "午餐" },
+          { "id": "dinner", "label": "晚餐" },
+          { "id": "snack", "label": "加餐" }
+        ]
+      }
+    }
+  ]
+}
+
 硬性要求：
 - reply 必须存在，且不能为空。
 - actions 必须存在，且必须是数组。
-- 当前只允许 debug_show_choice_card 和 ask_record_intent_card。
+- 当前只允许 debug_show_choice_card、ask_record_intent_card 和 ask_missing_info_card。
 - 如果不需要工具，actions 必须是 []。
 - 不要输出 markdown。
 - 不要输出解释。
@@ -234,7 +280,7 @@ ${userText}
     for (const action of actions) {
       if (action && typeof action === "object" && "type" in action) {
         console.log(`[AssistantTurnV2] action type: ${action.type}`);
-        if (action.type !== "debug_show_choice_card" && action.type !== "ask_record_intent_card") {
+        if (action.type !== "debug_show_choice_card" && action.type !== "ask_record_intent_card" && action.type !== "ask_missing_info_card") {
           console.error(`[AssistantTurnV2] Protocol error: Unknown action type ${action.type}`);
           return jsonResponse({ error: "Protocol Error: Unknown action type", detail: `Unsupported action type: ${action.type}` }, 400);
         }
@@ -256,6 +302,28 @@ ${userText}
           const optionIds = payload.options.map((o: any) => o.id);
           if (!optionIds.includes("record") || !optionIds.includes("chat_only") || !optionIds.includes("not_now")) {
             return jsonResponse({ error: "Protocol Error: Invalid options", detail: "ask_record_intent_card options must contain record, chat_only, not_now" }, 400);
+          }
+        }
+
+        if (action.type === "ask_missing_info_card") {
+          const typedAction = action as any;
+          const payload = typedAction.payload;
+          
+          if (!typedAction.interactionId) {
+            return jsonResponse({ error: "Protocol Error: Missing interactionId", detail: "ask_missing_info_card missing interactionId" }, 400);
+          }
+          if (!payload) {
+            return jsonResponse({ error: "Protocol Error: Missing payload", detail: "ask_missing_info_card missing payload" }, 400);
+          }
+          if (!payload.title || !payload.message || !payload.field || !payload.originalText || !payload.options || !Array.isArray(payload.options)) {
+            return jsonResponse({ error: "Protocol Error: Invalid payload", detail: "ask_missing_info_card payload missing required fields" }, 400);
+          }
+          
+          if (payload.field === "mealType") {
+            const optionIds = payload.options.map((o: any) => o.id);
+            if (!optionIds.includes("breakfast") || !optionIds.includes("lunch") || !optionIds.includes("dinner") || !optionIds.includes("snack")) {
+              return jsonResponse({ error: "Protocol Error: Invalid options", detail: "ask_missing_info_card mealType options missing required keys" }, 400);
+            }
           }
         }
       }

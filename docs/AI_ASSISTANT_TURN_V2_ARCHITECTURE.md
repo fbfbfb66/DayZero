@@ -115,7 +115,7 @@ The new architecture decision is explicit:
 ### Phase 4: real tools connected one by one
 
 - `ask_record_intent_card` (Phase 4A - 已完成)
-- `ask_meal_type_card`
+- `ask_missing_info_card` (Phase 4B-1 - 已完成)
 - `show_food_draft_card`
 - `show_weight_confirm_card`
 - `show_summary_card`
@@ -154,5 +154,10 @@ As of 2026-06-08, DayZero Phase 2 and Phase 3 have been fully verified and compl
   - Supabase Edge Function `assistant-turn-v2` has been successfully updated to prompt version `record_intent_v1` and deployed to remote.
   - The `ask_record_intent_card` tool is fully wired in the remote prompt. It only queries the user's intent to record, without generating a `DraftCard` or writing to the database.
   - It handles only the intent of recording and returns the `interaction_result` without creating a `DraftCard` or writing to the DB.
-- **Next Phase**: The next phase is **Phase 4B** (Handling positive record intent to enter `ask_missing_info_card` or `show_confirm_card`).
+- **Phase 4B-1 Completed**: The `ask_missing_info_card` tool has been fully integrated.
+  - Client handles parsing and rendering of `ask_missing_info_card`.
+  - Supabase Edge Function `assistant-turn-v2` updated to prompt version `missing_info_v1`.
+  - Currently, `ask_missing_info_card` only supports querying `mealType`.
+  - This phase does NOT generate a `DraftCard`, does NOT write to the database, and does NOT estimate calories.
+- **Next Phase**: The next phase is **Phase 4B-2** (`show_confirm_card` minimal confirmation card).
 

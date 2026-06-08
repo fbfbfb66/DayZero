@@ -157,6 +157,21 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
                                         )
                                     }
                                 )
+                            } else if (card is com.example.domain.model.ai.assistant.AskMissingInfoCardPayload) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                AskMissingInfoCard(
+                                    card = card,
+                                    onOptionSelected = { interactionId, optionId, optionLabel, field, originalText ->
+                                        viewModel.sendInteractionResult(
+                                            interactionId = interactionId,
+                                            actionType = "ask_missing_info_card",
+                                            optionId = optionId,
+                                            optionLabel = optionLabel,
+                                            field = field,
+                                            originalText = originalText
+                                        )
+                                    }
+                                )
                             }
                         }
                     }
@@ -525,6 +540,81 @@ private fun AskRecordIntentCard(
                                 Log.d("DayZeroAiV2", "record intent option clicked interactionId=${card.id} optionId=${option.id}")
                                 Toast.makeText(context, "已选择：${option.label}", Toast.LENGTH_SHORT).show()
                                 onOptionSelected(card.id, option.id, option.label)
+                            },
+                        shape = RoundedCornerShape(8.dp),
+                        color = WarmBackground,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, BorderNormal.copy(alpha = 0.5f))
+                    ) {
+                        Box(
+                            modifier = Modifier.padding(vertical = 10.dp, horizontal = 16.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = option.label,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = BrandGreen
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AskMissingInfoCard(
+    card: com.example.domain.model.ai.assistant.AskMissingInfoCardPayload,
+    onOptionSelected: (interactionId: String, optionId: String, optionLabel: String, field: String, originalText: String) -> Unit
+) {
+    val context = LocalContext.current
+
+    LaunchedEffect(card.id) {
+        Log.d("DayZeroAiV2", "render ask_missing_info_card")
+    }
+
+    Box(
+        modifier = Modifier
+            .padding(end = 48.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color.White)
+            .border(1.dp, BorderNormal, RoundedCornerShape(16.dp))
+            .padding(16.dp)
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Text(
+                text = card.title,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                color = TextPrimary
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = card.message,
+                fontSize = 14.sp,
+                color = TextSecondary
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "\"${card.originalText}\"",
+                fontSize = 13.sp,
+                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                color = TextSecondary.copy(alpha = 0.8f)
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                card.options.forEach { option ->
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                Log.d("DayZeroAiV2", "missing info option clicked interactionId=${card.id} field=${card.field} optionId=${option.id}")
+                                Toast.makeText(context, "已选择：${option.label}", Toast.LENGTH_SHORT).show()
+                                onOptionSelected(card.id, option.id, option.label, card.field, card.originalText)
                             },
                         shape = RoundedCornerShape(8.dp),
                         color = WarmBackground,

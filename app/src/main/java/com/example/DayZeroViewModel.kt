@@ -140,7 +140,9 @@ class DayZeroViewModel(
         interactionId: String,
         actionType: String,
         optionId: String,
-        optionLabel: String
+        optionLabel: String,
+        field: String? = null,
+        originalText: String? = null
     ) {
         Log.d("DayZeroAiV2", "interaction_result created")
         Log.d("DayZeroAiV2", "interaction_result actionType=$actionType")
@@ -169,7 +171,9 @@ class DayZeroViewModel(
                         interactionId = interactionId,
                         actionType = actionType,
                         selectedOptionId = optionId,
-                        selectedOptionLabel = optionLabel
+                        selectedOptionLabel = optionLabel,
+                        field = field,
+                        originalText = originalText
                     )
                 )
 

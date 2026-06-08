@@ -41,5 +41,7 @@ data class InteractionResultDto(
     val interactionId: String,
     val actionType: String,
     val selectedOptionId: String,
-    val selectedOptionLabel: String
+    val selectedOptionLabel: String,
+    val field: String? = null,
+    val originalText: String? = null
 )

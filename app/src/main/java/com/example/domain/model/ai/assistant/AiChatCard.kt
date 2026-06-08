@@ -96,3 +96,19 @@ data class AskRecordIntentOption(
     val id: String,
     val label: String
 )
+
+data class AskMissingInfoCardPayload(
+    override val id: String,
+    val title: String,
+    val message: String,
+    val field: String,
+    val originalText: String,
+    val options: List<AskMissingInfoOption>,
+    val resolved: Boolean = false,
+    override val type: AiCardType = AiCardType.AskMissingInfoCard
+) : AiChatCard
+
+data class AskMissingInfoOption(
+    val id: String,
+    val label: String
+)

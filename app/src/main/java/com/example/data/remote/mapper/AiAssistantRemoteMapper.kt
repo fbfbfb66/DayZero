@@ -26,7 +26,9 @@ class AiAssistantRemoteMapper {
                     interactionId = it.interactionId,
                     actionType = it.actionType,
                     selectedOptionId = it.selectedOptionId,
-                    selectedOptionLabel = it.selectedOptionLabel
+                    selectedOptionLabel = it.selectedOptionLabel,
+                    field = it.field,
+                    originalText = it.originalText
                 )
             },
             primaryIntent = request.primaryIntent,
@@ -150,6 +152,15 @@ class AiAssistantRemoteMapper {
                 options = dto.options?.map { AskRecordIntentOption(id = it.id, label = it.label) } ?: emptyList(),
                 resolved = dto.resolved ?: false
             )
+            "ask_missing_info_card" -> AskMissingInfoCardPayload(
+                id = dto.id,
+                title = dto.title ?: "补充信息",
+                message = dto.message ?: "",
+                field = dto.field ?: "",
+                originalText = dto.originalText ?: "",
+                options = dto.options?.map { AskMissingInfoOption(id = it.id, label = it.label) } ?: emptyList(),
+                resolved = dto.resolved ?: false
+            )
             else -> null
         }
     }
@@ -250,6 +261,16 @@ class AiAssistantRemoteMapper {
                 id = card.id,
                 title = card.title,
                 message = card.message,
+                originalText = card.originalText,
+                options = card.options.map { AiChoiceOptionDto(id = it.id, label = it.label) },
+                resolved = card.resolved
+            )
+            is AskMissingInfoCardPayload -> AiChatCardDto(
+                type = "ask_missing_info_card",
+                id = card.id,
+                title = card.title,
+                message = card.message,
+                field = card.field,
                 originalText = card.originalText,
                 options = card.options.map { AiChoiceOptionDto(id = it.id, label = it.label) },
                 resolved = card.resolved

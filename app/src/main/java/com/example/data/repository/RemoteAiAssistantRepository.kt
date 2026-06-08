@@ -142,6 +142,56 @@ class RemoteAiAssistantRepository(
                                 options = options
                             )
                         )
+                    } else if (action.type == "ask_missing_info_card") {
+                        Log.d("DayZeroAiV2", "action type = ask_missing_info_card")
+
+                        val interactionId = action.interactionId
+                        val payload = action.payload
+
+                        if (interactionId.isNullOrBlank() ||
+                            payload == null ||
+                            payload.title.isNullOrBlank() ||
+                            payload.message.isNullOrBlank() ||
+                            payload.field.isNullOrBlank() ||
+                            payload.originalText.isNullOrBlank() ||
+                            payload.options.isNullOrEmpty()
+                        ) {
+                            Log.e("DayZeroAiV2", "parse AssistantTurnResponse error: ask_missing_info_card missing required fields.")
+                            throw ProtocolException("协议错误")
+                        }
+
+                        if (payload.field == "mealType") {
+                            val optionIds = payload.options.map { it.id }
+                            if (!optionIds.containsAll(listOf("breakfast", "lunch", "dinner", "snack"))) {
+                                Log.e("DayZeroAiV2", "parse AssistantTurnResponse error: ask_missing_info_card mealType options missing required keys.")
+                                throw ProtocolException("协议错误")
+                            }
+                        }
+
+                        payload.options.forEach { opt ->
+                            if (opt.id.isNullOrBlank() || opt.label.isNullOrBlank()) {
+                                Log.e("DayZeroAiV2", "parse AssistantTurnResponse error: ask_missing_info_card option missing id or label")
+                                throw ProtocolException("协议错误")
+                            }
+                        }
+
+                        val options = payload.options.map { opt ->
+                            com.example.domain.model.ai.assistant.AskMissingInfoOption(
+                                id = opt.id!!,
+                                label = opt.label!!
+                            )
+                        }
+
+                        mappedCards.add(
+                            com.example.domain.model.ai.assistant.AskMissingInfoCardPayload(
+                                id = interactionId,
+                                title = payload.title,
+                                message = payload.message,
+                                field = payload.field,
+                                originalText = payload.originalText,
+                                options = options
+                            )
+                        )
                     } else {
                         Log.e("DayZeroAiV2", "parse AssistantTurnResponse error: invalid action type = ${action.type}")
                         throw ProtocolException("协议错误")
