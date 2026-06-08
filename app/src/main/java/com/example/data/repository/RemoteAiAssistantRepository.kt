@@ -61,7 +61,7 @@ class RemoteAiAssistantRepository(
                     if (action.type == "debug_show_choice_card") {
                         Log.d("DayZeroAiV2", "action type = debug_show_choice_card")
 
-                        val interactionId = action.interactionId
+                        val interactionId = action.id ?: action.interactionId
                         val payload = action.payload
 
                         if (interactionId.isNullOrBlank() ||
@@ -99,7 +99,7 @@ class RemoteAiAssistantRepository(
                     } else if (action.type == "ask_record_intent_card") {
                         Log.d("DayZeroAiV2", "action type = ask_record_intent_card")
 
-                        val interactionId = action.interactionId
+                        val interactionId = action.id ?: action.interactionId
                         val payload = action.payload
 
                         if (interactionId.isNullOrBlank() ||
@@ -145,7 +145,7 @@ class RemoteAiAssistantRepository(
                     } else if (action.type == "ask_missing_info_card") {
                         Log.d("DayZeroAiV2", "action type = ask_missing_info_card")
 
-                        val interactionId = action.interactionId
+                        val interactionId = action.id ?: action.interactionId
                         val payload = action.payload
 
                         if (interactionId.isNullOrBlank() ||
@@ -194,7 +194,7 @@ class RemoteAiAssistantRepository(
                         )
                     } else if (action.type == "show_confirm_card") {
                         Log.d("DayZeroAiV2", "action type = show_confirm_card")
-                        val interactionId = action.interactionId
+                        val interactionId = action.id ?: action.interactionId
                         val payload = action.payload
 
                         if (interactionId.isNullOrBlank() ||
@@ -202,16 +202,21 @@ class RemoteAiAssistantRepository(
                             payload.confirmType != "food_record" ||
                             payload.title.isNullOrBlank() ||
                             payload.message.isNullOrBlank() ||
-                            payload.originalText.isNullOrBlank() ||
-                            payload.mealType.isNullOrBlank() ||
-                            payload.items.isNullOrEmpty() ||
                             payload.buttons.isNullOrEmpty()
                         ) {
                             Log.e("DayZeroAiV2", "parse AssistantTurnResponse error: show_confirm_card missing required fields.")
                             throw ProtocolException("协议错误")
                         }
 
-                        val items = payload.items.map { item ->
+                        val hasLegacyItems = !payload.items.isNullOrEmpty() && !payload.mealType.isNullOrBlank()
+                        val hasMeals = !payload.meals.isNullOrEmpty()
+
+                        if (!hasLegacyItems && !hasMeals) {
+                            Log.e("DayZeroAiV2", "parse AssistantTurnResponse error: show_confirm_card missing meals or legacy items.")
+                            throw ProtocolException("协议错误")
+                        }
+
+                        val items = payload.items?.map { item ->
                             if (item.name.isNullOrBlank() || item.calories == null || item.calorieConfidence.isNullOrBlank()) {
                                 Log.e("DayZeroAiV2", "parse AssistantTurnResponse error: show_confirm_card item missing required fields.")
                                 throw ProtocolException("协议错误")
@@ -221,6 +226,28 @@ class RemoteAiAssistantRepository(
                                 amountText = item.amountText,
                                 calories = item.calories,
                                 calorieConfidence = item.calorieConfidence!!
+                            )
+                        }
+
+                        val meals = payload.meals?.map { meal ->
+                            if (meal.mealType.isBlank() || meal.items.isEmpty()) {
+                                throw ProtocolException("协议错误")
+                            }
+                            com.example.domain.model.ai.assistant.ConfirmCardMeal(
+                                mealType = meal.mealType,
+                                mealLabel = meal.mealLabel,
+                                subtotalCalories = meal.subtotalCalories,
+                                items = meal.items.map { item ->
+                                    if (item.name.isNullOrBlank() || item.calories == null || item.calorieConfidence.isNullOrBlank()) {
+                                        throw ProtocolException("协议错误")
+                                    }
+                                    com.example.domain.model.ai.assistant.ConfirmCardItem(
+                                        name = item.name!!,
+                                        amountText = item.amountText,
+                                        calories = item.calories,
+                                        calorieConfidence = item.calorieConfidence!!
+                                    )
+                                }
                             )
                         }
 
@@ -247,9 +274,13 @@ class RemoteAiAssistantRepository(
                                 confirmType = payload.confirmType,
                                 title = payload.title,
                                 message = payload.message,
-                                originalText = payload.originalText,
+                                originalText = payload.originalText ?: "",
+                                date = payload.date ?: "",
+                                totalCalories = payload.totalCalories,
+                                weightKg = payload.weightKg,
                                 mealType = payload.mealType,
-                                items = items,
+                                items = items ?: emptyList(),
+                                meals = meals,
                                 buttons = buttons
                             )
                         )

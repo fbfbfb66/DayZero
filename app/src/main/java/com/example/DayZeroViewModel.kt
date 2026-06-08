@@ -112,14 +112,11 @@ class DayZeroViewModel(
         try {
             val turn = aiAssistantRepository.sendMessage(request)
             val reply = turn.replyText.trim()
-            if (reply.isBlank()) {
-                throw IllegalStateException("assistant-turn-v2 returned blank reply")
-            }
 
             aiDraftRepository.insertChatMessage(
                 AiChatMessage(
                     role = ChatRole.Assistant,
-                    text = reply,
+                    text = if (reply.isBlank()) "好的，已为你处理：" else reply,
                     assistantCards = turn.cards
                 )
             )
@@ -146,6 +143,11 @@ class DayZeroViewModel(
         confirmType: String? = null,
         payloadSummary: com.example.domain.model.ai.assistant.PayloadSummary? = null
     ) {
+        if (actionType == "show_confirm_card" && confirmType == "food_record") {
+            handleFoodRecordConfirm(interactionId, optionId, payloadSummary)
+            return
+        }
+
         Log.d("DayZeroAiV2", "interaction_result created")
         Log.d("DayZeroAiV2", "interaction_result actionType=$actionType")
         Log.d("DayZeroAiV2", "interaction_result selectedOptionId=$optionId")
@@ -183,14 +185,11 @@ class DayZeroViewModel(
 
                 val turn = aiAssistantRepository.sendMessage(request)
                 val reply = turn.replyText.trim()
-                if (reply.isBlank()) {
-                    throw IllegalStateException("assistant-turn-v2 returned blank reply")
-                }
-
+                
                 aiDraftRepository.insertChatMessage(
                     AiChatMessage(
                         role = ChatRole.Assistant,
-                        text = reply,
+                        text = if (reply.isBlank()) "这是我为你生成的记录：" else reply,
                         assistantCards = turn.cards
                     )
                 )
@@ -238,6 +237,120 @@ class DayZeroViewModel(
                 )
             }
         }
+    }
+
+    private fun handleFoodRecordConfirm(
+        interactionId: String,
+        optionId: String,
+        payloadSummary: com.example.domain.model.ai.assistant.PayloadSummary?
+    ) {
+        if (optionId == "cancel") {
+            Log.d("DayZeroAiV2", "confirm food card clicked cancel")
+            viewModelScope.launch {
+                updateCardState(interactionId, "cancelled")
+                addClientMessage("好，这次先不记录。")
+            }
+            return
+        }
+
+        if (optionId == "confirm") {
+            Log.d("DayZeroAiV2", "confirm food card clicked confirm")
+            Log.d("DayZeroAiV2", "food record save start")
+
+            viewModelScope.launch {
+                try {
+                    val currentDate = _uiState.value.currentDate
+                    val todayRecord = recordRepository.getRecordByDateAndStatus(currentDate, RecordStatus.Confirmed)
+                        ?: com.example.domain.model.DailyRecord(date = currentDate, status = RecordStatus.Confirmed, meals = emptyList())
+
+                    val updatedMeals = todayRecord.meals.toMutableList()
+                    
+                    val mealsToProcess = payloadSummary?.meals ?: if (payloadSummary?.mealType != null && payloadSummary.items != null) {
+                        listOf(
+                            com.example.domain.model.ai.assistant.ConfirmCardMeal(
+                                mealType = payloadSummary.mealType,
+                                mealLabel = payloadSummary.mealType,
+                                subtotalCalories = payloadSummary.items.sumOf { it.calories },
+                                items = payloadSummary.items
+                            )
+                        )
+                    } else {
+                        emptyList()
+                    }
+
+                    mealsToProcess.forEach { cardMeal ->
+                        val mealTypeStr = cardMeal.mealType
+                        val mealType = try {
+                            when (mealTypeStr.lowercase()) {
+                                "breakfast", "早餐" -> com.example.domain.model.MealType.Breakfast
+                                "lunch", "午餐" -> com.example.domain.model.MealType.Lunch
+                                "dinner", "晚餐" -> com.example.domain.model.MealType.Dinner
+                                "snack", "加餐" -> com.example.domain.model.MealType.Snack
+                                else -> com.example.domain.model.MealType.Snack
+                            }
+                        } catch (e: Exception) {
+                            com.example.domain.model.MealType.Snack
+                        }
+
+                        val newFoods = cardMeal.items.map { item ->
+                            com.example.domain.model.FoodEntry(
+                                name = item.name,
+                                quantity = item.amountText ?: "1份",
+                                estimatedCalories = item.calories,
+                                confidence = item.calorieConfidence
+                            )
+                        }
+
+                        val existingMealIndex = updatedMeals.indexOfFirst { it.mealType == mealType }
+                        if (existingMealIndex != -1) {
+                            val existingMeal = updatedMeals[existingMealIndex]
+                            updatedMeals[existingMealIndex] = existingMeal.copy(foods = existingMeal.foods + newFoods)
+                        } else {
+                            updatedMeals.add(com.example.domain.model.MealEntry(mealType = mealType, foods = newFoods))
+                        }
+                    }
+
+                    val updatedRecord = todayRecord.copy(
+                        meals = updatedMeals,
+                        weightKg = payloadSummary?.weightKg?.toFloat() ?: todayRecord.weightKg
+                    )
+                    recordRepository.upsertRecord(updatedRecord)
+
+                    Log.d("DayZeroAiV2", "food record save success")
+                    updateCardState(interactionId, "confirmed")
+                    addClientMessage("已记录到今天。")
+                    _uiEvents.emit(UiEvent.RecordConfirmed)
+                } catch (e: Exception) {
+                    Log.e("DayZeroAiV2", "food record save error", e)
+                    addClientMessage("记录失败，请重试。")
+                }
+            }
+        }
+    }
+
+    private suspend fun updateCardState(interactionId: String, newState: String) {
+        val messages = _uiState.value.chatMessages
+        val targetMessage = messages.find { msg -> msg.assistantCards.any { it.id == interactionId } }
+        if (targetMessage != null) {
+            val updatedCards = targetMessage.assistantCards.map { card ->
+                if (card.id == interactionId && card is com.example.domain.model.ai.assistant.ShowConfirmCardPayload) {
+                    card.copy(state = newState, resolved = true)
+                } else {
+                    card
+                }
+            }
+            aiDraftRepository.updateChatMessage(targetMessage.copy(assistantCards = updatedCards))
+            Log.d("DayZeroAiV2", "confirm card state updated $newState")
+        }
+    }
+
+    private suspend fun addClientMessage(text: String) {
+        aiDraftRepository.insertChatMessage(
+            AiChatMessage(
+                role = ChatRole.Assistant,
+                text = text
+            )
+        )
     }
 
     companion object {

@@ -33,6 +33,8 @@ data class InteractionResult(
 
 data class PayloadSummary(
     val originalText: String? = null,
+    val weightKg: Double? = null,
+    val meals: List<ConfirmCardMeal>? = null,
     val mealType: String? = null,
     val items: List<ConfirmCardItem>? = null
 )

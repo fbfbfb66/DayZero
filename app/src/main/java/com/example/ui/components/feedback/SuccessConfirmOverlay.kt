@@ -32,6 +32,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -78,8 +79,15 @@ fun SuccessConfirmOverlay(
             Card(
                 shape = RoundedCornerShape(28.dp),
                 colors = CardDefaults.cardColors(containerColor = Color.White),
-                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-                modifier = Modifier.padding(32.dp)
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                modifier = Modifier
+                    .padding(32.dp)
+                    .shadow(
+                        elevation = 8.dp,
+                        shape = RoundedCornerShape(28.dp),
+                        ambientColor = androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.15f),
+                        spotColor = androidx.compose.ui.graphics.Color.Transparent
+                    )
             ) {
                 Column(
                     modifier = Modifier.padding(horizontal = 40.dp, vertical = 32.dp),

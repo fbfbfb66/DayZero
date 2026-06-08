@@ -118,15 +118,28 @@ data class ShowConfirmCardPayload(
     val confirmType: String,
     val title: String,
     val message: String,
-    val originalText: String,
-    val mealType: String,
-    val items: List<ConfirmCardItem>,
+    val originalText: String?,
+    val mealType: String?, // Legacy
+    val items: List<ConfirmCardItem>, // Legacy
+    val date: String? = null,
+    val weightKg: Double? = null,
+    val totalCalories: Int? = null,
+    val meals: List<ConfirmCardMeal>? = null,
     val buttons: List<ConfirmCardOption>,
     val resolved: Boolean = false,
+    val state: String = "pending",
     override val type: AiCardType = AiCardType.ShowConfirmCard
 ) : AiChatCard
 
+data class ConfirmCardMeal(
+    val mealType: String,
+    val mealLabel: String?,
+    val subtotalCalories: Int?,
+    val items: List<ConfirmCardItem>
+)
+
 data class ConfirmCardItem(
+    val id: String? = null,
     val name: String,
     val amountText: String?,
     val calories: Int,

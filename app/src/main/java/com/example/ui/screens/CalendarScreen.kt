@@ -52,6 +52,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -176,9 +177,16 @@ fun CalendarScreen(viewModel: DayZeroViewModel, onNavigateToAi: () -> Unit) {
             // Calendar Grid
             Card(
                 colors = CardDefaults.cardColors(containerColor = CardBackground),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
                 shape = RoundedCornerShape(24.dp),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .shadow(
+                        elevation = 2.dp,
+                        shape = RoundedCornerShape(24.dp),
+                        ambientColor = androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.1f),
+                        spotColor = androidx.compose.ui.graphics.Color.Transparent
+                    )
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     // Days of week header

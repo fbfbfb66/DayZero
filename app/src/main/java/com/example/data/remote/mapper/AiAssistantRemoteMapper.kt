@@ -181,18 +181,39 @@ class AiAssistantRemoteMapper {
                 confirmType = dto.confirmType ?: "food_record",
                 title = dto.title ?: "确认",
                 message = dto.message ?: "",
-                originalText = dto.originalText ?: "",
-                mealType = dto.mealType ?: "",
+                originalText = dto.originalText,
+                mealType = dto.mealType,
                 items = dto.items?.map { 
                     ConfirmCardItem(
+                        id = it.id,
                         name = it.name,
                         amountText = it.amountText,
                         calories = it.calories,
                         calorieConfidence = it.calorieConfidence
                     )
                 } ?: emptyList(),
+                date = dto.date,
+                weightKg = dto.weightKg,
+                totalCalories = dto.totalCalories,
+                meals = dto.meals?.map { mealDto ->
+                    ConfirmCardMeal(
+                        mealType = mealDto.mealType,
+                        mealLabel = mealDto.mealLabel,
+                        subtotalCalories = mealDto.subtotalCalories,
+                        items = mealDto.items.map { 
+                            ConfirmCardItem(
+                                id = it.id,
+                                name = it.name,
+                                amountText = it.amountText,
+                                calories = it.calories,
+                                calorieConfidence = it.calorieConfidence
+                            )
+                        }
+                    )
+                },
                 buttons = dto.buttons?.map { ConfirmCardOption(id = it.id, label = it.label) } ?: emptyList(),
-                resolved = dto.resolved ?: false
+                resolved = dto.resolved ?: false,
+                state = dto.state ?: "pending"
             )
             else -> null
         }
@@ -318,14 +339,35 @@ class AiAssistantRemoteMapper {
                 mealType = card.mealType,
                 items = card.items.map {
                     ConfirmCardItemDto(
+                        id = it.id,
                         name = it.name,
                         amountText = it.amountText,
                         calories = it.calories,
                         calorieConfidence = it.calorieConfidence
                     )
                 },
+                date = card.date,
+                weightKg = card.weightKg,
+                totalCalories = card.totalCalories,
+                meals = card.meals?.map { meal ->
+                    ConfirmCardMealDto(
+                        mealType = meal.mealType,
+                        mealLabel = meal.mealLabel,
+                        subtotalCalories = meal.subtotalCalories,
+                        items = meal.items.map { 
+                            ConfirmCardItemDto(
+                                id = it.id,
+                                name = it.name,
+                                amountText = it.amountText,
+                                calories = it.calories,
+                                calorieConfidence = it.calorieConfidence
+                            )
+                        }
+                    )
+                },
                 buttons = card.buttons.map { AiChoiceOptionDto(id = it.id, label = it.label) },
-                resolved = card.resolved
+                resolved = card.resolved,
+                state = card.state
             )
             else -> null
         }

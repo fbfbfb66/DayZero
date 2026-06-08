@@ -164,4 +164,9 @@ As of 2026-06-08, DayZero Phase 2 and Phase 3 have been fully verified and compl
   - Edge function prompt updated to `confirm_card_v1`.
   - Currently only supports `confirmType=food_record`.
   - This phase ONLY displays the confirmation draft card without writing to the database.
-- **Next Phase**: The real save to the database will be implemented in **Phase 4C**.
+- **Phase 4C Completed**: Real database writing for `show_confirm_card` (food_record) has been implemented on the client.
+  - When the user clicks confirm, the client reads the `PayloadSummary` from the card and deterministically writes the `DailyRecord` and `MealEntry` mapping directly into the Room Database using the existing local repositories.
+  - When the user clicks confirm or cancel, the `state` of the `show_confirm_card` is updated locally (`confirmed` or `cancelled`) and saved to the database. The card UI reacts to this state by hiding the action buttons and displaying a fixed status message ("已确认记录" or "已取消记录").
+  - Feedback for confirmation or cancellation is deterministically generated locally by the client, without hitting Kimi.
+  - The old AI check-in flow components (HybridIntentRouter, IntentClassifier, etc.) remain fully deprecated and bypassed.
+- **Next Phase**: Begin implementing weight tracking (e.g., `weight_record`) or daily summary tools under the new V2 architecture.

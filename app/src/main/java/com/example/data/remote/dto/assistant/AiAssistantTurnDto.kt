@@ -25,6 +25,7 @@ data class AiChatCardDto(
     val options: List<AiChoiceOptionDto>? = null,
     val relatedDraftId: String? = null,
     val resolved: Boolean? = null,
+    val state: String? = null,
     val originalText: String? = null,
     val field: String? = null,
     // SummaryCard
@@ -45,13 +46,23 @@ data class AiChatCardDto(
     val operationDescription: String? = null,
     // ShowConfirmCard
     val confirmType: String? = null,
-    val mealType: String? = null,
-    val items: List<ConfirmCardItemDto>? = null,
+    val mealType: String? = null, // Legacy
+    val items: List<ConfirmCardItemDto>? = null, // Legacy
+    val meals: List<ConfirmCardMealDto>? = null,
     val buttons: List<AiChoiceOptionDto>? = null
 )
 
 @JsonClass(generateAdapter = true)
+data class ConfirmCardMealDto(
+    val mealType: String,
+    val mealLabel: String? = null,
+    val subtotalCalories: Int? = null,
+    val items: List<ConfirmCardItemDto>
+)
+
+@JsonClass(generateAdapter = true)
 data class ConfirmCardItemDto(
+    val id: String? = null,
     val name: String,
     val amountText: String? = null,
     val calories: Int,

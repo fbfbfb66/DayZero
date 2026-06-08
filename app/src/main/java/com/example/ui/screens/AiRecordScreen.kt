@@ -85,6 +85,11 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.TextTertiary
 import com.example.ui.theme.WarmBackground
+import com.example.ui.components.ai.AskMissingInfoCard
+import com.example.ui.components.ai.AskRecordIntentCard
+import com.example.ui.components.ai.FoodDraftConfirmCard
+import com.example.ui.components.ai.DebugChoiceCard
+import com.example.ui.components.ai.AiBusinessCardContainer
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -174,19 +179,40 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
                                 )
                             } else if (card is com.example.domain.model.ai.assistant.ShowConfirmCardPayload) {
                                 Spacer(modifier = Modifier.height(8.dp))
-                                ShowConfirmCard(
-                                    card = card,
-                                    onOptionSelected = { interactionId, optionId, optionLabel, payloadSummary ->
-                                        viewModel.sendInteractionResult(
-                                            interactionId = interactionId,
-                                            actionType = "show_confirm_card",
-                                            optionId = optionId,
-                                            optionLabel = optionLabel,
-                                            confirmType = "food_record",
-                                            payloadSummary = payloadSummary
-                                        )
-                                    }
-                                )
+                                if (card.confirmType == "food_record") {
+                                    FoodDraftConfirmCard(
+                                        card = card,
+                                        onOptionSelected = { interactionId, optionId, optionLabel, payloadSummary ->
+                                            viewModel.sendInteractionResult(
+                                                interactionId = interactionId,
+                                                actionType = "show_confirm_card",
+                                                optionId = optionId,
+                                                optionLabel = optionLabel,
+                                                confirmType = "food_record",
+                                                payloadSummary = payloadSummary
+                                            )
+                                        }
+                                    )
+                                } else {
+                                    // Fallback for other confirm types if any
+                                    DebugChoiceCard(
+                                        card = com.example.domain.model.ai.assistant.DebugChoiceCardPayload(
+                                            id = card.id,
+                                            title = card.title,
+                                            message = card.message,
+                                            options = card.buttons.map { com.example.domain.model.ai.assistant.DebugChoiceOption(it.id, it.label) }
+                                        ),
+                                        onOptionSelected = { interactionId, optionId, optionLabel ->
+                                             viewModel.sendInteractionResult(
+                                                interactionId = interactionId,
+                                                actionType = "show_confirm_card",
+                                                optionId = optionId,
+                                                optionLabel = optionLabel,
+                                                confirmType = card.confirmType
+                                            )
+                                        }
+                                    )
+                                }
                             }
                         }
                     }
@@ -433,340 +459,6 @@ private fun formatTime(timestamp: Long): String {
     val instant = Instant.ofEpochMilli(timestamp)
     val dateTime = instant.atZone(ZoneId.systemDefault()).toLocalTime()
     return dateTime.format(DateTimeFormatter.ofPattern("h:mm a", Locale.ENGLISH)).lowercase()
-}
-
-@Composable
-private fun DebugChoiceCard(
-    card: com.example.domain.model.ai.assistant.DebugChoiceCardPayload,
-    onOptionSelected: (interactionId: String, optionId: String, optionLabel: String) -> Unit
-) {
-    val context = LocalContext.current
-
-    LaunchedEffect(card.id) {
-        Log.d("DayZeroAiV2", "render debug_show_choice_card")
-    }
-
-    Box(
-        modifier = Modifier
-            .padding(end = 48.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(Color.White)
-            .border(1.dp, BorderNormal, RoundedCornerShape(16.dp))
-            .padding(16.dp)
-    ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Text(
-                text = card.title,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold,
-                color = TextPrimary
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = card.message,
-                fontSize = 14.sp,
-                color = TextSecondary
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                card.options.forEach { option ->
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                Log.d("DayZeroAiV2", "debug option clicked interactionId=${card.id} optionId=${option.id} optionLabel=${option.label}")
-                                Toast.makeText(context, "已选择：${option.label}", Toast.LENGTH_SHORT).show()
-                                onOptionSelected(card.id, option.id, option.label)
-                            },
-                        shape = RoundedCornerShape(8.dp),
-                        color = WarmBackground,
-                        border = androidx.compose.foundation.BorderStroke(1.dp, BorderNormal.copy(alpha = 0.5f))
-                    ) {
-                        Box(
-                            modifier = Modifier.padding(vertical = 10.dp, horizontal = 16.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = option.label,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = BrandGreen
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun AskRecordIntentCard(
-    card: com.example.domain.model.ai.assistant.AskRecordIntentCardPayload,
-    onOptionSelected: (interactionId: String, optionId: String, optionLabel: String) -> Unit
-) {
-    val context = LocalContext.current
-
-    LaunchedEffect(card.id) {
-        Log.d("DayZeroAiV2", "render ask_record_intent_card")
-    }
-
-    Box(
-        modifier = Modifier
-            .padding(end = 48.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(Color.White)
-            .border(1.dp, BorderNormal, RoundedCornerShape(16.dp))
-            .padding(16.dp)
-    ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Text(
-                text = card.title,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold,
-                color = TextPrimary
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = card.message,
-                fontSize = 14.sp,
-                color = TextSecondary
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "\"${card.originalText}\"",
-                fontSize = 13.sp,
-                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
-                color = TextSecondary.copy(alpha = 0.8f)
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                card.options.forEach { option ->
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                Log.d("DayZeroAiV2", "record intent option clicked interactionId=${card.id} optionId=${option.id}")
-                                Toast.makeText(context, "已选择：${option.label}", Toast.LENGTH_SHORT).show()
-                                onOptionSelected(card.id, option.id, option.label)
-                            },
-                        shape = RoundedCornerShape(8.dp),
-                        color = WarmBackground,
-                        border = androidx.compose.foundation.BorderStroke(1.dp, BorderNormal.copy(alpha = 0.5f))
-                    ) {
-                        Box(
-                            modifier = Modifier.padding(vertical = 10.dp, horizontal = 16.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = option.label,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = BrandGreen
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun AskMissingInfoCard(
-    card: com.example.domain.model.ai.assistant.AskMissingInfoCardPayload,
-    onOptionSelected: (interactionId: String, optionId: String, optionLabel: String, field: String, originalText: String) -> Unit
-) {
-    val context = LocalContext.current
-
-    LaunchedEffect(card.id) {
-        Log.d("DayZeroAiV2", "render ask_missing_info_card")
-    }
-
-    Box(
-        modifier = Modifier
-            .padding(end = 48.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(Color.White)
-            .border(1.dp, BorderNormal, RoundedCornerShape(16.dp))
-            .padding(16.dp)
-    ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Text(
-                text = card.title,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold,
-                color = TextPrimary
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = card.message,
-                fontSize = 14.sp,
-                color = TextSecondary
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "\"${card.originalText}\"",
-                fontSize = 13.sp,
-                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
-                color = TextSecondary.copy(alpha = 0.8f)
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                card.options.forEach { option ->
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                Log.d("DayZeroAiV2", "missing info option clicked interactionId=${card.id} field=${card.field} optionId=${option.id}")
-                                Toast.makeText(context, "已选择：${option.label}", Toast.LENGTH_SHORT).show()
-                                onOptionSelected(card.id, option.id, option.label, card.field, card.originalText)
-                            },
-                        shape = RoundedCornerShape(8.dp),
-                        color = WarmBackground,
-                        border = androidx.compose.foundation.BorderStroke(1.dp, BorderNormal.copy(alpha = 0.5f))
-                    ) {
-                        Box(
-                            modifier = Modifier.padding(vertical = 10.dp, horizontal = 16.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = option.label,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = BrandGreen
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ShowConfirmCard(
-    card: com.example.domain.model.ai.assistant.ShowConfirmCardPayload,
-    onOptionSelected: (interactionId: String, optionId: String, optionLabel: String, payloadSummary: com.example.domain.model.ai.assistant.PayloadSummary) -> Unit
-) {
-    val context = LocalContext.current
-
-    LaunchedEffect(card.id) {
-        Log.d("DayZeroAiV2", "render show_confirm_card")
-    }
-
-    Box(
-        modifier = Modifier
-            .padding(end = 48.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(Color.White)
-            .border(1.dp, BorderNormal, RoundedCornerShape(16.dp))
-            .padding(16.dp)
-    ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Text(
-                text = card.title,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold,
-                color = TextPrimary
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = card.message,
-                fontSize = 14.sp,
-                color = TextSecondary
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Color(0xFFF7F8F9))
-                    .padding(12.dp)
-            ) {
-                Column {
-                    Text(
-                        text = "餐次: ${card.mealType}",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = BrandGreen
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    card.items.forEach { item ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "${item.name} x ${item.amountText ?: "1"}",
-                                fontSize = 14.sp,
-                                color = TextPrimary
-                            )
-                            Text(
-                                text = "${item.calories} 千卡",
-                                fontSize = 14.sp,
-                                color = TextPrimary,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
-                    }
-                }
-            }
-            
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                card.buttons.forEach { option ->
-                    val isConfirm = option.id == "confirm"
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(40.dp)
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(if (isConfirm) BrandGreen else Color.Transparent)
-                            .border(
-                                1.dp,
-                                if (isConfirm) Color.Transparent else BorderNormal,
-                                RoundedCornerShape(20.dp)
-                            )
-                            .clickable {
-                                Log.d("DayZeroAiV2", "confirm card clicked interactionId=${card.id} optionId=${option.id}")
-                                onOptionSelected(
-                                    card.id,
-                                    option.id,
-                                    option.label,
-                                    com.example.domain.model.ai.assistant.PayloadSummary(
-                                        originalText = card.originalText,
-                                        mealType = card.mealType,
-                                        items = card.items
-                                    )
-                                )
-                                Toast.makeText(context, "已选择: ${option.label}", Toast.LENGTH_SHORT).show()
-                            },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = option.label,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = if (isConfirm) Color.White else TextPrimary
-                        )
-                    }
-                }
-            }
-        }
-    }
 }
 
 @Composable
