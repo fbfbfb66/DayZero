@@ -2,17 +2,17 @@
 
 ## Current status
 
-- **Phase 4C is complete**. Real database writing for `show_confirm_card` (`food_record`) has been fully implemented on the client side.
-- When the user clicks "确认记录", the client directly parses the `PayloadSummary`, assembles `MealEntry` and `FoodEntry`, and writes to the Room database via `RecordRepository`. This bypasses further Kimi interaction.
-- The UI card states (`pending`, `confirmed`, `cancelled`) are updated and persisted into the chat history. The card action buttons are conditionally hidden once a resolution state is reached.
-- Feedback messages like "已记录到今天。" or "好，这次先不记录。" are generated deterministically by the client without hitting the LLM network.
+- **Phase 4D-1 is complete**. Real database writing for `show_confirm_card` (`food_record`) has been fully implemented on the client side, now supporting multiple meals (`meals[]`) and optional weight recording (`weightKg`).
+- When the user clicks "确认记录", the client directly parses the `PayloadSummary` (or user's locally edited DraftCard state), assembles `MealEntry` and `FoodEntry`, and writes to the Room database via `RecordRepository`. This bypasses further Kimi interaction.
+- The UI card states (`pending`, `confirmed`, `cancelled`) are updated and persisted into the chat history. The card action buttons are conditionally hidden once a resolution state is reached. DraftCard items can be locally edited or deleted before confirmation.
+- Feedback messages like "好的，已为你处理：" are generated deterministically by the client without hitting the LLM network.
 - `assistant-turn-v2` is the only active AI main runtime entrypoint. Legacy fallback is strictly prohibited.
 - Room chat persistence is fully enabled. User messages, AI replies, and cards are fully persistent. 
 
-## Current Phase Features (Phase 4C Complete)
+## Current Phase Features (Phase 4D-1 Complete)
 
-- **JSON Protocol**: Edge function `assistant-turn-v2` returns `{"reply": "...", "actions": []}`.
-- **Protocol Validation**: `RemoteAiAssistantRepository` strictly validates the response. If `reply` is missing or `actions` contains invalid items, it throws `ProtocolException("协议错误")`.
+- **JSON Protocol**: Edge function `assistant-turn-v2` returns `{"reply": "...", "actions": []}`. Text replies are optional; if missing, client will fallback to a default prompt. Action identification now uses `id` instead of `interactionId`.
+- **Protocol Validation**: `RemoteAiAssistantRepository` validates the response structure. `show_confirm_card` expects the new `meals` array but falls back to older structures if `meals` is missing.
 - **Turn Type**: Requests support `turnType = "user_message"` (for normal chat) and `turnType = "interaction_result"` (when clicking card options).
 - **Tools Supported**: Currently allows `debug_show_choice_card`, `ask_record_intent_card`, `ask_missing_info_card`, and `show_confirm_card`.
 - **Interaction Result**: Clicking intermediate cards (like `ask_record_intent_card` or `ask_missing_info_card`) posts `interaction_result` back to `assistant-turn-v2`. Clicking `show_confirm_card` bypasses the network and is handled exclusively by the client to write to the local database.
