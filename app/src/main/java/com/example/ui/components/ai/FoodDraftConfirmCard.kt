@@ -60,8 +60,8 @@ fun FoodDraftConfirmCard(
         }
     }
     
-    var draftMeals by remember(card.id, card.state) { mutableStateOf(initialMeals) }
-    var weightKg by remember(card.id, card.state) { mutableStateOf(card.weightKg) }
+    var draftMeals by remember(card.id) { mutableStateOf(initialMeals) }
+    var weightKg by remember(card.id) { mutableStateOf(card.weightKg) }
     
     val totalCalories = remember(draftMeals) {
         draftMeals.sumOf { meal -> meal.items.sumOf { it.calories } }

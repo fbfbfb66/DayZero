@@ -170,8 +170,9 @@ As of 2026-06-08, DayZero Phase 2 and Phase 3 have been fully verified and compl
   - Feedback for confirmation or cancellation is deterministically generated locally by the client, without hitting Kimi.
   - The old AI check-in flow components (HybridIntentRouter, IntentClassifier, etc.) remain fully deprecated and bypassed.
 - **Next Phase**: Begin implementing weight tracking (e.g., `weight_record`) or daily summary tools under the new V2 architecture.
+- **Streaming Card Latency Optimization Completed**: `assistant-turn-v2-stream` now successfully implements server-side action normalization, keeping AI streaming fast while providing the client with complete UI payload data natively.
 
-## Streaming card latency optimization handoff
+## Streaming card latency optimization handoff (已完成)
 
 ### Context for the next AI/engineer
 

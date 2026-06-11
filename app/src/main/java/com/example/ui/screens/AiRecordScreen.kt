@@ -177,7 +177,8 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
                                                 interactionId = interactionId,
                                                 actionType = "ask_record_intent_card",
                                                 optionId = optionId,
-                                                optionLabel = optionLabel
+                                                optionLabel = optionLabel,
+                                                originalText = card.originalText
                                             )
                                         }
                                     )

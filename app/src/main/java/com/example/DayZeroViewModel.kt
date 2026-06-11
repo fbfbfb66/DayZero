@@ -606,7 +606,12 @@ class DayZeroViewModel(
 
                     Log.d("DayZeroAiV2", "food record save success")
                     latencyLogger.mark(traceId, "room_confirm_card_state_update_start")
-                    updateCardState(interactionId, "confirmed")
+                    updateCardState(
+                        interactionId = interactionId,
+                        newState = "confirmed",
+                        updatedWeightKg = payloadSummary?.weightKg,
+                        updatedMeals = payloadSummary?.meals
+                    )
                     latencyLogger.mark(traceId, "room_confirm_card_state_update_complete")
                     addClientMessage("已记录到今天。", traceId, "local_food_confirm")
                     _uiEvents.emit(UiEvent.RecordConfirmed)
@@ -618,13 +623,23 @@ class DayZeroViewModel(
         }
     }
 
-    private suspend fun updateCardState(interactionId: String, newState: String) {
+    private suspend fun updateCardState(
+        interactionId: String,
+        newState: String,
+        updatedWeightKg: Double? = null,
+        updatedMeals: List<com.example.domain.model.ai.assistant.ConfirmCardMeal>? = null
+    ) {
         val messages = _uiState.value.chatMessages
         val targetMessage = messages.find { msg -> msg.assistantCards.any { it.id == interactionId } }
         if (targetMessage != null) {
             val updatedCards = targetMessage.assistantCards.map { card ->
                 if (card.id == interactionId && card is com.example.domain.model.ai.assistant.ShowConfirmCardPayload) {
-                    card.copy(state = newState, resolved = true)
+                    card.copy(
+                        state = newState,
+                        resolved = true,
+                        weightKg = updatedWeightKg ?: card.weightKg,
+                        meals = updatedMeals ?: card.meals
+                    )
                 } else {
                     card
                 }

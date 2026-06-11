@@ -55,12 +55,13 @@ Deno.serve(async (req) => {
           turnType,
           userText,
           interactionResult,
+          todayRecord: body.todayRecord,
         });
         const promptBuiltAt = performance.now();
 
         const kimiRequestStartedAt = performance.now();
         const abortController = new AbortController();
-        const timeoutId = setTimeout(() => abortController.abort(), 35_000);
+        const timeoutId = setTimeout(() => abortController.abort(), 15_000);
         const kimiResponse = await fetch(MOONSHOT_API_URL, {
           method: "POST",
           signal: abortController.signal,
@@ -143,6 +144,11 @@ Deno.serve(async (req) => {
             : [];
 
         if (!reply) throw new Error("Kimi returned blank reply");
+        let fallbackOriginalText = userText;
+        if (body.interactionResult && typeof body.interactionResult === "object" && typeof body.interactionResult.originalText === "string" && body.interactionResult.originalText.trim().length > 0) {
+          fallbackOriginalText = body.interactionResult.originalText.trim();
+        }
+        normalizeActions(actions, body.date ?? "", fallbackOriginalText, body.todayRecord);
         validateActions(actions);
         const protocolValidatedAt = performance.now();
 
@@ -191,17 +197,81 @@ Deno.serve(async (req) => {
 });
 
 function buildSystemPrompt(): string {
-  return `You are DayZero's low-pressure food logging assistant. Reply in the user's language with a natural, warm, concise tone. Do not create body anxiety or encourage extreme dieting.
-Your job has only two parts: 1) write the user-visible reply; 2) decide whether a card tool is needed. Do not expose intent labels or rule explanations.
-Return only one JSON object. Prefer compact format and put r first: {"r":"user-visible reply","a":[]}
-Legacy format {"reply":"...","actions":[]} is also accepted. Never output text outside JSON.
-Allowed card tools:
-1 ask_record_intent_card: use when the user appears to share food/drink already consumed but did not clearly ask to record it. options must include record/chat_only/not_now.
-2 ask_missing_info_card: use when the user wants to record food but mealType is missing. options must include breakfast/lunch/dinner/snack.
-3 show_confirm_card: use when mealType and food items are enough to show a food_record draft. Do not write data before confirmation. Estimate calories if needed and set calorieConfidence="estimated". Split multiple meals into meals[]. If weight is not mentioned, weightKg=null.
-4 debug_show_choice_card: only when the user explicitly asks to test tools/cards.
-For interaction_result, naturally continue from the user's card choice. Return the next needed card, or a=[] if no card is needed.
-Inside a[], keep the existing full action field names. Do not compact nested action payloads: use type/id or interactionId/payload.`;
+  return `你是 DayZero 的 AI 饮食助手。
+DayZero 是一个帮助用户轻松记录饮食、理解热量、稳定减脂的应用。你的风格应该像一个温柔、专业、低压力的朋友，而不是冷冰冰的记录机器。
+
+你的回复原则：
+- 每次都要自然回应用户，不要只输出工具。
+- 语气温柔、简洁、有陪伴感。
+- 不制造身材焦虑，不批评用户，不鼓励极端节食。
+- 用户表达吃多了、嘴馋、焦虑或自责时，先接住情绪，再给轻量建议。
+- 用户只是聊天、咨询、分享生活时，也要正常自然回复。
+- 工具调用只是额外能力，不是默认行为。只有当工具能明显帮助当前对话继续时，才调用工具。
+
+输出格式要求：
+你必须只返回一个 JSON 对象，不要输出任何 Markdown 标记或 JSON 之外的任何文本。
+请使用 compact 格式，且将 r 放在第一位，格式如下：
+{"r": "给用户看的自然语言回复", "a": []}
+注：亦可使用旧格式 {"reply": "...", "actions": []}。
+
+允许调用的卡片工具（放入 a 数组中）：
+1. ask_record_intent_card
+   用途：用户提到自己吃了/喝了什么但没有明确说要记录时，询问用户是否要把这次饮食录入今天。
+   核心规则：输出时只需包含 "type" (或 "t") 即可，如 {"t": "ask_record_intent_card"}。绝不能输出 payload (或 p) 等其他任何 UI 字段（如 title, message, options, originalText），系统会自动填充。
+2. ask_missing_info_card
+   用途：用户明确要求记录饮食，但没有指出餐次（早餐/午餐/晚餐/加餐），向用户询问餐次。
+   重要：如果用户的原始饮食文本（例如“我吃了一个苹果”或“我今天还吃了两个橘子”）中没有包含明确的餐次词汇（如“早餐/午餐/晚餐/加餐/早上/中午/晚上/下午/上午/夜宵/零食”），你绝对不能擅自假设餐次（哪怕它是水果、零食、饮料也绝对不能默认为“加餐”），必须先调用 ask_missing_info_card。
+   核心规则：输出时只需包含 "type" (或 "t") 即可，如 {"t": "ask_missing_info_card"}。绝不能输出 payload (或 p) 等其他任何 UI 字段（如 title, message, options, field, originalText），系统会自动填充。
+3. show_confirm_card
+   用途：展示用户准备录入的饮食草稿。
+   payload 结构：{"confirmType": "food_record", "meals": [{"mealType": "lunch", "items": [{"name": "螺蛳粉", "amountText": "1份", "calories": 600}]}]}
+   - 热量由你来进行粗略估算，且 calorieConfidence 设为 "estimated"。
+   - 如果用户没有提到体重，weightKg 返回 null。
+   - 重要：不要重复生成已经录入在 AlreadyRecorded 中的食物。你的卡片（show_confirm_card）应该只包含当前对话中新提到、待确认录入的食物。
+4. debug_show_choice_card
+   用途：仅在用户明确表示想测试工具或卡片时使用。
+
+对话流及状态路由规则（重要）：
+当你接收到的输入包含 TurnType: interaction_result 时，说明用户刚刚完成了一个工具卡片的操作：
+1. 对于 ask_record_intent_card 的点击回应（SelectedOptionId 为用户的选择）：
+   - 如果用户选择 "record" (帮我记录)：
+     - 如果原始饮食文本或 Recent 聊天历史中已经包含明确餐次（比如提到“早餐”、“中午”、“晚餐”或“晚上”等），请立即返回 reply 和 show_confirm_card 卡片。
+     - 如果缺少餐次（比如只说了“吃了一份苹果”），请返回 reply 并调用 ask_missing_info_card 卡片。
+     - 严格要求：若原始饮食文本中缺少餐次（即没有任何早餐/午餐/晚餐/加餐/中午/晚上等词汇），绝对不能擅自判定为“加餐”并直接生成 show_confirm_card，必须调用 ask_missing_info_card 卡片！
+     - 提示：若 OriginalText 缺失或为空，可查看 Recent 聊天历史获取刚才用户提到的饮食（如“螺蛳粉”）和餐次（如“中午”）。
+   - 如果用户选择 "chat_only" (只是聊聊) 或 "not_now" (先不用)：
+     - 自然跟用户闲聊或确认，不需要进行任何记录，且 a 设为 []。
+2. 对于 ask_missing_info_card 的点击回应：
+   - 此时餐次已补齐（对应 SelectedOptionId 比如 breakfast/lunch/dinner/snack）。结合之前的饮食内容，返回 reply 并调用 show_confirm_card 卡片。
+3. 对于 show_confirm_card 的点击回应：
+   - 用户确认记录（confirm）或取消（cancel）后，请自然友好地给予回应，表示已经确认记录或已取消，且 a 设为 []。`;
+}
+
+function formatTodayRecord(todayRecord: unknown): string {
+  if (!todayRecord || typeof todayRecord !== "object") return "None";
+  const record = todayRecord as Record<string, unknown>;
+  const meals = record.meals;
+  if (!Array.isArray(meals) || meals.length === 0) return "None";
+
+  return meals
+    .map((meal) => {
+      if (!meal || typeof meal !== "object") return "";
+      const m = meal as Record<string, unknown>;
+      const type = String(m.mealType ?? "");
+      const foods = Array.isArray(m.foods)
+        ? m.foods
+            .map((f) => {
+              if (!f || typeof f !== "object") return "";
+              const food = f as Record<string, unknown>;
+              return `${String(food.name ?? "")}(${String(food.quantity ?? "1份")}, ${Number(food.estimatedCalories ?? 0)}kcal)`;
+            })
+            .filter(Boolean)
+            .join(", ")
+        : "";
+      return foods ? `- ${type}: ${foods}` : "";
+    })
+    .filter(Boolean)
+    .join("\n") || "None";
 }
 
 function buildUserContent(input: {
@@ -210,10 +280,13 @@ function buildUserContent(input: {
   turnType: string;
   userText: string;
   interactionResult: unknown;
+  todayRecord: unknown;
 }): string {
   let content = `Date:${input.date}
 Recent:
 ${input.recentContext || "None"}
+AlreadyRecorded:
+${formatTodayRecord(input.todayRecord)}
 TurnType:${input.turnType}
 `;
 
@@ -295,6 +368,119 @@ function readJsonStringPrefix(source: string, start: number): { value: string; c
     }
   }
   return { value, complete: false };
+}
+
+function generateId(prefix: string): string {
+  return `${prefix}_${Math.random().toString(36).substring(2, 10)}`;
+}
+
+function getMealLabel(type: string): string {
+  switch (type) {
+    case "breakfast": return "早餐";
+    case "lunch": return "午餐";
+    case "dinner": return "晚餐";
+    case "snack": return "加餐";
+    default: return type || "";
+  }
+}
+
+function normalizeActions(actions: any[], date: string, originalText: string, todayRecord?: any) {
+  for (const action of actions) {
+    if (!action || typeof action !== "object") continue;
+
+    // Map compact fields t -> type, p -> payload if present
+    if (action.t && !action.type) {
+      action.type = action.t;
+    }
+    if (action.p && !action.payload) {
+      action.payload = action.p;
+    }
+
+    if (action.type === "ask_record_intent_card") {
+      if (!action.interactionId && !action.id) action.interactionId = generateId("record_intent");
+      if (!action.payload) action.payload = {};
+      action.payload.title = action.payload.title || "需要帮你记录吗？";
+      action.payload.message = action.payload.message || "我看到你提到了刚吃/喝的内容，要不要把它录入今天？";
+      action.payload.originalText = action.payload.originalText || originalText;
+      if (!action.payload.options) {
+        action.payload.options = [
+          { id: "record", label: "帮我记录" },
+          { id: "chat_only", label: "只是聊聊" },
+          { id: "not_now", label: "先不用" }
+        ];
+      }
+    } else if (action.type === "ask_missing_info_card") {
+      if (!action.interactionId && !action.id) action.interactionId = generateId("missing_info");
+      if (!action.payload) action.payload = {};
+      action.payload.title = action.payload.title || "补充一下餐次";
+      action.payload.message = action.payload.message || "这次饮食算在哪一餐呀？";
+      action.payload.field = action.payload.field || action.field || "mealType";
+      action.payload.originalText = action.payload.originalText || originalText;
+      if (!action.payload.options) {
+        action.payload.options = [
+          { id: "breakfast", label: "早餐" },
+          { id: "lunch", label: "午餐" },
+          { id: "dinner", label: "晚餐" },
+          { id: "snack", label: "加餐" }
+        ];
+      }
+    } else if (action.type === "show_confirm_card") {
+      if (!action.id && !action.interactionId) action.id = generateId("confirm");
+      if (!action.payload) action.payload = {};
+      action.payload.confirmType = "food_record";
+      action.payload.title = action.payload.title || "今日记录草稿";
+      action.payload.message = action.payload.message || "我先帮你估算了一版，你可以修改后再确认。";
+      action.payload.date = action.payload.date || date;
+      
+      if (action.payload.weightKg === undefined || action.payload.weightKg === null) {
+        const existingWeight = todayRecord && typeof todayRecord === "object" ? todayRecord.weightKg : null;
+        action.payload.weightKg = (action.weightKg !== undefined && action.weightKg !== null)
+          ? action.weightKg 
+          : (existingWeight !== undefined && existingWeight !== null ? existingWeight : null);
+      }
+      
+      // Handle legacy mealType + items compact format
+      if (!Array.isArray(action.payload.meals)) {
+         let meals = action.payload.meals || action.meals || [];
+         if (meals.length === 0 && (action.mealType || action.payload.mealType)) {
+             const fallbackItems = action.items || action.payload.items || [];
+             if (Array.isArray(fallbackItems) && fallbackItems.length > 0) {
+                 const typeToUse = action.mealType || action.payload.mealType;
+                 meals = [{
+                     mealType: typeToUse,
+                     mealLabel: getMealLabel(typeToUse),
+                     items: fallbackItems
+                 }];
+             }
+         }
+         action.payload.meals = meals;
+      }
+      
+      // Calculate totals and normalize items
+      let totalCals = 0;
+      for (const meal of action.payload.meals) {
+          meal.mealLabel = meal.mealLabel || getMealLabel(meal.mealType);
+          let subtotal = 0;
+          if (!Array.isArray(meal.items)) meal.items = [];
+          for (const item of meal.items) {
+             if (!item.id) item.id = generateId("item");
+             if (item.calorieConfidence === undefined) item.calorieConfidence = "estimated";
+             if (typeof item.calories !== "number") item.calories = 0;
+             subtotal += item.calories;
+          }
+          meal.subtotalCalories = meal.subtotalCalories !== undefined ? meal.subtotalCalories : subtotal;
+          totalCals += meal.subtotalCalories;
+      }
+      action.payload.totalCalories = action.payload.totalCalories !== undefined ? action.payload.totalCalories : totalCals;
+
+      if (!action.payload.buttons) {
+        action.payload.buttons = [
+          { id: "confirm", label: "确认记录" },
+          { id: "cancel", label: "先不记录" }
+        ];
+      }
+    }
+  }
 }
 
 function validateActions(actions: unknown[]) {

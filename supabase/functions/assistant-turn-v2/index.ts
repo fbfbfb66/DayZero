@@ -33,263 +33,26 @@ Deno.serve(async (req) => {
       return jsonResponse({ error: "Missing userText" }, 400);
     }
 
-    const recentContext = Array.isArray(body.recentMessages)
-      ? body.recentMessages
-          .slice(-10)
-          .map((message: { role?: unknown; text?: unknown }) => {
-            const role = typeof message.role === "string" ? message.role : "Unknown";
-            const text = typeof message.text === "string" ? message.text : "";
-            return `${role}: ${text}`;
-          })
-          .filter((line: string) => line.trim().length > 0)
-          .join("\n")
-      : "";
-
     console.log(
-      `[AssistantTurnV2] start traceId=${traceId ?? "none"} userTextLength=${userText.length} recentMessages=${recentContext ? "yes" : "no"}`,
+      `[AssistantTurnV2] start traceId=${traceId ?? "none"} userTextLength=${userText.length}`,
     );
 
     const promptBuildStartedAt = performance.now();
-    const promptVersion = "draft_card_v1_timing";
-
-    const systemPrompt = `你是 DayZero 的 AI 饮食助手。
-
-DayZero 是一个帮助用户轻松记录饮食、理解热量、稳定减脂的应用。你的风格应该像一个温柔、专业、低压力的朋友，而不是冷冰冰的记录机器。
-
-你的回复原则：
-- 每次都要自然回应用户，不要只输出工具。
-- 语气温柔、简洁、有陪伴感。
-- 不制造身材焦虑，不批评用户，不鼓励极端节食。
-- 用户表达吃多了、嘴馋、焦虑或自责时，先接住情绪，再给轻量建议。
-- 用户只是聊天、咨询、分享生活时，也要正常自然回复。
-- 工具调用只是额外能力，不是默认行为。
-- 只有当工具能明显帮助当前对话继续时，才调用工具。
-
-你不需要输出旧式意图分类字段，例如 primaryIntent、speechAct、consumptionStatus。
-你只需要做两件事：
-1. 生成给用户看的 reply。
-2. 判断是否需要调用当前可用工具。
-
-当前可用工具：
-
-1. debug_show_choice_card
-用途：用于测试 DayZero 的工具调用链路。
-适合调用的情况：用户明确表示想测试工具、明确要求打开测试卡片等。
-不适合调用的情况：任何非测试场景。
-
-2. ask_record_intent_card
-用途：
-当用户提到自己已经吃了或喝了某些东西，但没有明确要求记录时，询问用户是否要把这次饮食录入今天。
-
-适合调用的情况：
-- 用户像是在分享自己已经吃了/喝了什么。
-- 用户没有明确要求记录、打卡、录入。
-- 例子：
-  - “今天吃了火锅”
-  - “中午吃了一碗肠粉”
-  - “刚喝了杯奶茶”
-  - “晚上吃了炸鸡”
-
-不适合调用的情况：
-- 用户只是问能不能吃、热量高不高。
-- 用户只是说想吃但还没吃。
-- 用户明确要求记录。
-- 用户说体重。
-- 用户要求总结。
-- 用户普通闲聊或表达情绪但没有具体已吃内容。
-
-3. ask_missing_info_card
-用途：
-当用户已经表示要记录饮食，但缺少餐次时，询问这次饮食算在哪一餐。
-
-适合调用的情况：
-- 用户点击 ask_record_intent_card 的“帮我记录”。
-- 原始饮食文本里没有明确餐次。
-- 用户明确说“帮我记录刚吃的苹果”，但没说早餐/午餐/晚餐/加餐。
-
-不适合调用的情况：
-- 用户只是分享饮食，还没表示要记录，这时用 ask_record_intent_card。
-- 用户只是问热量或能不能吃。
-- 用户只是想吃但还没吃。
-- 用户已经给出明确餐次，例如“中午吃了肠粉”。
-- 用户说体重、总结、闲聊。
-
-4. show_confirm_card
-用途：
-展示需要用户确认的饮食记录草稿。用户确认前不能写库。
-
-适合调用的情况：
-- 用户明确要求记录饮食，并且文本里已有餐次和食物。
-- 用户从 ask_record_intent_card 选择“帮我记录”，且原始文本已有餐次和食物。
-- 用户从 ask_missing_info_card 选择餐次后，现在餐次和食物都已齐全。
-
-不适合调用的情况：
-- 用户只是分享饮食但没有说要记录，这时用 ask_record_intent_card。
-- 用户已经要记录但缺少餐次，这时用 ask_missing_info_card。
-- 用户只是问热量、能不能吃、想吃但没吃。
-- 食物内容过于模糊到无法形成草稿。
-
-使用 show_confirm_card 时的草稿构建要求：
-- food_record 草稿应尽量按餐次组织为 meals[]。
-- 如果用户一次说了多餐，例如“早餐吃了...，中午吃了...”，必须拆成多个 meal。
-- 如果用户没有提到体重，weightKg 返回 null。
-- 如果用户提到体重，可以填入 weightKg。
-- calories 都是估算值时，calorieConfidence 使用 "estimated"。
-- 热量可以先由你做粗略预估，但必须标记 calorieConfidence = "estimated"。
-
-当你收到 TurnType = interaction_result 时，说明用户刚刚完成了一个工具卡片操作。
-你需要自然承接用户刚才的选择，生成一条 reply。
-如果这次不需要继续调用工具，actions 返回 []。
-
-对于 ask_record_intent_card 的 interaction_result：
-- 如果用户点击了“帮我记录”：
-  - 且原始文本已经包含明确餐次（例如“中午吃了一碗肠粉”），则返回 reply + show_confirm_card。
-  - 且原始文本缺少餐次，则返回 reply + ask_missing_info_card。
-- 如果用户点击了“只是聊聊”或“先不用”，你只需自然回复，不用进行任何记录，actions=[]。
-
-对于 ask_missing_info_card 的 interaction_result：
-- 结合用户选择的餐次和之前缺失的信息，现在信息齐全了。
-- 自然承接用户选择，返回 reply + show_confirm_card。
-
-对于 show_confirm_card 的 interaction_result：
-- 如果用户点击了 confirm：自然回复，表示已经收到确认。actions=[]。
-- 如果用户点击了 cancel：自然回复，表示不会记录这次。actions=[]。
-
-输出格式要求：
-你必须只返回一个 JSON 对象，不要输出 JSON 之外的任何内容。
-
-格式必须是：
-
-{
-  "reply": "给用户看的自然语言回复",
-  "actions": []
-}
-
-如果需要调用 ask_record_intent_card 工具，格式是：
-
-{
-  "reply": "给用户看的自然语言回复",
-  "actions": [
-    {
-      "type": "ask_record_intent_card",
-      "interactionId": "record_intent_xxx",
-      "payload": {
-        "title": "要记录这次饮食吗？",
-        "message": "我看到你提到了刚吃/喝的内容，要不要把它录入今天？",
-        "originalText": "用户原始输入",
-        "options": [
-          { "id": "record", "label": "帮我记录" },
-          { "id": "chat_only", "label": "只是聊聊" },
-          { "id": "not_now", "label": "先不用" }
-        ]
-      }
-    }
-  ]
-}
-
-如果需要调用 ask_missing_info_card 工具，格式是：
-
-{
-  "reply": "给用户看的自然语言回复",
-  "actions": [
-    {
-      "type": "ask_missing_info_card",
-      "interactionId": "missing_info_xxx",
-      "payload": {
-        "title": "补充一下餐次",
-        "message": "这次饮食算在哪一餐呀？",
-        "field": "mealType",
-        "originalText": "用户原始输入",
-        "options": [
-          { "id": "breakfast", "label": "早餐" },
-          { "id": "lunch", "label": "午餐" },
-          { "id": "dinner", "label": "晚餐" },
-          { "id": "snack", "label": "加餐" }
-        ]
-      }
-    }
-  ]
-}
-
-如果需要调用 show_confirm_card 工具，格式是：
-
-{
-  "reply": "给用户看的自然语言回复",
-  "actions": [
-    {
-      "type": "show_confirm_card",
-      "id": "confirm_xxx",
-      "payload": {
-        "confirmType": "food_record",
-        "title": "今日记录草稿",
-        "message": "我先帮你估算了一版，你可以修改后再确认。",
-        "date": "2026-06-11",
-        "weightKg": null,
-        "totalCalories": 600,
-        "meals": [
-          {
-            "mealType": "dinner",
-            "mealLabel": "晚餐",
-            "subtotalCalories": 600,
-            "items": [
-              {
-                "id": "item_xxx",
-                "name": "螺蛳粉",
-                "amountText": "1份",
-                "calories": 600,
-                "calorieConfidence": "estimated"
-              }
-            ]
-          }
-        ],
-        "buttons": [
-          { "id": "confirm", "label": "确认记录" },
-          { "id": "cancel", "label": "先不记录" }
-        ]
-      }
-    }
-  ]
-}
-
-硬性要求：
-- reply 必须存在，且不能为空。
-- actions 必须存在，且必须是数组。
-- 当前只允许 debug_show_choice_card、ask_record_intent_card、ask_missing_info_card 和 show_confirm_card。
-- 如果不需要工具，actions 必须是 []。
-- 不要输出 markdown。
-- 不要输出解释。
-- 不要输出 JSON 之外的文字。`;
-
+    const promptVersion = "compact_v2_timing";
+    const promptCacheKey = normalizePromptCacheKey(body.promptCacheKey);
+    const recentContext = buildRecentContext(body.recentMessages);
     const turnType = typeof body.turnType === "string" ? body.turnType.trim() : "user_message";
     const interactionResult = body.interactionResult;
 
-    let userContent = `Current date: ${body.date ?? ""}
-
-Recent chat:
-${recentContext || "None"}
-
-Latest Turn Details:
-TurnType: ${turnType}
-`;
-
-    if (turnType === "interaction_result" && interactionResult) {
-      userContent += `
-User completed card action.
-ActionType: ${interactionResult.actionType}
-InteractionId: ${interactionResult.interactionId}
-SelectedOptionId: ${interactionResult.selectedOptionId}
-SelectedOptionLabel: ${interactionResult.selectedOptionLabel}
-`;
-      if (interactionResult.payloadSummary) {
-        userContent += `PayloadSummary: ${JSON.stringify(interactionResult.payloadSummary)}
-`;
-      }
-    } else {
-      userContent += `
-Latest user input:
-${userText}
-`;
-    }
+    const systemPrompt = buildSystemPrompt();
+    const userContent = buildUserContent({
+      date: body.date ?? "",
+      recentContext,
+      turnType,
+      userText,
+      interactionResult,
+      todayRecord: body.todayRecord,
+    });
     const promptBuiltAt = performance.now();
 
     const kimiRequestStartedAt = performance.now();
@@ -306,11 +69,10 @@ ${userText}
           { role: "user", content: userContent },
         ],
         response_format: { type: "json_object" },
+        prompt_cache_key: promptCacheKey,
         max_tokens: 1500,
         temperature: 0.6,
-        thinking: {
-          type: "disabled",
-        },
+        thinking: { type: "disabled" },
       }),
     });
     const kimiResponseReceivedAt = performance.now();
@@ -332,14 +94,13 @@ ${userText}
     const kimiJsonParsedAt = performance.now();
     const content = kimiResult?.choices?.[0]?.message?.content;
     
-    console.log(`[AssistantTurnV2] AssistantPromptVersion = ${promptVersion}`);
     console.log(`[AssistantTurnV2] Kimi raw response: ${content}`);
 
     if (typeof content !== "string" || content.trim().length === 0) {
       return jsonResponse({ error: "Kimi returned empty content" }, 502);
     }
 
-    let parsed: { reply?: unknown; actions?: unknown };
+    let parsed: any;
     try {
       parsed = JSON.parse(content);
     } catch (_error) {
@@ -347,94 +108,24 @@ ${userText}
     }
 
     const protocolValidationStartedAt = performance.now();
-    const reply = typeof parsed.reply === "string" ? parsed.reply.trim() : "";
-    
-    console.log(`[AssistantTurnV2] parsed reply: ${reply}`);
+    const compactJsonUsed = typeof parsed.r === "string" || Array.isArray(parsed.a);
+    const reply = (typeof parsed.r === "string" ? parsed.r : parsed.reply)?.trim?.() ?? "";
+    const actions = Array.isArray(parsed.a)
+      ? parsed.a
+      : Array.isArray(parsed.actions)
+        ? parsed.actions
+        : [];
 
     if (!reply) {
       return jsonResponse({ error: "Kimi returned blank reply" }, 502);
     }
 
-    const actions = Array.isArray(parsed.actions) ? parsed.actions : [];
-    
-    console.log(`[AssistantTurnV2] actions count: ${actions.length}`);
-
-    for (const action of actions) {
-      if (action && typeof action === "object" && "type" in action) {
-        console.log(`[AssistantTurnV2] action type: ${action.type}`);
-        if (action.type !== "debug_show_choice_card" && action.type !== "ask_record_intent_card" && action.type !== "ask_missing_info_card" && action.type !== "show_confirm_card") {
-          console.error(`[AssistantTurnV2] Protocol error: Unknown action type ${action.type}`);
-          return jsonResponse({ error: "Protocol Error: Unknown action type", detail: `Unsupported action type: ${action.type}` }, 400);
-        }
-
-        if (action.type === "ask_record_intent_card") {
-          const typedAction = action as any;
-          const payload = typedAction.payload;
-          
-          if (!typedAction.id && !typedAction.interactionId) {
-            return jsonResponse({ error: "Protocol Error: Missing id", detail: "ask_record_intent_card missing id" }, 400);
-          }
-          if (!payload) {
-            return jsonResponse({ error: "Protocol Error: Missing payload", detail: "ask_record_intent_card missing payload" }, 400);
-          }
-          if (!payload.title || !payload.message || !payload.originalText || !payload.options || !Array.isArray(payload.options)) {
-            return jsonResponse({ error: "Protocol Error: Invalid payload", detail: "ask_record_intent_card payload missing required fields" }, 400);
-          }
-          
-          const optionIds = payload.options.map((o: any) => o.id);
-          if (!optionIds.includes("record") || !optionIds.includes("chat_only") || !optionIds.includes("not_now")) {
-            return jsonResponse({ error: "Protocol Error: Invalid options", detail: "ask_record_intent_card options must contain record, chat_only, not_now" }, 400);
-          }
-        }
-
-        if (action.type === "ask_missing_info_card") {
-          const typedAction = action as any;
-          const payload = typedAction.payload;
-          
-          if (!typedAction.id && !typedAction.interactionId) {
-            return jsonResponse({ error: "Protocol Error: Missing id", detail: "ask_missing_info_card missing id" }, 400);
-          }
-          if (!payload) {
-            return jsonResponse({ error: "Protocol Error: Missing payload", detail: "ask_missing_info_card missing payload" }, 400);
-          }
-          if (!payload.title || !payload.message || !payload.field || !payload.originalText || !payload.options || !Array.isArray(payload.options)) {
-            return jsonResponse({ error: "Protocol Error: Invalid payload", detail: "ask_missing_info_card payload missing required fields" }, 400);
-          }
-          
-          if (payload.field === "mealType") {
-            const optionIds = payload.options.map((o: any) => o.id);
-            if (!optionIds.includes("breakfast") || !optionIds.includes("lunch") || !optionIds.includes("dinner") || !optionIds.includes("snack")) {
-              return jsonResponse({ error: "Protocol Error: Invalid options", detail: "ask_missing_info_card mealType options missing required keys" }, 400);
-            }
-          }
-        }
-
-        if (action.type === "show_confirm_card") {
-          const typedAction = action as any;
-          const payload = typedAction.payload;
-
-          if (!typedAction.id && !typedAction.interactionId) {
-            return jsonResponse({ error: "Protocol Error: Missing id", detail: "show_confirm_card missing id" }, 400);
-          }
-          if (!payload) {
-            return jsonResponse({ error: "Protocol Error: Missing payload", detail: "show_confirm_card missing payload" }, 400);
-          }
-          if (payload.confirmType !== "food_record") {
-            return jsonResponse({ error: "Protocol Error: Invalid confirmType", detail: "show_confirm_card confirmType must be food_record" }, 400);
-          }
-          if (!payload.title || !payload.message || !payload.buttons || !Array.isArray(payload.buttons)) {
-            return jsonResponse({ error: "Protocol Error: Invalid payload", detail: "show_confirm_card payload missing required fields" }, 400);
-          }
-
-          const hasMeals = Array.isArray(payload.meals);
-          const hasLegacyItems = Array.isArray(payload.items) && !!payload.mealType;
-          if (!hasMeals && !hasLegacyItems) {
-            return jsonResponse({ error: "Protocol Error: Invalid payload", detail: "show_confirm_card payload must contain either meals array or legacy mealType+items" }, 400);
-          }
-        }
-      }
+    let fallbackOriginalText = userText;
+    if (body.interactionResult && typeof body.interactionResult === "object" && typeof body.interactionResult.originalText === "string" && body.interactionResult.originalText.trim().length > 0) {
+      fallbackOriginalText = body.interactionResult.originalText.trim();
     }
-
+    normalizeActions(actions, body.date ?? "", fallbackOriginalText, body.todayRecord);
+    validateActions(actions);
     const protocolValidatedAt = performance.now();
 
     console.log(`[AssistantTurnV2] success replyLength=${reply.length} actionsCount=${actions.length}`);
@@ -443,12 +134,17 @@ ${userText}
       actions,
       debugTiming: {
         traceId,
-        totalMs: roundMs(performance.now() - functionStartedAt),
-        requestParseMs: roundMs(requestParsedAt - functionStartedAt),
-        promptBuildMs: roundMs(promptBuiltAt - promptBuildStartedAt),
-        kimiRequestMs: roundMs(kimiResponseReceivedAt - kimiRequestStartedAt),
-        kimiJsonParseMs: roundMs(kimiJsonParsedAt - kimiJsonParseStartedAt),
-        protocolValidationMs: roundMs(protocolValidatedAt - protocolValidationStartedAt),
+        promptVersion,
+        totalMs: round(performance.now() - functionStartedAt),
+        requestParseMs: round(requestParsedAt - functionStartedAt),
+        promptBuildMs: round(promptBuiltAt - promptBuildStartedAt),
+        kimiRequestMs: round(kimiResponseReceivedAt - kimiRequestStartedAt),
+        kimiJsonParseMs: round(kimiJsonParsedAt - kimiJsonParseStartedAt),
+        protocolValidationMs: round(protocolValidatedAt - protocolValidationStartedAt),
+        promptChars: systemPrompt.length + userContent.length,
+        outputJsonChars: content.length,
+        compactJsonUsed,
+        promptCacheKeyUsed: Boolean(promptCacheKey),
       },
     });
   } catch (error) {
@@ -458,13 +154,278 @@ ${userText}
   }
 });
 
-function roundMs(value: number): number {
-  return Math.round(value * 100) / 100;
+function buildSystemPrompt(): string {
+  return `你是 DayZero 的 AI 饮食助手。
+DayZero 是一个帮助用户轻松记录饮食、理解热量、稳定减脂的应用。你的风格应该像一个温柔、专业、低压力的朋友，而不是冷冰冰的记录机器。
+
+你的回复原则：
+- 每次都要自然回应用户，不要只输出工具。
+- 语气温柔、简洁、有陪伴感。
+- 不制造身材焦虑，不批评用户，不鼓励极端节食。
+- 用户表达吃多了、嘴馋、焦虑或自责时，先接住情绪，再给轻量建议。
+- 用户只是聊天、咨询、分享生活时，也要正常自然回复。
+- 工具调用只是额外能力，不是默认行为。只有当工具能明显帮助当前对话继续时，才调用工具。
+
+输出格式要求：
+你必须只返回一个 JSON 对象，不要输出 any Markdown 标记或 JSON 之外的任何文本。
+请使用 compact 格式，且将 r 放在第一位，格式如下：
+{"r": "给用户看的自然语言回复", "a": []}
+注：亦可使用旧格式 {"reply": "...", "actions": []}。
+
+允许调用的卡片工具（放入 a 数组中）：
+1. ask_record_intent_card
+   用途：用户提到自己吃了/喝了什么但没有明确说要记录时，询问用户是否要把这次饮食录入今天。
+   核心规则：输出时只需包含 "type" (或 "t") 即可，如 {"t": "ask_record_intent_card"}。绝不能输出 payload (或 p) 等其他任何 UI 字段（如 title, message, options, originalText），系统会自动填充。
+2. ask_missing_info_card
+   用途：用户明确要求记录饮食，但没有指出餐次（早餐/午餐/晚餐/加餐），向用户询问餐次。
+   重要：如果用户的原始饮食文本（例如“我吃了一个苹果”或“我今天还吃了两个橘子”）中没有包含明确的餐次词汇（如“早餐/午餐/晚餐/加餐/早上/中午/晚上/下午/上午/夜宵/零食”），你绝对不能擅自假设餐次（哪怕它是水果、零食、饮料也绝对不能默认为“加餐”），必须先调用 ask_missing_info_card。
+   核心规则：输出时只需包含 "type" (或 "t") 即可，如 {"t": "ask_missing_info_card"}。绝不能输出 payload (或 p) 等其他任何 UI 字段（如 title, message, options, field, originalText），系统会自动填充。
+3. show_confirm_card
+   用途：展示用户准备录入的饮食草稿。
+   payload 结构：{"confirmType": "food_record", "meals": [{"mealType": "lunch", "items": [{"name": "螺蛳粉", "amountText": "1份", "calories": 600}]}]}
+   - 热量由你来进行粗略估算，且 calorieConfidence 设为 "estimated"。
+   - 如果用户没有提到体重，weightKg 返回 null。
+   - 重要：不要重复生成已经录入在 AlreadyRecorded 中的食物。你的卡片（show_confirm_card）应该只包含当前对话中新提到、待确认录入的食物。
+4. debug_show_choice_card
+   用途：仅在用户明确表示想测试工具或卡片时使用。
+
+对话流及状态路由规则（重要）：
+当你接收到的输入包含 TurnType: interaction_result 时，说明用户刚刚完成了一个工具卡片的操作：
+1. 对于 ask_record_intent_card 的点击回应（SelectedOptionId 为用户的选择）：
+   - 如果用户选择 "record" (帮我记录)：
+     - 如果原始饮食文本或 Recent 聊天历史中已经包含明确餐次（比如提到“早餐”、“中午”、“晚餐”或“晚上”等），请立即返回 reply 和 show_confirm_card 卡片。
+     - 如果缺少餐次（比如只说了“吃了一份苹果”），请返回 reply 并调用 ask_missing_info_card 卡片。
+     - 严格要求：若原始饮食文本中缺少餐次（即没有任何早餐/午餐/晚餐/加餐/中午/晚上等词汇），绝对不能擅自判定为“加餐”并直接生成 show_confirm_card，必须调用 ask_missing_info_card 卡片！
+     - 提示：若 OriginalText 缺失或为空，可查看 Recent 聊天历史获取刚才用户提到的饮食（如“螺蛳粉”）和餐次（如“中午”）。
+   - 如果用户选择 "chat_only" (只是聊聊) 或 "not_now" (先不用)：
+     - 自然跟用户闲聊或确认，不需要进行任何记录，且 a 设为 []。
+2. 对于 ask_missing_info_card 的点击回应：
+   - 此时餐次已补齐（对应 SelectedOptionId 比如 breakfast/lunch/dinner/snack）。结合之前的饮食内容，返回 reply 并调用 show_confirm_card 卡片。
+3. 对于 show_confirm_card 的点击回应：
+   - 用户确认记录（confirm）或取消（cancel）后，请自然友好地给予回应，表示已经确认记录或已取消，且 a 设为 []。`;
+}
+
+function formatTodayRecord(todayRecord: unknown): string {
+  if (!todayRecord || typeof todayRecord !== "object") return "None";
+  const record = todayRecord as Record<string, unknown>;
+  const meals = record.meals;
+  if (!Array.isArray(meals) || meals.length === 0) return "None";
+
+  return meals
+    .map((meal) => {
+      if (!meal || typeof meal !== "object") return "";
+      const m = meal as Record<string, unknown>;
+      const type = String(m.mealType ?? "");
+      const foods = Array.isArray(m.foods)
+        ? m.foods
+            .map((f) => {
+              if (!f || typeof f !== "object") return "";
+              const food = f as Record<string, unknown>;
+              return `${String(food.name ?? "")}(${String(food.quantity ?? "1份")}, ${Number(food.estimatedCalories ?? 0)}kcal)`;
+            })
+            .filter(Boolean)
+            .join(", ")
+        : "";
+      return foods ? `- ${type}: ${foods}` : "";
+    })
+    .filter(Boolean)
+    .join("\n") || "None";
+}
+
+function buildUserContent(input: {
+  date: string;
+  recentContext: string;
+  turnType: string;
+  userText: string;
+  interactionResult: unknown;
+  todayRecord: unknown;
+}): string {
+  let content = `Date:${input.date}
+Recent:
+${input.recentContext || "None"}
+AlreadyRecorded:
+${formatTodayRecord(input.todayRecord)}
+TurnType:${input.turnType}
+`;
+
+  if (input.turnType === "interaction_result" && input.interactionResult && typeof input.interactionResult === "object") {
+    const result = input.interactionResult as Record<string, unknown>;
+    content += `CardAction:${String(result.actionType ?? "")}
+InteractionId:${String(result.interactionId ?? "")}
+Selected:${String(result.selectedOptionId ?? "")}/${String(result.selectedOptionLabel ?? "")}
+Field:${String(result.field ?? "")}
+OriginalText:${String(result.originalText ?? "")}
+ConfirmType:${String(result.confirmType ?? "")}
+PayloadSummary:${JSON.stringify(result.payloadSummary ?? null)}
+`;
+  } else {
+    content += `User:${input.userText}
+`;
+  }
+
+  return content;
+}
+
+function buildRecentContext(messages: unknown): string {
+  if (!Array.isArray(messages)) return "";
+  return messages
+    .slice(-6)
+    .map((message) => {
+      const item = message && typeof message === "object" ? message as Record<string, unknown> : {};
+      const role = typeof item.role === "string" ? item.role : "Unknown";
+      const text = typeof item.text === "string" ? item.text.trim().slice(0, 160) : "";
+      return text ? `${role}:${text}` : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function normalizePromptCacheKey(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().replace(/[^a-zA-Z0-9_.:-]/g, "_").slice(0, 120);
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function generateId(prefix: string): string {
+  return `${prefix}_${Math.random().toString(36).substring(2, 10)}`;
+}
+
+function getMealLabel(type: string): string {
+  switch (type) {
+    case "breakfast": return "早餐";
+    case "lunch": return "午餐";
+    case "dinner": return "晚餐";
+    case "snack": return "加餐";
+    default: return type || "";
+  }
+}
+
+function normalizeActions(actions: any[], date: string, originalText: string, todayRecord?: any) {
+  for (const action of actions) {
+    if (!action || typeof action !== "object") continue;
+
+    // Map compact fields t -> type, p -> payload if present
+    if (action.t && !action.type) {
+      action.type = action.t;
+    }
+    if (action.p && !action.payload) {
+      action.payload = action.p;
+    }
+
+    if (action.type === "ask_record_intent_card") {
+      if (!action.interactionId && !action.id) action.interactionId = generateId("record_intent");
+      if (!action.payload) action.payload = {};
+      action.payload.title = action.payload.title || "需要帮你记录吗？";
+      action.payload.message = action.payload.message || "我看到你提到了刚吃/喝的内容，要不要把它录入今天？";
+      action.payload.originalText = action.payload.originalText || originalText;
+      if (!action.payload.options) {
+        action.payload.options = [
+          { id: "record", label: "帮我记录" },
+          { id: "chat_only", label: "只是聊聊" },
+          { id: "not_now", label: "先不用" }
+        ];
+      }
+    } else if (action.type === "ask_missing_info_card") {
+      if (!action.interactionId && !action.id) action.interactionId = generateId("missing_info");
+      if (!action.payload) action.payload = {};
+      action.payload.title = action.payload.title || "补充一下餐次";
+      action.payload.message = action.payload.message || "这次饮食算在哪一餐呀？";
+      action.payload.field = action.payload.field || action.field || "mealType";
+      action.payload.originalText = action.payload.originalText || originalText;
+      if (!action.payload.options) {
+        action.payload.options = [
+          { id: "breakfast", label: "早餐" },
+          { id: "lunch", label: "午餐" },
+          { id: "dinner", label: "晚餐" },
+          { id: "snack", label: "加餐" }
+        ];
+      }
+    } else if (action.type === "show_confirm_card") {
+      if (!action.id && !action.interactionId) action.id = generateId("confirm");
+      if (!action.payload) action.payload = {};
+      action.payload.confirmType = "food_record";
+      action.payload.title = action.payload.title || "今日记录草稿";
+      action.payload.message = action.payload.message || "我先帮你估算了一版，你可以修改后再确认。";
+      action.payload.date = action.payload.date || date;
+      
+      if (action.payload.weightKg === undefined || action.payload.weightKg === null) {
+        const existingWeight = todayRecord && typeof todayRecord === "object" ? todayRecord.weightKg : null;
+        action.payload.weightKg = (action.weightKg !== undefined && action.weightKg !== null)
+          ? action.weightKg 
+          : (existingWeight !== undefined && existingWeight !== null ? existingWeight : null);
+      }
+      
+      // Handle legacy mealType + items compact format
+      if (!Array.isArray(action.payload.meals)) {
+         let meals = action.payload.meals || action.meals || [];
+         if (meals.length === 0 && (action.mealType || action.payload.mealType)) {
+             const fallbackItems = action.items || action.payload.items || [];
+             if (Array.isArray(fallbackItems) && fallbackItems.length > 0) {
+                 const typeToUse = action.mealType || action.payload.mealType;
+                 meals = [{
+                     mealType: typeToUse,
+                     mealLabel: getMealLabel(typeToUse),
+                     items: fallbackItems
+                 }];
+             }
+         }
+         action.payload.meals = meals;
+      }
+      
+      // Calculate totals and normalize items
+      let totalCals = 0;
+      for (const meal of action.payload.meals) {
+          meal.mealLabel = meal.mealLabel || getMealLabel(meal.mealType);
+          let subtotal = 0;
+          if (!Array.isArray(meal.items)) meal.items = [];
+          for (const item of meal.items) {
+             if (!item.id) item.id = generateId("item");
+             if (item.calorieConfidence === undefined) item.calorieConfidence = "estimated";
+             if (typeof item.calories !== "number") item.calories = 0;
+             subtotal += item.calories;
+          }
+          meal.subtotalCalories = meal.subtotalCalories !== undefined ? meal.subtotalCalories : subtotal;
+          totalCals += meal.subtotalCalories;
+      }
+      action.payload.totalCalories = action.payload.totalCalories !== undefined ? action.payload.totalCalories : totalCals;
+
+      if (!action.payload.buttons) {
+        action.payload.buttons = [
+          { id: "confirm", label: "确认记录" },
+          { id: "cancel", label: "先不记录" }
+        ];
+      }
+    }
+  }
+}
+
+function validateActions(actions: unknown[]) {
+  const allowed = new Set([
+    "debug_show_choice_card",
+    "ask_record_intent_card",
+    "ask_missing_info_card",
+    "show_confirm_card",
+  ]);
+
+  for (const action of actions) {
+    if (!action || typeof action !== "object") throw new Error("Invalid action");
+    const type = (action as Record<string, unknown>).type;
+    if (typeof type !== "string" || !allowed.has(type)) {
+      throw new Error(`Unsupported action type: ${String(type)}`);
+    }
+  }
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "application/json",
+    },
   });
+}
+
+function round(value: number): number {
+  return Math.round(value * 100) / 100;
 }
