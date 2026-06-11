@@ -101,6 +101,9 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
     val uiState by viewModel.uiState.collectAsState()
     var inputText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
+    val hasAssistantPlaceholder = uiState.chatMessages.lastOrNull()?.let { message ->
+        message.role == ChatRole.Assistant && message.text.isBlank() && message.assistantCards.isEmpty()
+    } == true
 
     LaunchedEffect(uiState.chatMessages.size, uiState.isAnalyzing) {
         if (uiState.chatMessages.isNotEmpty()) {
@@ -131,55 +134,74 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
                 if (message.role == ChatRole.User) {
                     UserMessage(message.text, message.createdAt)
                 } else {
+                    LaunchedEffect(message.id, message.text, message.assistantCards.size) {
+                        if (message.text.isNotBlank() || message.assistantCards.isNotEmpty()) {
+                            viewModel.markAssistantMessageRendered(message)
+                        }
+                    }
                     Column {
                         if (message.text.isNotBlank()) {
                             AiMessage(message.text, message.createdAt)
+                        } else if (
+                            uiState.isAnalyzing &&
+                            message.id == uiState.chatMessages.lastOrNull()?.id &&
+                            message.assistantCards.isEmpty()
+                        ) {
+                            AiMessageComponent {
+                                TypingIndicator()
+                            }
                         }
                         message.assistantCards.forEach { card ->
                             if (card is com.example.domain.model.ai.assistant.DebugChoiceCardPayload) {
-                                Spacer(modifier = Modifier.height(8.dp))
-                                DebugChoiceCard(
-                                    card = card,
-                                    onOptionSelected = { interactionId, optionId, optionLabel ->
-                                        viewModel.sendInteractionResult(
-                                            interactionId = interactionId,
-                                            actionType = "debug_show_choice_card",
-                                            optionId = optionId,
-                                            optionLabel = optionLabel
-                                        )
-                                    }
-                                )
+                                if (!card.resolved) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    DebugChoiceCard(
+                                        card = card,
+                                        onOptionSelected = { interactionId, optionId, optionLabel ->
+                                            viewModel.sendInteractionResult(
+                                                interactionId = interactionId,
+                                                actionType = "debug_show_choice_card",
+                                                optionId = optionId,
+                                                optionLabel = optionLabel
+                                            )
+                                        }
+                                    )
+                                }
                             } else if (card is com.example.domain.model.ai.assistant.AskRecordIntentCardPayload) {
-                                Spacer(modifier = Modifier.height(8.dp))
-                                AskRecordIntentCard(
-                                    card = card,
-                                    onOptionSelected = { interactionId, optionId, optionLabel ->
-                                        viewModel.sendInteractionResult(
-                                            interactionId = interactionId,
-                                            actionType = "ask_record_intent_card",
-                                            optionId = optionId,
-                                            optionLabel = optionLabel
-                                        )
-                                    }
-                                )
+                                if (!card.resolved) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    AskRecordIntentCard(
+                                        card = card,
+                                        onOptionSelected = { interactionId, optionId, optionLabel ->
+                                            viewModel.sendInteractionResult(
+                                                interactionId = interactionId,
+                                                actionType = "ask_record_intent_card",
+                                                optionId = optionId,
+                                                optionLabel = optionLabel
+                                            )
+                                        }
+                                    )
+                                }
                             } else if (card is com.example.domain.model.ai.assistant.AskMissingInfoCardPayload) {
-                                Spacer(modifier = Modifier.height(8.dp))
-                                AskMissingInfoCard(
-                                    card = card,
-                                    onOptionSelected = { interactionId, optionId, optionLabel, field, originalText ->
-                                        viewModel.sendInteractionResult(
-                                            interactionId = interactionId,
-                                            actionType = "ask_missing_info_card",
-                                            optionId = optionId,
-                                            optionLabel = optionLabel,
-                                            field = field,
-                                            originalText = originalText
-                                        )
-                                    }
-                                )
+                                if (!card.resolved) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    AskMissingInfoCard(
+                                        card = card,
+                                        onOptionSelected = { interactionId, optionId, optionLabel, field, originalText ->
+                                            viewModel.sendInteractionResult(
+                                                interactionId = interactionId,
+                                                actionType = "ask_missing_info_card",
+                                                optionId = optionId,
+                                                optionLabel = optionLabel,
+                                                field = field,
+                                                originalText = originalText
+                                            )
+                                        }
+                                    )
+                                }
                             } else if (card is com.example.domain.model.ai.assistant.ShowConfirmCardPayload) {
-                                Spacer(modifier = Modifier.height(8.dp))
                                 if (card.confirmType == "food_record") {
+                                    Spacer(modifier = Modifier.height(8.dp))
                                     FoodDraftConfirmCard(
                                         card = card,
                                         onOptionSelected = { interactionId, optionId, optionLabel, payloadSummary ->
@@ -194,24 +216,27 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
                                         }
                                     )
                                 } else {
-                                    // Fallback for other confirm types if any
-                                    DebugChoiceCard(
-                                        card = com.example.domain.model.ai.assistant.DebugChoiceCardPayload(
-                                            id = card.id,
-                                            title = card.title,
-                                            message = card.message,
-                                            options = card.buttons.map { com.example.domain.model.ai.assistant.DebugChoiceOption(it.id, it.label) }
-                                        ),
-                                        onOptionSelected = { interactionId, optionId, optionLabel ->
-                                             viewModel.sendInteractionResult(
-                                                interactionId = interactionId,
-                                                actionType = "show_confirm_card",
-                                                optionId = optionId,
-                                                optionLabel = optionLabel,
-                                                confirmType = card.confirmType
-                                            )
-                                        }
-                                    )
+                                    if (!card.resolved) {
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        // Fallback for other confirm types if any
+                                        DebugChoiceCard(
+                                            card = com.example.domain.model.ai.assistant.DebugChoiceCardPayload(
+                                                id = card.id,
+                                                title = card.title,
+                                                message = card.message,
+                                                options = card.buttons.map { com.example.domain.model.ai.assistant.DebugChoiceOption(it.id, it.label) }
+                                            ),
+                                            onOptionSelected = { interactionId, optionId, optionLabel ->
+                                                 viewModel.sendInteractionResult(
+                                                    interactionId = interactionId,
+                                                    actionType = "show_confirm_card",
+                                                    optionId = optionId,
+                                                    optionLabel = optionLabel,
+                                                    confirmType = card.confirmType
+                                                )
+                                            }
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -219,7 +244,7 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
                 }
             }
 
-            if (uiState.isAnalyzing) {
+            if (uiState.isAnalyzing && !hasAssistantPlaceholder) {
                 item(key = "analyzing") {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         AiMessageComponent {

@@ -8,7 +8,6 @@ import com.example.data.remote.dto.AiSummaryResponseDto
 import com.example.data.remote.dto.IntentClassificationResultDto
 import com.example.data.remote.dto.IntentClassifierRequestDto
 import com.example.data.remote.dto.assistant.AiAssistantRequestDto
-import com.example.data.remote.dto.assistant.AiAssistantTurnDto
 import com.example.data.remote.dto.assistant.AssistantActionDto
 import com.example.data.remote.dto.assistant.AssistantActionPayloadDto
 import com.example.data.remote.dto.assistant.AssistantActionOptionDto
@@ -35,8 +34,6 @@ class DayZeroProtocolValidationTest {
         val fakeService = object : AiDraftApiService {
             override suspend fun generateDraft(request: AiDraftRequestDto): AiDraftResponseDto = TODO()
             override suspend fun generateDailySummary(request: AiSummaryRequestDto): AiSummaryResponseDto = TODO()
-            override suspend fun sendMessage(request: AiAssistantRequestDto): AiAssistantTurnDto = TODO()
-            override suspend fun sendMessageWithResponse(request: AiAssistantRequestDto): Response<AiAssistantTurnDto> = TODO()
             override suspend fun classifyUserIntent(request: IntentClassifierRequestDto): IntentClassificationResultDto = TODO()
             
             override suspend fun sendAssistantTurnV2WithResponse(

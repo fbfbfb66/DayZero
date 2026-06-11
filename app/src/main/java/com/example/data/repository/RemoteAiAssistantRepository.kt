@@ -3,6 +3,9 @@ package com.example.data.repository
 import android.util.Log
 import com.example.data.remote.api.AiDraftApiService
 import com.example.data.remote.mapper.AiAssistantRemoteMapper
+import com.example.data.remote.mapper.AssistantTurnV2ResponseMapper
+import com.example.data.remote.stream.AssistantTurnStreamClient
+import com.example.data.telemetry.AiLatencyTraceLogger
 import com.example.domain.model.ai.assistant.AiAssistantRequest
 import com.example.domain.model.ai.assistant.AiAssistantTurn
 import com.example.domain.model.ai.assistant.AiIntent
@@ -11,27 +14,100 @@ import com.example.domain.repository.AiAssistantRepository
 import java.util.UUID
 
 class RemoteAiAssistantRepository(
-    private val apiService: AiDraftApiService
+    private val apiService: AiDraftApiService,
+    private val latencyLogger: AiLatencyTraceLogger? = null,
+    private val streamClient: AssistantTurnStreamClient? = null,
+    private val promptCacheKeyProvider: (() -> String)? = null
 ) : AiAssistantRepository {
 
     private val mapper = AiAssistantRemoteMapper()
+    private val v2ResponseMapper = AssistantTurnV2ResponseMapper()
+
+    override suspend fun streamMessage(
+        request: AiAssistantRequest,
+        onDelta: suspend (String) -> Unit
+    ): AiAssistantTurn {
+        val client = streamClient ?: return super.streamMessage(request, onDelta)
+        val promptCacheKey = promptCacheKeyProvider?.invoke()
+        latencyLogger?.mark(
+            request.traceId,
+            "repository_stream_dto_map_start",
+            mapOf("promptCacheKeyUsed" to (!promptCacheKey.isNullOrBlank()))
+        )
+        val requestDto = mapper.toRequestDto(request, promptCacheKey)
+        latencyLogger?.mark(request.traceId, "repository_stream_dto_map_complete")
+
+        latencyLogger?.mark(request.traceId, "http_assistant_turn_v2_stream_start")
+        val responseDto = client.stream(
+            requestDto = requestDto,
+            onDelta = { delta ->
+                latencyLogger?.mark(
+                    request.traceId,
+                    "stream_reply_delta_received",
+                    mapOf("deltaLength" to delta.length)
+                )
+                onDelta(delta)
+            },
+            onTiming = { timing ->
+                latencyLogger?.mark(
+                    request.traceId,
+                    "server_stream_debug_timing_received",
+                    mapOf(
+                        "serverTraceId" to timing.traceId,
+                        "serverTotalMs" to timing.totalMs,
+                        "requestParseMs" to timing.requestParseMs,
+                        "promptBuildMs" to timing.promptBuildMs,
+                        "kimiTimeToFirstTokenMs" to timing.kimiTimeToFirstTokenMs,
+                        "kimiStreamMs" to timing.kimiStreamMs,
+                        "kimiJsonParseMs" to timing.kimiJsonParseMs,
+                        "protocolValidationMs" to timing.protocolValidationMs,
+                        "promptChars" to timing.promptChars,
+                        "outputJsonChars" to timing.outputJsonChars,
+                        "compactJsonUsed" to timing.compactJsonUsed,
+                        "promptCacheKeyUsed" to timing.promptCacheKeyUsed
+                    )
+                )
+            }
+        )
+        latencyLogger?.mark(
+            request.traceId,
+            "http_assistant_turn_v2_stream_complete",
+            mapOf(
+                "actionsCount" to (responseDto.actions?.size ?: 0),
+                "replyLength" to (responseDto.reply?.length ?: 0)
+            )
+        )
+        return v2ResponseMapper.toDomain(responseDto)
+    }
 
     override suspend fun sendMessage(request: AiAssistantRequest): AiAssistantTurn {
         Log.d("AssistantTurnV2", "sendMessage start: userText='${request.userText.take(50)}', date=${request.date}, recentMessagesCount=${request.recentMessages.size}")
         
+        latencyLogger?.mark(request.traceId, "repository_dto_map_start")
         val requestDto = mapper.toRequestDto(request)
+        latencyLogger?.mark(request.traceId, "repository_dto_map_complete")
         
         Log.d("DayZeroAiV2", "parse AssistantTurnResponse start")
         
         return try {
+            latencyLogger?.mark(request.traceId, "http_assistant_turn_v2_start")
             val response = apiService.sendAssistantTurnV2WithResponse(requestDto)
+            latencyLogger?.mark(
+                request.traceId,
+                "http_assistant_turn_v2_response_received",
+                mapOf("statusCode" to response.code())
+            )
             Log.d("AssistantTurnV2", "assistant-turn-v2 response received: status=${response.code()}")
             
             if (!response.isSuccessful) {
                 val errorBody = response.errorBody()?.string() ?: "Unknown error"
                 Log.e("AssistantTurnV2", "assistant-turn-v2 failed: status=${response.code()}, error=$errorBody")
                 Log.e("DayZeroAiV2", "parse AssistantTurnResponse error: HTTP status=${response.code()}")
-                throw ProtocolException("协议错误")
+                val message = when (response.code()) {
+                    401, 403 -> "Supabase API key 无效或已过期"
+                    else -> "assistant-turn-v2 HTTP ${response.code()}"
+                }
+                throw ProtocolException(message)
             }
 
             val responseBody = response.body()
@@ -40,9 +116,26 @@ class RemoteAiAssistantRepository(
                 throw ProtocolException("协议错误")
             }
 
+            responseBody.debugTiming?.let { timing ->
+                latencyLogger?.mark(
+                    request.traceId,
+                    "server_debug_timing_received",
+                    mapOf(
+                        "serverTraceId" to timing.traceId,
+                        "serverTotalMs" to timing.totalMs,
+                        "requestParseMs" to timing.requestParseMs,
+                        "promptBuildMs" to timing.promptBuildMs,
+                        "kimiRequestMs" to timing.kimiRequestMs,
+                        "kimiJsonParseMs" to timing.kimiJsonParseMs,
+                        "protocolValidationMs" to timing.protocolValidationMs
+                    )
+                )
+            }
+
             val reply = responseBody.reply
             val actions = responseBody.actions
 
+            latencyLogger?.mark(request.traceId, "protocol_validate_start")
             if (reply == null || reply.trim().isEmpty()) {
                 Log.e("DayZeroAiV2", "parse AssistantTurnResponse error: reply is null or empty")
                 throw ProtocolException("协议错误")
@@ -52,8 +145,14 @@ class RemoteAiAssistantRepository(
                 Log.e("DayZeroAiV2", "parse AssistantTurnResponse error: actions is null")
                 throw ProtocolException("协议错误")
             }
+            latencyLogger?.mark(
+                request.traceId,
+                "protocol_validate_complete",
+                mapOf("replyLength" to reply.trim().length, "actionsCount" to actions.size)
+            )
 
             Log.d("DayZeroAiV2", "action parse start")
+            latencyLogger?.mark(request.traceId, "action_parse_start")
             val mappedCards = mutableListOf<com.example.domain.model.ai.assistant.AiChatCard>()
 
             if (actions.isNotEmpty()) {
@@ -293,6 +392,14 @@ class RemoteAiAssistantRepository(
 
             Log.d("DayZeroAiV2", "action parse success")
             Log.d("DayZeroAiV2", "actions count = ${actions.size}")
+            latencyLogger?.mark(
+                request.traceId,
+                "action_parse_success",
+                mapOf(
+                    "actionsCount" to actions.size,
+                    "cardTypes" to mappedCards.map { it.type.name }.joinToString(",")
+                )
+            )
 
             AiAssistantTurn(
                 id = UUID.randomUUID().toString(),

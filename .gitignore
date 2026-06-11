@@ -16,3 +16,5 @@
 local.properties
 .env
 debug.keystore
+dayzero_ai_latency_traces_device.jsonl
+

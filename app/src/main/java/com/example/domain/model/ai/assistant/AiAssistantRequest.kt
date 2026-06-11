@@ -17,7 +17,8 @@ data class AiAssistantRequest(
     val consumptionStatus: String? = null,
     val shouldCreateDraft: Boolean? = null,
     val shouldAskMealTime: Boolean? = null,
-    val extractedFoodText: String? = null
+    val extractedFoodText: String? = null,
+    val traceId: String? = null
 )
 
 data class InteractionResult(

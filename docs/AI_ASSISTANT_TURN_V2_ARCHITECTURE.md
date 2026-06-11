@@ -170,3 +170,200 @@ As of 2026-06-08, DayZero Phase 2 and Phase 3 have been fully verified and compl
   - Feedback for confirmation or cancellation is deterministically generated locally by the client, without hitting Kimi.
   - The old AI check-in flow components (HybridIntentRouter, IntentClassifier, etc.) remain fully deprecated and bypassed.
 - **Next Phase**: Begin implementing weight tracking (e.g., `weight_record`) or daily summary tools under the new V2 architecture.
+
+## Streaming card latency optimization handoff
+
+### Context for the next AI/engineer
+
+The current app path is:
+
+- Primary runtime endpoint: `assistant-turn-v2-stream`
+- Fallback endpoint: `assistant-turn-v2`
+- Retired endpoint: `ai-assistant-turn` must not be restored
+- Android receives streaming natural-language text first, then renders cards after final actions arrive
+- Android public card models and Compose card components should remain unchanged
+
+The latest latency traces show that streaming text is working, but card display becomes slow when the stream action payload is incomplete:
+
+- Example user input: "我今天中午吃了螺狮粉"
+  - First text token: about 3.7s
+  - Stream completed: about 5.8s
+  - Stream response already had `actionsCount=1`
+  - Client then threw `ProtocolException`
+  - Fallback to old `assistant-turn-v2` completed around 14.1s
+- Example interaction result: user clicked "帮我记录"
+  - First text token: about 3.8s
+  - Stream completed: about 6.0s
+  - Stream response already had `actionsCount=1`
+  - Client then threw `ProtocolException`
+  - Fallback completed around 19.8s
+
+Important conclusion: card rendering itself is fast, usually tens of milliseconds. The delay is caused by invalid/incomplete streamed action payloads triggering a second non-streaming Kimi request.
+
+### Optimization goal
+
+Do not make Kimi output a full UI card JSON whenever possible. Kimi should output:
+
+- Natural reply text
+- Tool/action decision
+- Only the minimal business data that actually requires AI reasoning or extraction
+
+The server should normalize that short action into the existing full public `reply + actions` protocol before Android sees it.
+
+Android should still receive the existing complete card payloads, so current UI/card parsing stays compatible.
+
+### Target response strategy
+
+Keep compact outer JSON from Kimi:
+
+```json
+{
+  "r": "我先帮你整理成一版记录，你确认一下就好。",
+  "a": [
+    {
+      "type": "show_confirm_card",
+      "mealType": "lunch",
+      "items": [
+        {
+          "name": "螺蛳粉",
+          "amountText": "1碗",
+          "calories": 600
+        }
+      ]
+    }
+  ]
+}
+```
+
+Then the Edge Function expands it into the existing public protocol:
+
+- `reply`
+- `actions[]`
+- `interactionId` / `id`
+- full `payload`
+- `debugTiming`
+
+### Server-side action normalization rules
+
+Implement normalization inside `supabase/functions/assistant-turn-v2-stream/index.ts` before emitting the final event.
+
+The stream function should accept both:
+
+- Full legacy actions already shaped for Android
+- Short AI actions that need server-side completion
+
+For `ask_record_intent_card`, Kimi only needs:
+
+- `type`
+- optionally `originalText`
+
+Server fills:
+
+- `interactionId`
+- `payload.title`
+- `payload.message`
+- `payload.originalText`
+- options: `record`, `chat_only`, `not_now`
+
+For `ask_missing_info_card`, Kimi only needs:
+
+- `type`
+- `field` when available, default `mealType`
+- optionally `originalText`
+
+Server fills:
+
+- `interactionId`
+- `payload.title`
+- `payload.message`
+- `payload.field`
+- `payload.originalText`
+- options: `breakfast`, `lunch`, `dinner`, `snack`
+
+For `show_confirm_card`, Kimi should only generate business data:
+
+- meal type(s)
+- food names
+- amount text
+- estimated calories
+- optional weight
+
+Server fills:
+
+- `id`
+- `payload.confirmType = "food_record"`
+- `payload.title`
+- `payload.message`
+- `payload.date`
+- `payload.weightKg`
+- `payload.totalCalories`
+- `payload.meals[]`
+- `calorieConfidence = "estimated"` when missing
+- buttons: `confirm`, `cancel`
+- `payload.originalText`
+
+If Kimi returns a single `mealType + items[]`, server should wrap it into `meals[]`.
+
+If Kimi returns multiple meals, server should preserve them and only fill missing template fields.
+
+### Fields that should not require Kimi
+
+Do not ask Kimi to generate these unless there is a business reason:
+
+- Card title
+- Card message
+- Button labels
+- Static option sets
+- `confirmType`
+- `interactionId`
+- `date`
+- `calorieConfidence` default
+- `state`
+- UI template copy
+
+These should be deterministic server/client template fields.
+
+### Fields that Kimi may need to generate
+
+Kimi should focus on:
+
+- Whether a card is needed
+- Which card type is needed
+- Meal type inference when present in user text
+- Food item names
+- Amount/portion text
+- Estimated calories
+- Optional weight extraction
+- Whether multiple meals are present
+- Natural reply text
+
+### Fallback policy
+
+Avoid fallback when the short action can be safely normalized.
+
+Fallback to `assistant-turn-v2` should be reserved for cases where:
+
+- The streamed JSON is not parseable
+- `reply` is blank
+- action type is unsupported
+- required business data for a confirm card is truly missing, e.g. no usable food items
+
+Do not fallback merely because title/message/options/buttons are missing; those are template fields and should be filled by the stream function.
+
+### Acceptance criteria
+
+- For a food mention like "我今天中午吃了螺蛳粉":
+  - First text still streams quickly
+  - `assistant-turn-v2-stream` final has `actionsCount=1`
+  - No `remote_repository_stream_failed_fallback_start`
+  - `fallbackUsed=false`
+  - `ask_record_intent_card` appears immediately after stream completion
+- For clicking "帮我记录":
+  - No fallback
+  - `show_confirm_card` appears after stream completion
+  - Android receives the same full public payload shape as before
+- Trace should show card latency dominated by one Kimi stream, not stream plus a second non-streaming Kimi request.
+
+### Important implementation warning
+
+Do not solve this by making Kimi output a very long full UI JSON again. That works functionally but wastes tokens and can slow stream completion. The intended fix is short AI business actions plus deterministic Edge Function normalization.

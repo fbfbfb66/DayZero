@@ -7,7 +7,6 @@ import com.example.data.remote.dto.AiSummaryResponseDto
 import com.example.data.remote.dto.IntentClassifierRequestDto
 import com.example.data.remote.dto.IntentClassificationResultDto
 import com.example.data.remote.dto.assistant.AiAssistantRequestDto
-import com.example.data.remote.dto.assistant.AiAssistantTurnDto
 import com.example.data.remote.dto.assistant.AssistantTurnV2ResponseDto
 import retrofit2.http.Body
 import retrofit2.http.POST
@@ -18,12 +17,6 @@ interface AiDraftApiService {
 
     @POST("functions/v1/generate-daily-summary")
     suspend fun generateDailySummary(@Body request: AiSummaryRequestDto): AiSummaryResponseDto
-
-    @POST("functions/v1/ai-assistant-turn")
-    suspend fun sendMessage(@Body request: AiAssistantRequestDto): AiAssistantTurnDto
-
-    @POST("functions/v1/ai-assistant-turn")
-    suspend fun sendMessageWithResponse(@Body request: AiAssistantRequestDto): retrofit2.Response<AiAssistantTurnDto>
 
     @POST("functions/v1/assistant-turn-v2")
     suspend fun sendAssistantTurnV2WithResponse(@Body request: AiAssistantRequestDto): retrofit2.Response<AssistantTurnV2ResponseDto>

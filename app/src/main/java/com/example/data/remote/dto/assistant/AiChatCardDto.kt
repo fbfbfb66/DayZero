@@ -4,16 +4,6 @@ import com.example.data.remote.dto.AiDraftResponseDto
 import com.squareup.moshi.JsonClass
 
 @JsonClass(generateAdapter = true)
-data class AiAssistantTurnDto(
-    val id: String,
-    val intent: String,
-    val replyText: String,
-    val cards: List<AiChatCardDto> = emptyList(),
-    val suggestedReplies: List<String> = emptyList(),
-    val createdAt: Long
-)
-
-@JsonClass(generateAdapter = true)
 data class AiChatCardDto(
     val type: String,
     val id: String,

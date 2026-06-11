@@ -11,8 +11,9 @@ import java.time.LocalDate
 class AiAssistantRemoteMapper {
     private val draftMapper = AiDraftRemoteMapper()
 
-    fun toRequestDto(request: AiAssistantRequest): AiAssistantRequestDto {
+    fun toRequestDto(request: AiAssistantRequest, promptCacheKey: String? = null): AiAssistantRequestDto {
         return AiAssistantRequestDto(
+            traceId = request.traceId,
             date = request.date.toString(),
             userText = request.userText,
             todayRecord = request.todayRecord?.let { toSimpleRecordDto(it) },
@@ -20,6 +21,7 @@ class AiAssistantRemoteMapper {
             recentMessages = request.recentMessages.map { 
                 SimpleChatMessageDto(role = it.role.name, text = it.text) 
             },
+            promptCacheKey = promptCacheKey,
             turnType = request.turnType,
             interactionResult = request.interactionResult?.let { 
                 InteractionResultDto(
@@ -84,32 +86,6 @@ class AiAssistantRemoteMapper {
             estimatedCalories = domain.estimatedCalories,
             confidence = domain.confidence
         )
-    }
-
-    fun toDomain(dto: AiAssistantTurnDto): AiAssistantTurn {
-        return AiAssistantTurn(
-            id = dto.id,
-            intent = mapIntent(dto.intent),
-            replyText = dto.replyText,
-            cards = dto.cards.mapNotNull { toCardDomain(it) },
-            suggestedReplies = dto.suggestedReplies,
-            createdAt = dto.createdAt
-        )
-    }
-
-    private fun mapIntent(intent: String): AiIntent {
-        return when (intent) {
-            "food_logging" -> AiIntent.FoodLogging
-            "meal_time_clarification" -> AiIntent.MealTimeClarification
-            "food_edit" -> AiIntent.FoodEdit
-            "food_delete" -> AiIntent.FoodDelete
-            "weight_logging" -> AiIntent.WeightLogging
-            "daily_advice" -> AiIntent.DailyAdvice
-            "daily_summary" -> AiIntent.DailySummary
-            "motivation" -> AiIntent.Motivation
-            "general_chat" -> AiIntent.GeneralChat
-            else -> AiIntent.Unsupported
-        }
     }
 
     fun toCardDomain(dto: AiChatCardDto): AiChatCard? {

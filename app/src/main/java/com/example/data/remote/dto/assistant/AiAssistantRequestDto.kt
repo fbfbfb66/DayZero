@@ -5,11 +5,13 @@ import com.squareup.moshi.JsonClass
 
 @JsonClass(generateAdapter = true)
 data class AiAssistantRequestDto(
+    val traceId: String? = null,
     val date: String,
     val userText: String,
     val todayRecord: SimpleRecordDto? = null,
     val pendingDraft: SimpleRecordDto? = null,
     val recentMessages: List<SimpleChatMessageDto> = emptyList(),
+    val promptCacheKey: String? = null,
     val turnType: String? = null, // "user_message" or "interaction_result"
     val interactionResult: InteractionResultDto? = null,
     val primaryIntent: String? = null,
