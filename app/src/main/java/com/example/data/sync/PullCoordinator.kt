@@ -120,8 +120,8 @@ class PullCoordinator(
         return try {
             val mealsByRecord = meals.filter { it.deletedAt == null }.groupBy { it.dailyRecordClientId }
             val foodsByMeal = foods.filter { it.deletedAt == null }.groupBy { it.mealClientId }
-            val weightsByRecord = weights.filter { it.deletedAt == null && !it.dailyRecordClientId.isNullOrBlank() }
-                .associateBy { it.dailyRecordClientId }
+            val weightsByDate = weights.filter { it.deletedAt == null }
+                .associateBy { it.localDate }
 
             database.withTransaction {
                 dailyRecords.forEach { remote ->
@@ -129,7 +129,7 @@ class PullCoordinator(
                         remote = remote,
                         meals = mealsByRecord[remote.clientId].orEmpty(),
                         foodsByMeal = foodsByMeal,
-                        weight = weightsByRecord[remote.clientId],
+                        weight = weightsByDate[remote.localDate],
                         ownerLocalId = identity.localOwnerId,
                         currentStats = stats
                     )
@@ -138,7 +138,7 @@ class PullCoordinator(
                 val knownDailyClientIds = dailyRecords.map { it.clientId }.toSet()
                 val knownMealClientIds = meals.map { it.clientId }.toSet()
                 val skippedChildren = meals.count { it.dailyRecordClientId !in knownDailyClientIds } +
-                    foods.count { it.dailyRecordClientId !in knownDailyClientIds || it.mealClientId !in knownMealClientIds }
+                    foods.count { it.mealClientId !in knownMealClientIds }
                 if (skippedChildren > 0) {
                     Log.d("DayZeroPull", "skipped missing parent count=$skippedChildren")
                     stats = stats.copy(
@@ -216,11 +216,11 @@ class PullCoordinator(
 
         val entity = DailyRecordEntity(
             id = local?.id ?: remote.clientId,
-            date = remote.recordDate,
-            status = remote.status,
+            date = remote.localDate,
+            status = "Confirmed",
             mealsJson = mealsAdapter.toJson(buildMeals(meals, foodsByMeal)),
-            weightKg = weight?.weightKg ?: remote.weightKg,
-            aiSummary = remote.aiSummary,
+            weightKg = weight?.weightKg,
+            aiSummary = remote.note,
             createdAt = local?.createdAt ?: remote.createdAt,
             updatedAt = remote.updatedAt,
             clientId = remote.clientId,
@@ -251,20 +251,20 @@ class PullCoordinator(
         foodsByMeal: Map<String, List<FoodEntryRemoteDto>>
     ): List<MealEntry> {
         return MealSortPolicy.sortMeals(
-            meals.sortedBy { it.createdAt }.map { meal ->
+            meals.sortedWith(compareBy<MealRemoteDto> { it.displayOrder ?: Int.MAX_VALUE }.thenBy { it.loggedAt ?: it.createdAt }).map { meal ->
                 MealEntry(
                     id = meal.clientId,
-                    mealType = parseMealType(meal.mealType),
-                    hasPhoto = meal.hasPhoto,
+                    mealType = parseMealType(meal.mealType.orEmpty()),
+                    hasPhoto = false,
                     foods = foodsByMeal[meal.clientId].orEmpty()
                         .sortedBy { it.createdAt }
                         .map { food ->
                             FoodEntry(
                                 id = food.clientId,
                                 name = food.name,
-                                quantity = food.quantity,
-                                estimatedCalories = food.estimatedCalories,
-                                confidence = food.confidence
+                                quantity = food.amountText ?: food.grams?.let { "${it}g" } ?: "1",
+                                estimatedCalories = food.calories?.toInt() ?: 0,
+                                confidence = food.confidence?.toString() ?: "unknown"
                             )
                         }
                 )

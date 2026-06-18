@@ -1,86 +1,130 @@
 # DayZero Supabase Schema Verification
 
-This document is a verification checklist for the remote sync schema. The Android app must continue to use Room as the local source of truth. Supabase Table Editor is only for observing and checking schema/data during development; it is not a business-data source for UI.
+This document is the DB-SYNC-11A verification checklist for the remote sync schema. The Android app must continue to use Room as the local source of truth. Supabase Table Editor is only for observing schema and data during development; it is not a business-data source for UI. SQL migrations are the versioned source of truth.
 
 ## Expected Tables
 
-The current sync gateway expects these public tables:
+The app expects these public tables:
 
 - `daily_records`
 - `meals`
 - `food_entries`
 - `weight_records`
 
-The migration source of truth is `supabase/migrations/20260618120000_dayzero_core_records.sql`.
+The current canonical migration source of truth is:
 
-## Required Common Fields
+- `supabase/migrations/20260619023000_dayzero_core_records_schema.sql`
+
+The older `20260618120000_dayzero_core_records.sql` file is a historical design draft and does not define the current canonical field names.
+
+## Canonical Common Fields
 
 Each business table must include:
 
-- `id uuid primary key`
-- `user_id uuid not null`
+- `id uuid primary key default gen_random_uuid()`
+- `user_id uuid not null references auth.users(id) on delete cascade`
 - `client_id text not null`
-- `local_owner_id text null`
 - `created_at timestamptz not null default now()`
 - `updated_at timestamptz not null default now()`
 - `deleted_at timestamptz null`
 - `schema_version int not null default 1`
 
-Each table must include `unique(user_id, client_id)` for idempotent PostgREST upsert.
+Each business table must include `unique(user_id, client_id)` for idempotent PostgREST upsert.
 
-## Table-Specific Fields
+## Canonical Table Fields
 
 `daily_records`:
 
-- `record_date date not null`
-- `status text not null`
-- `total_calories int not null default 0`
-- `weight_kg numeric(6,2) null`
-- `ai_summary text null`
+- `local_date date not null`
+- `timezone text null`
+- `note text null`
 
 `meals`:
 
-- `daily_record_id uuid not null`
 - `daily_record_client_id text not null`
-- `meal_type text not null`
-- `has_photo boolean not null default false`
-- `subtotal_calories int not null default 0`
+- `meal_type text null`
+- `logged_at timestamptz null`
+- `display_order int null`
 
 `food_entries`:
 
-- `meal_id uuid not null`
-- `daily_record_id uuid not null`
 - `meal_client_id text not null`
-- `daily_record_client_id text not null`
 - `name text not null`
-- `quantity text not null`
-- `estimated_calories int not null`
-- `confidence text not null default 'high'`
-- `raw_estimate_json jsonb null`
+- `amount_text text null`
+- `grams numeric null`
+- `calories numeric null`
+- `protein_g numeric null`
+- `carbs_g numeric null`
+- `fat_g numeric null`
+- `confidence numeric null`
+- `source text null`
 
 `weight_records`:
 
-- `daily_record_id uuid null`
-- `daily_record_client_id text null`
-- `measured_date date not null`
-- `weight_kg numeric(6,2) not null`
-- `source text not null default 'confirm_card'`
+- `local_date date not null`
+- `measured_at timestamptz null`
+- `weight_kg numeric not null`
+- `source text null`
+
+## Canonical Field Names
+
+Push and pull must use the same canonical remote fields:
+
+- `daily_records.local_date`
+- `meals.daily_record_client_id`
+- `food_entries.meal_client_id`
+- `food_entries.amount_text`
+- `food_entries.grams`
+- `food_entries.calories`
+- `food_entries.protein_g`
+- `food_entries.carbs_g`
+- `food_entries.fat_g`
+- `weight_records.local_date`
+- `weight_records.measured_at`
+- `weight_records.weight_kg`
+
+Do not write new remote rows using these legacy names:
+
+- `record_date`
+- `quantity`
+- `estimated_calories`
+- `measured_date`
+
+Temporary legacy compatibility exists only in the Android pull parser so old/manual rows can still be read:
+
+- `daily_records.record_date` -> `local_date`
+- `food_entries.quantity` -> `amount_text`
+- `food_entries.estimated_calories` -> `calories`
+- `weight_records.measured_date` -> `local_date`
+
+This compatibility layer is temporary. After real Supabase data is confirmed to use only the canonical schema, remove the alias reads from `SupabaseRemotePullGateway`.
+
+## Relation Reconstruction
+
+Remote pull must rebuild local relationships from stable client ids:
+
+- `daily_records.client_id` identifies the local daily record.
+- `meals.daily_record_client_id` points to `daily_records.client_id`.
+- `food_entries.meal_client_id` points to `meals.client_id`.
+- `weight_records.local_date` attaches weight to a local daily record by date in the current local aggregate model.
+
+Remote pull must not depend on remote auto-increment ids or Table Editor row order.
 
 ## RLS And Policies
 
-RLS must be enabled on every table:
+RLS must be enabled on every business table:
 
 - `alter table public.daily_records enable row level security;`
 - `alter table public.meals enable row level security;`
 - `alter table public.food_entries enable row level security;`
 - `alter table public.weight_records enable row level security;`
 
-Each table must have policies that restrict rows to `user_id = auth.uid()` for:
+Each table must have policies that restrict rows to `(select auth.uid()) = user_id` for:
 
-- `select`
-- `insert`
-- `update`
-- `delete`
+- `select using ((select auth.uid()) = user_id)`
+- `insert with check ((select auth.uid()) = user_id)`
+- `update using ((select auth.uid()) = user_id) with check ((select auth.uid()) = user_id)`
+- `delete using ((select auth.uid()) = user_id)`
 
 Postgres RLS requires a matching `select` policy for updates to find rows. Do not remove select policies when debugging update failures.
 
@@ -88,17 +132,25 @@ Postgres RLS requires a matching `select` policy for updates to find rows. Do no
 
 Recent Supabase projects may not expose new tables to the Data API automatically. If PostgREST returns table-access errors while RLS policies are correct, check the project's Data API settings and grants. When granting access to `anon` or `authenticated`, RLS must remain enabled.
 
-The Android client may use only the configured publishable/anon key. A `service_role` key must never be stored in Android source, resources, build config, logs, or runtime preferences.
+The migration grants `select`, `insert`, `update`, and `delete` on the four business tables to `authenticated` and revokes table privileges from unauthenticated `anon`. Android anonymous sign-in uses an authenticated session. The Android client may use only the configured publishable/anon key. A `service_role` key must never be stored in Android source, resources, generated build config, logs, or runtime preferences.
+
+## Auth Configuration
+
+DayZero currently relies on Supabase Anonymous Sign-Ins for invisible remote identity. In the Supabase Dashboard for project `sybenxmxnwwtlvkeojtj`, enable:
+
+- Authentication -> Providers -> Anonymous Sign-Ins
+
+If this is disabled, `auth/v1/signup` returns `anonymous_provider_disabled`, the app remains local-first, and remote push/pull is skipped or delayed. This is an Auth project setting, not a SQL migration setting.
 
 ## Sync Semantics
 
 `client_id` is the stable local entity id used for idempotent upsert. The gateway sends PostgREST writes with `on_conflict=user_id,client_id`.
 
-`updated_at` is updated by the Android gateway on each remote write attempt that reaches Supabase.
+`updated_at` is written by the Android gateway and also protected by a database trigger for updates.
 
 Remote pull depends on `updated_at` being sortable and present on every synced table. Incremental pull uses `updated_at > cursor` and orders by `updated_at.asc`.
 
-Current pull cursors are per table and use `updated_at` only. The Android pull coordinator detects the unsafe case where a page has `hasMore=true` and multiple rows share the same `updated_at`; in that case it records a partial pull failure and does not advance that table cursor. TODO: if real production data reaches this edge case, upgrade the cursor model to `updated_at + client_id` so equal-timestamp pages can be resumed without risk of skipping rows.
+Current pull cursors are per table and use `updated_at` only. The Android pull coordinator detects the unsafe case where a page has `hasMore=true` and multiple rows share the same `updated_at`; in that case it records a partial pull failure and does not advance that table cursor. TODO: if real production data reaches this edge case, upgrade the cursor model to `updated_at + client_id`.
 
 Deletes are soft deletes:
 
@@ -106,57 +158,64 @@ Deletes are soft deletes:
 - Set `updated_at` to the current timestamp.
 - Do not use SQL `DELETE` for normal record sync.
 
-`local_owner_id` is only a client migration/binding helper. It must not be used as a remote authorization boundary.
+## Push DTO Field Mapping
 
-## Canonical Field Names
+`SupabaseRemoteSyncGateway` writes:
 
-The current canonical remote schema is the migration schema in `supabase/migrations/20260618120000_dayzero_core_records.sql`.
+- daily record: `user_id`, `client_id`, `local_date`, `timezone`, `note`, common fields
+- meal: `user_id`, `client_id`, `daily_record_client_id`, `meal_type`, `logged_at`, `display_order`, common fields
+- food entry: `user_id`, `client_id`, `meal_client_id`, `name`, `amount_text`, `grams`, `calories`, `protein_g`, `carbs_g`, `fat_g`, `confidence`, `source`, common fields
+- weight record: `user_id`, `client_id`, `local_date`, `measured_at`, `weight_kg`, `source`, common fields
 
-Canonical names used by push and expected by pull:
+The gateway must not write `record_date`, `quantity`, `estimated_calories`, `daily_record_id`, `meal_id`, `raw_estimate_json`, or `service_role` credentials.
 
-- `daily_records.record_date`
-- `food_entries.quantity`
-- `food_entries.estimated_calories`
-- `meals.daily_record_client_id`
-- `food_entries.meal_client_id`
-- `food_entries.daily_record_client_id`
-- `weight_records.measured_date`
-- `weight_records.daily_record_client_id`
+## Pull DTO Field Mapping
 
-Temporary legacy compatibility exists only in the Android pull parser for these historical or idealized aliases:
+`SupabaseRemotePullGateway` reads:
 
-- `daily_records.local_date` -> `record_date`
-- `food_entries.amount_text` -> `quantity`
-- `food_entries.calories` -> `estimated_calories`
+- daily record: `client_id`, `local_date`, `timezone`, `note`, `created_at`, `updated_at`, `deleted_at`, `schema_version`
+- meal: `client_id`, `daily_record_client_id`, `meal_type`, `logged_at`, `display_order`, `created_at`, `updated_at`, `deleted_at`, `schema_version`
+- food entry: `client_id`, `meal_client_id`, `name`, `amount_text`, `grams`, `calories`, `protein_g`, `carbs_g`, `fat_g`, `confidence`, `source`, `created_at`, `updated_at`, `deleted_at`, `schema_version`
+- weight record: `client_id`, `local_date`, `measured_at`, `weight_kg`, `source`, `created_at`, `updated_at`, `deleted_at`, `schema_version`
 
-This compatibility layer is for old/manual rows only. Do not add new Table Editor rows using the legacy names, and do not make push write one name while pull reads another. After real data is confirmed to use only the canonical schema, remove the temporary compatibility branch.
+Single malformed rows should be skipped with `DayZeroRemote` logs. They must not crash the whole pull or block UI.
 
 ## Table Editor Checklist
 
 For each table, verify:
 
-- The table exists in the expected schema.
+- The table exists in `public`.
 - Required common fields exist with expected types.
 - Table-specific fields exist with expected types.
 - `deleted_at` exists and is nullable.
 - `updated_at` exists and is `timestamptz`.
 - `unique(user_id, client_id)` exists.
 - RLS is enabled.
-- Select/insert/update/delete policies use `user_id = auth.uid()`.
-- The table is exposed to the Data API if the app needs PostgREST access.
-- The `authenticated` role can select/insert/update/delete these RLS-protected tables through the Data API.
+- Select/insert/update/delete policies use `(select auth.uid()) = user_id`.
+- The `authenticated` role can select/insert/update/delete through the Data API.
 - `client_id` is not null and is stable across retries.
 - `schema_version` exists and defaults to `1`.
 - `updated_at` can be filtered and sorted through PostgREST.
 - `deleted_at` is returned by select queries.
 
-For pull relation reconstruction, verify:
+For relation reconstruction, verify:
 
-- `meals.daily_record_client_id` exists and references the local client id of `daily_records`.
-- `food_entries.meal_client_id` exists and references the local client id of `meals`.
-- `food_entries.daily_record_client_id` exists and references the local client id of `daily_records`.
-- `weight_records.daily_record_client_id` exists when the weight was created from a daily confirmation.
+- `meals.daily_record_client_id` exists.
+- `food_entries.meal_client_id` exists.
+- `weight_records.local_date` exists.
 - Remote pull does not depend on remote auto-increment ids.
+
+## SQL Editor And Migration Execution
+
+Preferred deployment is applying `supabase/migrations/20260619023000_dayzero_core_records_schema.sql` to project `sybenxmxnwwtlvkeojtj` through Supabase MCP or SQL Editor.
+
+If using SQL Editor:
+
+1. Open project `sybenxmxnwwtlvkeojtj`.
+2. Paste the migration SQL exactly.
+3. Run it once.
+4. Verify the four public tables appear.
+5. Do not make untracked schema edits in Table Editor.
 
 ## Idempotency Verification
 
@@ -172,7 +231,7 @@ To verify duplicate upsert behavior:
 
 To verify isolation:
 
-1. Create or use two different authenticated users.
+1. Create or use two different authenticated anonymous users.
 2. Insert rows for user A.
 3. Query as user B through PostgREST.
 4. Confirm user B cannot select user A rows.
@@ -180,23 +239,23 @@ To verify isolation:
 
 ## Real Supabase Verification Checklist
 
-Use this checklist for DB-SYNC-11 real-device verification. Table Editor is for observing state only; schema changes must still be represented by SQL migration files.
+Use this checklist for real-device verification:
 
 1. Start the app on a real device with the configured Supabase URL and Android anon/publishable key.
 2. Confirm logs show a real anonymous identity from `SupabaseAnonymousIdentityProvider`.
-3. Confirm Android source, resources, generated build config, logs, and preferences do not contain a `service_role` key.
-4. In the app, send `中午吃了一份鸡蛋肠粉`, wait for the AI reply and `show_confirm_card`, then tap confirm.
-5. Confirm Room has a local daily record, meal, and food entry. UI must show the record from Room without waiting for Supabase.
-6. Confirm `sync_queue` is created and processed.
-7. In Supabase Table Editor, check `daily_records` for the new row.
-8. Check `meals` for the related row and confirm `daily_record_client_id` is present.
-9. Check `food_entries` and confirm `meal_client_id` and `daily_record_client_id` are present.
-10. If the confirmation includes weight, check `weight_records` and confirm `daily_record_client_id` is present when applicable.
-11. For each row, confirm `user_id`, `client_id`, `updated_at`, `deleted_at`, and `schema_version` exist.
-12. Confirm `user_id` matches the authenticated anonymous user id for the device session.
-13. Sort each table by `updated_at` and confirm rows can be ordered for incremental pull.
-14. Repeat the same confirm/upsert with the same `client_id` in a controlled test and confirm `unique(user_id, client_id)` prevents duplicate rows.
-15. Use a second anonymous user and confirm RLS prevents reading or modifying the first user's rows.
+3. If anonymous sign-in fails with `anonymous_provider_disabled`, enable Anonymous Sign-Ins in the Supabase Dashboard before continuing.
+4. Confirm Android source, resources, generated build config, logs, and preferences do not contain a `service_role` key.
+5. In the app, send `中午吃了一份鸡蛋肠粉`, wait for the AI reply and `show_confirm_card`, then tap confirm.
+6. Confirm Room has a local daily record, meal, and food entry. UI must show the record from Room without waiting for Supabase.
+7. Confirm `sync_queue` is created and processed.
+8. In Supabase Table Editor, check `daily_records` for the new row.
+9. Check `meals` for the related row and confirm `daily_record_client_id` is present.
+10. Check `food_entries` and confirm `meal_client_id` is present.
+11. If the confirmation includes weight, check `weight_records`.
+12. For each row, confirm `user_id`, `client_id`, `updated_at`, `deleted_at`, and `schema_version` exist.
+13. Confirm `user_id` matches the authenticated anonymous user id for the device session.
+14. Sort each table by `updated_at` and confirm rows can be ordered for incremental pull.
+15. Repeat sync with the same `client_id` and confirm `unique(user_id, client_id)` prevents duplicate rows.
 16. Use the debug-only local business-record clear helper, keeping identity/session/chat/config intact.
 17. Trigger initial restore.
 18. Confirm pull reads `daily_records`, `meals`, `food_entries`, and `weight_records`.
@@ -232,6 +291,12 @@ The current stage does not implement:
 
 - Multi-device conflict merging.
 - Realtime.
+- Social features.
+- Full account binding UI.
 - Chat transcript sync.
-- User-visible login UI.
+- AI runtime changes.
+- `assistant-turn-v2-stream` protocol changes.
+- Restoring the old Intent chain.
+- UI directly requesting Supabase for business display.
 - Any Android use of `service_role`.
+- Domestic server migration.

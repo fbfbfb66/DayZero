@@ -6,6 +6,8 @@ import androidx.test.core.app.ApplicationProvider
 import com.example.data.local.database.DayZeroDatabase
 import com.example.data.local.mapper.DailyRecordMapper
 import com.example.data.local.entity.SyncQueueEntity
+import com.example.data.identity.SupabaseAuthSession
+import com.example.data.identity.SupabaseAuthSessionProvider
 import com.example.data.repository.RoomRecordRepository
 import com.example.data.sync.BackfillCoordinator
 import com.example.data.sync.BackfillStateStore
@@ -13,6 +15,7 @@ import com.example.data.sync.DayZeroSyncConstants
 import com.example.data.sync.LocalFirstSyncCoordinator
 import com.example.data.sync.RemoteSyncGateway
 import com.example.data.sync.RemoteSyncResult
+import com.example.data.sync.SupabaseRemoteSyncGateway
 import com.example.data.sync.InProcessSyncScheduler
 import com.example.data.sync.PullCoordinator
 import com.example.data.sync.PullStateStore
@@ -37,6 +40,13 @@ import com.example.domain.model.RecordStatus
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
+import okhttp3.Interceptor
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
+import okio.Buffer
+import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -258,6 +268,49 @@ class DayZeroSyncBackfillTest {
 
         assertEquals(20, database.syncQueueDao().countByStatus(DayZeroSyncConstants.STATUS_DONE))
         assertEquals(35, database.syncQueueDao().countByStatus(DayZeroSyncConstants.STATUS_PENDING))
+    }
+
+    @Test
+    fun supabasePushUsesCanonicalRemoteFields() = runTest {
+        val interceptor = CapturingInterceptor()
+        val gateway = SupabaseRemoteSyncGateway(
+            okHttpClient = OkHttpClient.Builder().addInterceptor(interceptor).build(),
+            sessionProvider = StaticSupabaseSessionProvider(),
+            supabaseUrl = "https://example.supabase.co",
+            anonKey = "anon-key",
+            isConfigured = true
+        )
+
+        gateway.upsertFoodEntry(
+            SyncPayload(
+                queueId = "queue-1",
+                entityType = "food_entry",
+                entityLocalId = "food-1",
+                operation = DayZeroSyncConstants.OP_UPSERT_FOOD_ENTRY,
+                ownerLocalId = LOCAL_OWNER_ID,
+                body = JSONObject()
+                    .put("clientId", "food-1")
+                    .put("mealClientId", "meal-1")
+                    .put("dailyRecordClientId", "record-1")
+                    .put("name", "egg rice roll")
+                    .put("quantity", "1 serving")
+                    .put("estimatedCalories", 320)
+                    .put("confidence", "high")
+                    .put("schemaVersion", 1)
+            )
+        )
+
+        val body = JSONObject(interceptor.lastBody)
+        assertEquals("food-1", body.getString("client_id"))
+        assertEquals("meal-1", body.getString("meal_client_id"))
+        assertEquals("1 serving", body.getString("amount_text"))
+        assertEquals(320, body.getInt("calories"))
+        assertTrue(body.isNull("confidence"))
+        assertFalse(body.has("quantity"))
+        assertFalse(body.has("estimated_calories"))
+        assertFalse(body.has("daily_record_client_id"))
+        assertFalse(body.has("meal_id"))
+        assertFalse(body.has("daily_record_id"))
     }
 
     @Test
@@ -499,11 +552,9 @@ class DayZeroSyncBackfillTest {
         return DailyRecordRemoteDto(
             userId = "remote-user-id",
             clientId = clientId,
-            recordDate = "2026-06-19",
-            status = RecordStatus.Confirmed.name,
-            totalCalories = 320,
-            weightKg = null,
-            aiSummary = null,
+            localDate = "2026-06-19",
+            timezone = null,
+            note = null,
             createdAt = 1_000L,
             updatedAt = updatedAt,
             deletedAt = deletedAt,
@@ -517,8 +568,8 @@ class DayZeroSyncBackfillTest {
             clientId = clientId,
             dailyRecordClientId = recordClientId,
             mealType = MealType.Lunch.name,
-            hasPhoto = false,
-            subtotalCalories = 320,
+            loggedAt = null,
+            displayOrder = null,
             createdAt = 1_100L,
             updatedAt = 2_100L,
             deletedAt = null,
@@ -531,11 +582,15 @@ class DayZeroSyncBackfillTest {
             userId = "remote-user-id",
             clientId = clientId,
             mealClientId = mealClientId,
-            dailyRecordClientId = recordClientId,
             name = "egg rice roll",
-            quantity = "1 serving",
-            estimatedCalories = 320,
-            confidence = "high",
+            amountText = "1 serving",
+            grams = null,
+            calories = 320f,
+            proteinG = null,
+            carbsG = null,
+            fatG = null,
+            confidence = null,
+            source = "confirm_card",
             createdAt = 1_200L,
             updatedAt = 2_200L,
             deletedAt = null,
@@ -547,8 +602,8 @@ class DayZeroSyncBackfillTest {
         return WeightRecordRemoteDto(
             userId = "remote-user-id",
             clientId = clientId,
-            dailyRecordClientId = recordClientId,
-            measuredDate = "2026-06-19",
+            localDate = "2026-06-19",
+            measuredAt = null,
             weightKg = 71.2f,
             source = "confirm_card",
             createdAt = 1_300L,
@@ -587,6 +642,36 @@ class DayZeroSyncBackfillTest {
         override suspend fun upsertFoodEntry(payload: SyncPayload): RemoteSyncResult = RemoteSyncResult.RetryableFailure("network_timeout")
         override suspend fun upsertWeightRecord(payload: SyncPayload): RemoteSyncResult = RemoteSyncResult.RetryableFailure("network_timeout")
         override suspend fun softDeleteRecord(payload: SyncPayload): RemoteSyncResult = RemoteSyncResult.RetryableFailure("network_timeout")
+    }
+
+    private class StaticSupabaseSessionProvider : SupabaseAuthSessionProvider {
+        override suspend fun currentSessionOrNull(): SupabaseAuthSession {
+            return SupabaseAuthSession(
+                userId = "00000000-0000-0000-0000-000000000001",
+                accessToken = "access-token",
+                refreshToken = null,
+                expiresAtEpochSeconds = Long.MAX_VALUE
+            )
+        }
+    }
+
+    private class CapturingInterceptor : Interceptor {
+        var lastBody: String = ""
+            private set
+
+        override fun intercept(chain: Interceptor.Chain): Response {
+            val request = chain.request()
+            val buffer = Buffer()
+            request.body?.writeTo(buffer)
+            lastBody = buffer.readUtf8()
+            return Response.Builder()
+                .request(request)
+                .protocol(Protocol.HTTP_1_1)
+                .code(201)
+                .message("Created")
+                .body("".toResponseBody())
+                .build()
+        }
     }
 
     private class CountingCoordinator : SyncCoordinator {

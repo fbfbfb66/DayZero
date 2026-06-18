@@ -113,10 +113,19 @@ class SupabaseRemotePullGateway(
                                 val item = array.getJSONObject(index)
                                 val clientId = item.optString("client_id")
                                 if (clientId.isBlank()) {
-                                    Log.e("DayZeroRemote", "pull fatal table=$tableName reason=missing_client_id")
-                                    return RemotePullResult.FatalFailure("missing_client_id:$tableName")
+                                    Log.e("DayZeroRemote", "pull skipped row table=$tableName reason=missing_client_id")
+                                    continue
                                 }
-                                add(mapper(item))
+                                runCatching {
+                                    mapper(item)
+                                }.onSuccess { mapped ->
+                                    add(mapped)
+                                }.onFailure { error ->
+                                    Log.e(
+                                        "DayZeroRemote",
+                                        "pull skipped row table=$tableName clientId=$clientId reason=${error::class.java.simpleName}"
+                                    )
+                                }
                             }
                         }
                         Log.d("DayZeroRemote", "pull success table=$tableName count=${items.size}")
@@ -146,16 +155,13 @@ class SupabaseRemotePullGateway(
     }
 
     private fun dailyRecordFromJson(json: JSONObject): DailyRecordRemoteDto {
-        // Temporary legacy compatibility: canonical migration fields are record_date, quantity,
-        // estimated_calories, and measured_date. Remove alias reads after real data is aligned.
+        // Temporary legacy compatibility: read old record_date rows until real data is aligned.
         return DailyRecordRemoteDto(
             userId = json.optString("user_id"),
             clientId = json.getString("client_id"),
-            recordDate = json.optString("local_date").ifBlank { json.optString("record_date") },
-            status = json.optString("status").ifBlank { "Confirmed" },
-            totalCalories = json.optInt("total_calories", 0),
-            weightKg = json.optNullableDouble("weight_kg")?.toFloat(),
-            aiSummary = json.optNullableString("ai_summary"),
+            localDate = json.optString("local_date").ifBlank { json.optString("record_date") },
+            timezone = json.optNullableString("timezone"),
+            note = json.optNullableString("note") ?: json.optNullableString("ai_summary"),
             createdAt = parseRemoteTime(json.optString("created_at")),
             updatedAt = parseRemoteTime(json.optString("updated_at")),
             deletedAt = parseNullableRemoteTime(json.optNullableString("deleted_at")),
@@ -168,9 +174,9 @@ class SupabaseRemotePullGateway(
             userId = json.optString("user_id"),
             clientId = json.getString("client_id"),
             dailyRecordClientId = json.optString("daily_record_client_id"),
-            mealType = json.optString("meal_type").ifBlank { "Snack" },
-            hasPhoto = json.optBoolean("has_photo", false),
-            subtotalCalories = json.optInt("subtotal_calories", 0),
+            mealType = json.optNullableString("meal_type"),
+            loggedAt = parseNullableRemoteTime(json.optNullableString("logged_at")),
+            displayOrder = json.optNullableInt("display_order"),
             createdAt = parseRemoteTime(json.optString("created_at")),
             updatedAt = parseRemoteTime(json.optString("updated_at")),
             deletedAt = parseNullableRemoteTime(json.optNullableString("deleted_at")),
@@ -183,11 +189,15 @@ class SupabaseRemotePullGateway(
             userId = json.optString("user_id"),
             clientId = json.getString("client_id"),
             mealClientId = json.optString("meal_client_id"),
-            dailyRecordClientId = json.optString("daily_record_client_id"),
             name = json.optString("name").ifBlank { "unknown" },
-            quantity = json.optString("amount_text").ifBlank { json.optString("quantity").ifBlank { "1" } },
-            estimatedCalories = if (json.has("calories")) json.optInt("calories", 0) else json.optInt("estimated_calories", 0),
-            confidence = json.optString("confidence").ifBlank { "unknown" },
+            amountText = json.optNullableString("amount_text") ?: json.optNullableString("quantity"),
+            grams = json.optNullableDouble("grams")?.toFloat(),
+            calories = (json.optNullableDouble("calories") ?: json.optNullableDouble("estimated_calories"))?.toFloat(),
+            proteinG = json.optNullableDouble("protein_g")?.toFloat(),
+            carbsG = json.optNullableDouble("carbs_g")?.toFloat(),
+            fatG = json.optNullableDouble("fat_g")?.toFloat(),
+            confidence = json.optNullableDouble("confidence")?.toFloat(),
+            source = json.optNullableString("source"),
             createdAt = parseRemoteTime(json.optString("created_at")),
             updatedAt = parseRemoteTime(json.optString("updated_at")),
             deletedAt = parseNullableRemoteTime(json.optNullableString("deleted_at")),
@@ -199,8 +209,8 @@ class SupabaseRemotePullGateway(
         return WeightRecordRemoteDto(
             userId = json.optString("user_id"),
             clientId = json.getString("client_id"),
-            dailyRecordClientId = json.optNullableString("daily_record_client_id"),
-            measuredDate = json.optString("local_date").ifBlank { json.optString("measured_date") },
+            localDate = json.optString("local_date").ifBlank { json.optString("measured_date") },
+            measuredAt = parseNullableRemoteTime(json.optNullableString("measured_at")),
             weightKg = json.optDouble("weight_kg").toFloat(),
             source = json.optString("source").ifBlank { "remote_pull" },
             createdAt = parseRemoteTime(json.optString("created_at")),
@@ -216,6 +226,10 @@ class SupabaseRemotePullGateway(
 
     private fun JSONObject.optNullableDouble(name: String): Double? {
         return if (has(name) && !isNull(name)) optDouble(name) else null
+    }
+
+    private fun JSONObject.optNullableInt(name: String): Int? {
+        return if (has(name) && !isNull(name)) optInt(name) else null
     }
 
     private fun parseNullableRemoteTime(value: String?): Long? {

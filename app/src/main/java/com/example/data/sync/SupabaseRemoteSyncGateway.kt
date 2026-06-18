@@ -167,46 +167,41 @@ class SupabaseRemoteSyncGateway(
 
     private fun dailyRecordBody(payload: SyncPayload): JSONObject {
         return baseBody(payload)
-            .put("record_date", payload.body.optString("date").ifBlank { null })
-            .put("status", payload.body.optString("status").ifBlank { "Confirmed" })
-            .put("total_calories", payload.body.optInt("totalCalories", 0))
-            .putNullable("weight_kg", payload.body.optNullableNumber("weightKg"))
-            .putNullable("ai_summary", payload.body.optNullableString("aiSummary"))
+            .put("local_date", payload.body.optString("date").ifBlank { null })
+            .putNullable("timezone", payload.body.optNullableString("timezone"))
+            .putNullable("note", payload.body.optNullableString("aiSummary"))
     }
 
     private fun mealBody(payload: SyncPayload): JSONObject {
         val dailyRecordClientId = payload.body.optString("dailyRecordClientId")
         return baseBody(payload)
-            .put("daily_record_id", stableUuid(dailyRecordClientId))
             .put("daily_record_client_id", dailyRecordClientId)
-            .put("meal_type", payload.body.optString("mealType").ifBlank { "Snack" })
-            .put("has_photo", payload.body.optBoolean("hasPhoto", false))
-            .put("subtotal_calories", payload.body.optInt("subtotalCalories", 0))
+            .putNullable("meal_type", payload.body.optNullableString("mealType"))
+            .putNullable("logged_at", payload.body.optNullableString("loggedAt"))
+            .putNullable("display_order", payload.body.optNullableNumber("displayOrder"))
     }
 
     private fun foodEntryBody(payload: SyncPayload): JSONObject {
-        val dailyRecordClientId = payload.body.optString("dailyRecordClientId")
         val mealClientId = payload.body.optString("mealClientId")
         return baseBody(payload)
-            .put("meal_id", stableUuid(mealClientId))
-            .put("daily_record_id", stableUuid(dailyRecordClientId))
             .put("meal_client_id", mealClientId)
-            .put("daily_record_client_id", dailyRecordClientId)
             .put("name", payload.body.optString("name").ifBlank { "unknown" })
-            .put("quantity", payload.body.optString("quantity").ifBlank { "1" })
-            .put("estimated_calories", payload.body.optInt("estimatedCalories", 0))
-            .put("confidence", payload.body.optString("confidence").ifBlank { "unknown" })
-            .put("raw_estimate_json", JSONObject(payload.body.toString()))
+            .putNullable("amount_text", payload.body.optNullableString("quantity"))
+            .putNullable("grams", payload.body.optNullableNumber("grams"))
+            .putNullable("calories", payload.body.optNullableNumber("estimatedCalories"))
+            .putNullable("protein_g", payload.body.optNullableNumber("proteinG"))
+            .putNullable("carbs_g", payload.body.optNullableNumber("carbsG"))
+            .putNullable("fat_g", payload.body.optNullableNumber("fatG"))
+            .putNullable("confidence", payload.body.optNullableNumber("confidence"))
+            .putNullable("source", payload.body.optNullableString("source") ?: "confirm_card")
     }
 
     private fun weightRecordBody(payload: SyncPayload): JSONObject {
-        val dailyRecordClientId = payload.body.optString("dailyRecordClientId")
         return baseBody(payload)
-            .put("daily_record_id", stableUuid(dailyRecordClientId))
-            .put("daily_record_client_id", dailyRecordClientId)
-            .put("measured_date", payload.body.optString("measuredDate").ifBlank { null })
+            .put("local_date", payload.body.optString("measuredDate").ifBlank { null })
+            .putNullable("measured_at", payload.body.optNullableString("measuredAt"))
             .put("weight_kg", payload.body.optDouble("weightKg"))
-            .put("source", payload.body.optString("source").ifBlank { "confirm_card" })
+            .putNullable("source", payload.body.optNullableString("source") ?: "confirm_card")
     }
 
     private fun baseBody(payload: SyncPayload): JSONObject {
@@ -214,7 +209,6 @@ class SupabaseRemoteSyncGateway(
         return JSONObject()
             .put("id", stableUuid(clientId))
             .put("client_id", clientId)
-            .put("local_owner_id", payload.ownerLocalId)
             .put("created_at", isoNow())
             .put("deleted_at", JSONObject.NULL)
             .put("schema_version", payload.body.optInt("schemaVersion", 1))
@@ -230,7 +224,12 @@ class SupabaseRemoteSyncGateway(
     }
 
     private fun JSONObject.optNullableNumber(name: String): Any? {
-        return if (has(name) && !isNull(name)) opt(name) else null
+        val value = if (has(name) && !isNull(name)) opt(name) else null
+        return when (value) {
+            is Number -> value
+            is String -> value.toDoubleOrNull()
+            else -> null
+        }
     }
 
     private fun JSONObject.putNullable(name: String, value: Any?): JSONObject {
