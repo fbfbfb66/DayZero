@@ -13,10 +13,13 @@ import com.example.data.remote.NetworkModule
 import com.example.data.remote.PromptCacheKeyProvider
 import com.example.data.remote.SupabaseConfig
 import com.example.data.remote.stream.AssistantTurnStreamClient
+import com.example.data.sync.BackfillCoordinator
+import com.example.data.sync.BackfillStateStore
 import com.example.data.sync.LocalFirstSyncCoordinator
 import com.example.data.sync.NoopRemoteSyncGateway
 import com.example.data.sync.SupabaseRemoteSyncGateway
 import com.example.data.sync.SyncCoordinator
+import com.example.data.sync.SyncHealthReporter
 import com.example.data.telemetry.AiLatencyTraceLogger
 import com.example.data.repository.FakeAiAssistantRepository
 import com.example.data.repository.FakeAiDraftRepository
@@ -56,7 +59,9 @@ class DayZeroViewModel(
     private val aiDraftRepository: AiDraftRepository,
     private val aiAssistantRepository: AiAssistantRepository,
     private val latencyLogger: AiLatencyTraceLogger,
-    private val syncCoordinator: SyncCoordinator? = null
+    private val syncCoordinator: SyncCoordinator? = null,
+    private val backfillCoordinator: BackfillCoordinator? = null,
+    private val syncHealthReporter: SyncHealthReporter? = null
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(AppState(currentDate = LocalDate.now()))
@@ -68,6 +73,7 @@ class DayZeroViewModel(
     init {
         observeRecords()
         observeChatMessages()
+        triggerInitialBackfill("app_start")
         triggerBackgroundSync("app_start")
     }
 
@@ -719,8 +725,31 @@ class DayZeroViewModel(
             try {
                 Log.d("DayZeroSync", "runOnce trigger reason=$reason")
                 coordinator.runOnce()
+                syncHealthReporter?.logSnapshot()
             } catch (e: Exception) {
                 Log.e("DayZeroSync", "runOnce trigger error reason=$reason", e)
+            }
+        }
+    }
+
+    private fun triggerInitialBackfill(reason: String) {
+        val coordinator = backfillCoordinator ?: return
+        viewModelScope.launch {
+            try {
+                Log.d("DayZeroBackfill", "initial trigger reason=$reason")
+                val stats = coordinator.enqueueInitialBackfillIfNeeded()
+                Log.d(
+                    "DayZeroBackfill",
+                    "initial result scannedDailyRecords=${stats.scannedDailyRecordCount} " +
+                        "enqueued=${stats.enqueuedCount} skippedQueued=${stats.skippedAlreadyQueuedCount} " +
+                        "skippedSynced=${stats.skippedAlreadySyncedCount} errors=${stats.errorCount}"
+                )
+                syncHealthReporter?.logSnapshot()
+                if (stats.enqueuedCount > 0) {
+                    triggerBackgroundSync("backfill_enqueued")
+                }
+            } catch (e: Exception) {
+                Log.e("DayZeroBackfill", "initial trigger error reason=$reason", e)
             }
         }
     }
@@ -764,6 +793,13 @@ class DayZeroViewModel(
                     identityProvider = identityProvider,
                     remoteSyncGateway = remoteSyncGateway
                 )
+                val backfillCoordinator = BackfillCoordinator(
+                    dailyRecordDao = database.dailyRecordDao(),
+                    syncQueueDao = database.syncQueueDao(),
+                    identityProvider = identityProvider,
+                    stateStore = BackfillStateStore(application)
+                )
+                val syncHealthReporter = SyncHealthReporter(database.syncQueueDao())
 
                 val aiDraftRepository = if (USE_REMOTE_AI) {
                     RemoteAiDraftRepository(NetworkModule.aiDraftApiService, database.aiChatMessageDao())
@@ -796,7 +832,9 @@ class DayZeroViewModel(
                     aiDraftRepository = aiDraftRepository,
                     aiAssistantRepository = aiAssistantRepository,
                     latencyLogger = latencyLogger,
-                    syncCoordinator = syncCoordinator
+                    syncCoordinator = syncCoordinator,
+                    backfillCoordinator = backfillCoordinator,
+                    syncHealthReporter = syncHealthReporter
                 ) as T
             }
         }

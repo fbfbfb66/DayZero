@@ -13,7 +13,24 @@ interface SyncQueueDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(item: SyncQueueEntity)
 
-    @Query("SELECT * FROM sync_queue WHERE status IN ('PENDING', 'FAILED_RETRYABLE', 'WAITING_FOR_AUTH') AND nextAttemptAt <= :now ORDER BY createdAt ASC LIMIT :limit")
+    @Query(
+        """
+        SELECT * FROM sync_queue
+        WHERE status IN ('PENDING', 'FAILED_RETRYABLE', 'WAITING_FOR_AUTH')
+          AND nextAttemptAt <= :now
+        ORDER BY
+          CASE operation
+            WHEN 'UPSERT_DAILY_RECORD' THEN 10
+            WHEN 'UPSERT_MEAL' THEN 20
+            WHEN 'UPSERT_FOOD_ENTRY' THEN 30
+            WHEN 'UPSERT_WEIGHT_RECORD' THEN 40
+            WHEN 'SOFT_DELETE_RECORD' THEN 50
+            ELSE 99
+          END ASC,
+          createdAt ASC
+        LIMIT :limit
+        """
+    )
     suspend fun getPending(now: Long = System.currentTimeMillis(), limit: Int = 50): List<SyncQueueEntity>
 
     @Query("UPDATE sync_queue SET status = 'PROCESSING', updatedAt = :updatedAt WHERE id = :id")
@@ -46,4 +63,38 @@ interface SyncQueueDao {
 
     @Query("SELECT COUNT(*) FROM sync_queue WHERE status IN ('PENDING', 'FAILED_RETRYABLE', 'WAITING_FOR_AUTH')")
     suspend fun getPendingCount(): Int
+
+    @Query(
+        """
+        SELECT COUNT(*) FROM sync_queue
+        WHERE ownerLocalId IN (:ownerLocalId, 'local_uninitialized')
+          AND entityType = :entityType
+          AND entityLocalId = :entityLocalId
+          AND operation = :operation
+          AND status IN ('PENDING', 'PROCESSING', 'DONE', 'FAILED_RETRYABLE', 'WAITING_FOR_AUTH')
+        """
+    )
+    suspend fun countActiveOrCompleted(
+        ownerLocalId: String,
+        entityType: String,
+        entityLocalId: String,
+        operation: String
+    ): Int
+
+    @Query("SELECT COUNT(*) FROM sync_queue WHERE status = :status")
+    suspend fun countByStatus(status: String): Int
+
+    @Query("SELECT MAX(updatedAt) FROM sync_queue WHERE status = 'DONE'")
+    suspend fun getLastSuccessfulSyncAt(): Long?
+
+    @Query(
+        """
+        SELECT lastError FROM sync_queue
+        WHERE status IN ('FAILED_RETRYABLE', 'FAILED_FATAL')
+          AND lastError IS NOT NULL
+        ORDER BY updatedAt DESC
+        LIMIT 1
+        """
+    )
+    suspend fun getLastSyncError(): String?
 }

@@ -2,9 +2,10 @@
 
 ## Current status
 
-- **Local-First Sync Architecture (Phase 5) initiated**. Established local-first sync foundation for daily records, meals, food entries, and weight records using Room as the local source of truth.
-- **Identity Layer Introduced**: Added `CurrentIdentityProvider` and `LocalIdentityProvider` returning an `AppIdentity` (localOwnerId). Remote syncing is skipped while waiting for remote auth.
-- **Sync Queue & Gateway**: Created `SyncQueueDao`, `SyncCoordinator`, and `RemoteSyncGateway` (`NoopRemoteSyncGateway` for now) to decouple UI business writes from background remote upserts.
+- **Local-First Sync Architecture (Phase 5) implemented**. Established local-first sync foundation for daily records, meals, food entries, and weight records using Room as the local source of truth.
+- **Identity Layer & Anonymous Auth**: Added `CurrentIdentityProvider` and `CompositeIdentityProvider`. Implemented `SupabaseAnonymousIdentityProvider` which logs in anonymously and holds a `SupabaseAuthSession` so data can be synced to Supabase without requiring user manual login.
+- **Supabase Remote Sync Gateway**: Added `SupabaseRemoteSyncGateway` which maps queued `SyncPayload` items and pushes them to Supabase via REST/PostgREST. Gracefully falls back to `NoopRemoteSyncGateway` if Supabase config is missing.
+- **Backfill & Sync Health (In Progress)**: Currently adding `BackfillCoordinator`, `BackfillStateStore`, and `SyncHealthReporter` to synchronize any pre-existing local data up to Supabase.
 - **Phase 4D-1 Complete**: Real database writing for `show_confirm_card` (`food_record`) has been fully implemented on the client side, now supporting multiple meals (`meals[]`) and optional weight recording (`weightKg`).
 - **Draft Card State Persistence Fix**: Resolved a critical bug where manually edited weight/meals on the draft card were reset in the UI once the card status transitioned to "confirmed". Now, the local UI state in `FoodDraftConfirmCard.kt` is keyed on `card.id` instead of `card.state` to prevent resets, and `updateCardState(...)` in `DayZeroViewModel.kt` persists the final user edits directly into the Room database chat history.
 - **Weight Pre-population**: Configured the server-side normalization wrapper `normalizeActions()` to read `todayRecord` from the database and pre-populate `action.payload.weightKg` with the existing weight record in the database if the AI does not output a new weight.
@@ -59,4 +60,4 @@
 
 - AI architecture reference is `docs/AI_ASSISTANT_TURN_V2_ARCHITECTURE.md`.
 - Data sync architecture reference is `docs/DATA_SYNC_ARCHITECTURE.md`.
-- Next step is **Supabase Remote Integration** (implementing real `RemoteSyncGateway` methods) and introducing Remote Authentication.
+- Next step is **Backfill Sync Completion** (uploading existing local records) and **Sync Health Reporting**, followed by full testing of the local-first sync queue.

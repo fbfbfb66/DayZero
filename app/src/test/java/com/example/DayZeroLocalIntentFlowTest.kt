@@ -93,8 +93,11 @@ class DayZeroLocalIntentFlowTest {
         advanceUntilIdle()
 
         val messages = viewModel.uiState.value.chatMessages
-        assertEquals(1, messages.size)
-        assertEquals(ChatRole.User, messages.single().role)
+        assertEquals(2, messages.size)
+        assertEquals(ChatRole.User, messages[0].role)
+        assertEquals(ChatRole.Assistant, messages[1].role)
+        assertTrue(messages[1].text.isBlank())
+        assertTrue(messages[1].assistantCards.isEmpty())
         assertTrue(recordRepository.records.value.isEmpty())
         assertEquals(false, viewModel.uiState.value.isAnalyzing)
         assertTrue(viewModel.uiState.value.conversationState is AiRecordConversationState.Error)

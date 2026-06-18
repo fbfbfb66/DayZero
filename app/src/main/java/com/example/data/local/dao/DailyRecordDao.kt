@@ -27,6 +27,9 @@ interface DailyRecordDao {
     @Query("SELECT * FROM daily_records WHERE date = :date AND status = :status LIMIT 1")
     suspend fun getRecordByDateAndStatus(date: String, status: String): DailyRecordEntity?
 
+    @Query("SELECT * FROM daily_records WHERE status = 'Confirmed' ORDER BY date ASC, createdAt ASC")
+    suspend fun getConfirmedRecordsForBackfill(): List<DailyRecordEntity>
+
     @Query("DELETE FROM daily_records")
     suspend fun deleteAllRecords()
 }

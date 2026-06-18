@@ -8,6 +8,7 @@ import com.example.data.local.entity.SyncQueueEntity
 import com.example.data.local.mapper.DailyRecordMapper
 import com.example.data.mock.createMockRecords
 import com.example.data.sync.DayZeroSyncConstants
+import com.example.data.sync.SyncPayloadBuilder
 import com.example.domain.identity.AppIdentity
 import com.example.domain.identity.CurrentIdentityProvider
 import com.example.domain.model.DailyRecord
@@ -17,7 +18,6 @@ import com.example.domain.repository.RecordRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onStart
-import org.json.JSONObject
 import java.time.LocalDate
 
 class RoomRecordRepository(
@@ -26,6 +26,7 @@ class RoomRecordRepository(
     private val identityProvider: CurrentIdentityProvider = StaticLocalIdentityProvider()
 ) : RecordRepository {
     private val mapper = DailyRecordMapper()
+    private val payloadBuilder = SyncPayloadBuilder()
 
     companion object {
         private const val ENABLE_DEMO_SEEDING = false
@@ -113,7 +114,7 @@ class RoomRecordRepository(
                     entityType = "daily_record",
                     entityLocalId = record.id,
                     operation = DayZeroSyncConstants.OP_UPSERT_DAILY_RECORD,
-                    payloadJson = dailyRecordPayload(record, identity).toString(),
+                    payloadJson = payloadBuilder.dailyRecordPayload(record, identity).toString(),
                     status = DayZeroSyncConstants.STATUS_PENDING,
                     createdAt = now,
                     updatedAt = now,
@@ -127,7 +128,7 @@ class RoomRecordRepository(
                         entityType = "meal",
                         entityLocalId = meal.id,
                         operation = DayZeroSyncConstants.OP_UPSERT_MEAL,
-                        payloadJson = mealPayload(record.id, meal, identity).toString(),
+                        payloadJson = payloadBuilder.mealPayload(record.id, meal, identity).toString(),
                         status = DayZeroSyncConstants.STATUS_PENDING,
                         createdAt = now,
                         updatedAt = now,
@@ -140,7 +141,7 @@ class RoomRecordRepository(
                             entityType = "food_entry",
                             entityLocalId = food.id,
                             operation = DayZeroSyncConstants.OP_UPSERT_FOOD_ENTRY,
-                            payloadJson = foodPayload(record.id, meal.id, food, identity).toString(),
+                            payloadJson = payloadBuilder.foodPayload(record.id, meal.id, food, identity).toString(),
                             status = DayZeroSyncConstants.STATUS_PENDING,
                             createdAt = now,
                             updatedAt = now,
@@ -156,7 +157,7 @@ class RoomRecordRepository(
                         entityType = "weight_record",
                         entityLocalId = "${record.id}:weight",
                         operation = DayZeroSyncConstants.OP_UPSERT_WEIGHT_RECORD,
-                        payloadJson = weightPayload(record.id, record.date.toString(), weightKg, identity).toString(),
+                        payloadJson = payloadBuilder.weightPayload(record.id, record.date.toString(), weightKg, identity).toString(),
                         status = DayZeroSyncConstants.STATUS_PENDING,
                         createdAt = now,
                         updatedAt = now,
@@ -184,12 +185,7 @@ class RoomRecordRepository(
                     entityType = "daily_record",
                     entityLocalId = recordId,
                     operation = DayZeroSyncConstants.OP_SOFT_DELETE_RECORD,
-                    payloadJson = JSONObject()
-                        .put("clientId", recordId)
-                        .put("ownerLocalId", identity.localOwnerId)
-                        .put("authProvider", identity.authProvider)
-                        .put("deletedAt", now)
-                        .toString(),
+                    payloadJson = payloadBuilder.softDeletePayload(recordId, identity, now).toString(),
                     status = DayZeroSyncConstants.STATUS_PENDING,
                     createdAt = now,
                     updatedAt = now,
@@ -204,64 +200,5 @@ class RoomRecordRepository(
         } catch (e: Exception) {
             Log.e(DayZeroSyncConstants.LOG_PREFIX, "enqueue error softDelete=$recordId", e)
         }
-    }
-
-    private fun dailyRecordPayload(record: DailyRecord, identity: AppIdentity): JSONObject {
-        return JSONObject()
-            .put("clientId", record.id)
-            .put("ownerLocalId", identity.localOwnerId)
-            .put("remoteUserId", identity.remoteUserId)
-            .put("authProvider", identity.authProvider)
-            .put("canRemoteSync", identity.canRemoteSync)
-            .put("date", record.date.toString())
-            .put("status", record.status.name)
-            .put("totalCalories", record.totalCalories)
-            .put("weightKg", record.weightKg)
-            .put("aiSummary", record.aiSummary)
-            .put("schemaVersion", 1)
-    }
-
-    private fun mealPayload(
-        recordId: String,
-        meal: com.example.domain.model.MealEntry,
-        identity: AppIdentity
-    ): JSONObject {
-        return JSONObject()
-            .put("clientId", meal.id)
-            .put("ownerLocalId", identity.localOwnerId)
-            .put("dailyRecordClientId", recordId)
-            .put("mealType", meal.mealType.name)
-            .put("hasPhoto", meal.hasPhoto)
-            .put("subtotalCalories", meal.mealCalories)
-            .put("schemaVersion", 1)
-    }
-
-    private fun foodPayload(
-        recordId: String,
-        mealId: String,
-        food: com.example.domain.model.FoodEntry,
-        identity: AppIdentity
-    ): JSONObject {
-        return JSONObject()
-            .put("clientId", food.id)
-            .put("ownerLocalId", identity.localOwnerId)
-            .put("dailyRecordClientId", recordId)
-            .put("mealClientId", mealId)
-            .put("name", food.name)
-            .put("quantity", food.quantity)
-            .put("estimatedCalories", food.estimatedCalories)
-            .put("confidence", food.confidence)
-            .put("schemaVersion", 1)
-    }
-
-    private fun weightPayload(recordId: String, date: String, weightKg: Float, identity: AppIdentity): JSONObject {
-        return JSONObject()
-            .put("clientId", "$recordId:weight")
-            .put("ownerLocalId", identity.localOwnerId)
-            .put("dailyRecordClientId", recordId)
-            .put("measuredDate", date)
-            .put("weightKg", weightKg)
-            .put("source", "confirm_card")
-            .put("schemaVersion", 1)
     }
 }

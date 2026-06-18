@@ -20,12 +20,15 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
-import org.junit.Assert.assertThrows
+import org.junit.Assert.fail
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 import retrofit2.Response
 import java.time.LocalDate
 
 @OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
 class DayZeroProtocolValidationTest {
 
     private fun createRepository(
@@ -87,9 +90,7 @@ class DayZeroProtocolValidationTest {
             recentMessages = emptyList()
         )
 
-        assertThrows(ProtocolException::class.java) {
-            runTest { repository.sendMessage(request) }
-        }
+        assertProtocolException { repository.sendMessage(request) }
     }
 
     @Test
@@ -111,9 +112,7 @@ class DayZeroProtocolValidationTest {
             recentMessages = emptyList()
         )
 
-        assertThrows(ProtocolException::class.java) {
-            runTest { repository.sendMessage(request) }
-        }
+        assertProtocolException { repository.sendMessage(request) }
     }
 
     @Test
@@ -135,9 +134,7 @@ class DayZeroProtocolValidationTest {
             recentMessages = emptyList()
         )
 
-        assertThrows(ProtocolException::class.java) {
-            runTest { repository.sendMessage(request) }
-        }
+        assertProtocolException { repository.sendMessage(request) }
     }
 
     @Test
@@ -159,9 +156,7 @@ class DayZeroProtocolValidationTest {
             recentMessages = emptyList()
         )
 
-        assertThrows(ProtocolException::class.java) {
-            runTest { repository.sendMessage(request) }
-        }
+        assertProtocolException { repository.sendMessage(request) }
     }
 
     @Test
@@ -205,5 +200,14 @@ class DayZeroProtocolValidationTest {
         assertEquals(1, card.options.size)
         assertEquals("opt_a", card.options[0].id)
         assertEquals("Option A", card.options[0].label)
+    }
+
+    private suspend fun assertProtocolException(block: suspend () -> Unit) {
+        try {
+            block()
+            fail("Expected ProtocolException")
+        } catch (e: ProtocolException) {
+            assertTrue(e.message?.isNotBlank() == true)
+        }
     }
 }
