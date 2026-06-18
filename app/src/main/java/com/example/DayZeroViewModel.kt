@@ -5,12 +5,17 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.CreationExtras
+import com.example.data.identity.CompositeIdentityProvider
 import com.example.data.identity.LocalIdentityProvider
+import com.example.data.identity.SupabaseAnonymousIdentityProvider
 import com.example.data.local.database.DayZeroDatabase
 import com.example.data.remote.NetworkModule
 import com.example.data.remote.PromptCacheKeyProvider
+import com.example.data.remote.SupabaseConfig
 import com.example.data.remote.stream.AssistantTurnStreamClient
 import com.example.data.sync.LocalFirstSyncCoordinator
+import com.example.data.sync.NoopRemoteSyncGateway
+import com.example.data.sync.SupabaseRemoteSyncGateway
 import com.example.data.sync.SyncCoordinator
 import com.example.data.telemetry.AiLatencyTraceLogger
 import com.example.data.repository.FakeAiAssistantRepository
@@ -732,10 +737,32 @@ class DayZeroViewModel(
                 val application = checkNotNull(extras[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY])
                 val database = DayZeroDatabase.getDatabase(application)
                 val latencyLogger = AiLatencyTraceLogger(application)
-                val identityProvider = LocalIdentityProvider(application)
+                val localIdentityProvider = LocalIdentityProvider(application)
+                val supabaseIdentityProvider = if (SupabaseConfig.isConfigured()) {
+                    SupabaseAnonymousIdentityProvider(
+                        context = application,
+                        localIdentityProvider = localIdentityProvider,
+                        okHttpClient = NetworkModule.syncOkHttpClient
+                    )
+                } else {
+                    null
+                }
+                val identityProvider = CompositeIdentityProvider(
+                    localIdentityProvider = localIdentityProvider,
+                    remoteIdentityProvider = supabaseIdentityProvider
+                )
+                val remoteSyncGateway = if (SupabaseConfig.isConfigured() && supabaseIdentityProvider != null) {
+                    SupabaseRemoteSyncGateway(
+                        okHttpClient = NetworkModule.syncOkHttpClient,
+                        sessionProvider = supabaseIdentityProvider
+                    )
+                } else {
+                    NoopRemoteSyncGateway()
+                }
                 val syncCoordinator = LocalFirstSyncCoordinator(
                     syncQueueDao = database.syncQueueDao(),
-                    identityProvider = identityProvider
+                    identityProvider = identityProvider,
+                    remoteSyncGateway = remoteSyncGateway
                 )
 
                 val aiDraftRepository = if (USE_REMOTE_AI) {

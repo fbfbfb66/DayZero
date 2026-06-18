@@ -72,17 +72,17 @@ class LocalFirstSyncCoordinator(
         when (result) {
             RemoteSyncResult.Success -> {
                 syncQueueDao.markDone(item.id)
-                Log.d(DayZeroSyncConstants.LOG_PREFIX, "sync item done id=${item.id}")
+                Log.d(DayZeroSyncConstants.LOG_PREFIX, "mark done id=${item.id}")
             }
 
             is RemoteSyncResult.RetryableFailure -> {
                 syncQueueDao.markRetryableFailure(item.id, result.message)
-                Log.d(DayZeroSyncConstants.LOG_PREFIX, "sync item retryable id=${item.id} message=${result.message}")
+                Log.d(DayZeroSyncConstants.LOG_PREFIX, "mark retryable failure id=${item.id} message=${result.message}")
             }
 
             is RemoteSyncResult.FatalFailure -> {
                 syncQueueDao.markFatalFailure(item.id, result.message)
-                Log.d(DayZeroSyncConstants.LOG_PREFIX, "sync item fatal id=${item.id} message=${result.message}")
+                Log.d(DayZeroSyncConstants.LOG_PREFIX, "mark fatal failure id=${item.id} message=${result.message}")
             }
 
             is RemoteSyncResult.Skipped -> {

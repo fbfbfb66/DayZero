@@ -83,6 +83,12 @@ Remote sync is isolated behind `RemoteSyncGateway`:
 
 The current implementation is `NoopRemoteSyncGateway`. It does not upload to Supabase or any other server. When `AppIdentity.canRemoteSync` is false it returns `Skipped("waiting_for_auth")`.
 
+DB-SYNC-6 adds `SupabaseRemoteSyncGateway`, still behind the same interface. It uses the configured Supabase URL and anon key, writes through REST/PostgREST endpoints, and never exposes Supabase calls to Compose UI, ViewModels, or ordinary record repositories. The gateway maps structured `SyncPayload` fields into `daily_records`, `meals`, `food_entries`, and `weight_records`.
+
+`SupabaseAnonymousIdentityProvider` is a background-only remote identity adapter. It attempts to reuse a stored anonymous Supabase session, then attempts anonymous sign-in if needed. Failure leaves `canRemoteSync = false`; local Room writes continue normally.
+
+When Supabase config is missing or still set to TODO placeholders, the app uses `NoopRemoteSyncGateway`. When config is available, the sync coordinator receives `SupabaseRemoteSyncGateway`.
+
 ## Sync Coordinator
 
 `LocalFirstSyncCoordinator.runOnce()` is the worker-ready sync skeleton:

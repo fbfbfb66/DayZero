@@ -17,19 +17,26 @@ object NetworkModule {
 
     private val authInterceptor = Interceptor { chain ->
         val original = chain.request()
-        val request = original.newBuilder()
+        val requestBuilder = original.newBuilder()
             .header("Content-Type", "application/json")
-            .header("apikey", SupabaseConfig.SUPABASE_PUBLISHABLE_KEY)
-            .header("Authorization", "Bearer ${SupabaseConfig.SUPABASE_PUBLISHABLE_KEY}")
-            .build()
+
+        if (SupabaseConfig.isConfigured()) {
+            requestBuilder
+                .header("apikey", SupabaseConfig.SUPABASE_PUBLISHABLE_KEY)
+                .header("Authorization", "Bearer ${SupabaseConfig.SUPABASE_PUBLISHABLE_KEY}")
+        }
+
+        val request = requestBuilder.build()
         chain.proceed(request)
     }
 
     private val loggingInterceptor = HttpLoggingInterceptor().apply {
-        level = HttpLoggingInterceptor.Level.BODY
+        redactHeader("apikey")
+        redactHeader("Authorization")
+        level = HttpLoggingInterceptor.Level.BASIC
     }
 
-    private val okHttpClient = OkHttpClient.Builder()
+    val okHttpClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
         .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
         .writeTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
@@ -44,8 +51,15 @@ object NetworkModule {
         .addInterceptor(authInterceptor)
         .build()
 
+    val syncOkHttpClient: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+        .writeTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+        .addInterceptor(loggingInterceptor)
+        .build()
+
     private val retrofit = Retrofit.Builder()
-        .baseUrl(SupabaseConfig.SUPABASE_URL)
+        .baseUrl(SupabaseConfig.SAFE_BASE_URL)
         .client(okHttpClient)
         .addConverterFactory(MoshiConverterFactory.create(moshi))
         .build()

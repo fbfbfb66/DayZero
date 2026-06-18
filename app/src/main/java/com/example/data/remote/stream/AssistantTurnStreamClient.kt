@@ -28,9 +28,12 @@ class AssistantTurnStreamClient(
         onDelta: suspend (String) -> Unit,
         onTiming: suspend (StreamDebugTimingEventDto) -> Unit
     ): AssistantTurnV2ResponseDto = withContext(Dispatchers.IO) {
+        if (!SupabaseConfig.isConfigured()) {
+            throw ProtocolException("Supabase AI runtime config is missing")
+        }
         val requestJson = requestAdapter.toJson(requestDto)
         val request = Request.Builder()
-            .url("${SupabaseConfig.SUPABASE_URL}functions/v1/assistant-turn-v2-stream")
+            .url(SupabaseConfig.edgeFunctionUrl("assistant-turn-v2-stream"))
             .post(requestJson.toRequestBody("application/json".toMediaType()))
             .header("Accept", "text/event-stream")
             .build()

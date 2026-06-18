@@ -1,9 +1,30 @@
 package com.example.data.remote
 
+import com.example.BuildConfig
+
 object SupabaseConfig {
-    const val SUPABASE_URL = "https://sybenxmxnwwtlvkeojtj.supabase.co/"
-    const val SUPABASE_PUBLISHABLE_KEY = "sb_publishable_YVO1ovCIK0UZr1wEEz7luQ_JrTt35av" // I will use the actual key if I can find it, for now using a placeholder if not provided. 
-    // Wait, user didn't provide the key in the prompt, but I can try to find it or use a placeholder and ask.
-    // Actually, looking at the previous conversation, I don't see the key.
-    // I will use a placeholder and mention it.
+    val SUPABASE_URL: String = BuildConfig.SUPABASE_URL.trim()
+    val SUPABASE_PUBLISHABLE_KEY: String = BuildConfig.SUPABASE_ANON_KEY.trim()
+    val SAFE_BASE_URL: String = normalizeBaseUrl(SUPABASE_URL).ifBlank { "https://example.invalid/" }
+
+    fun edgeFunctionUrl(functionName: String): String {
+        return "${SAFE_BASE_URL}functions/v1/$functionName"
+    }
+
+    fun isConfigured(): Boolean {
+        return normalizeBaseUrl(SUPABASE_URL).isNotBlank() &&
+            isUsableValue(SUPABASE_PUBLISHABLE_KEY) &&
+            !SUPABASE_PUBLISHABLE_KEY.contains("service_role", ignoreCase = true)
+    }
+
+    private fun normalizeBaseUrl(value: String): String {
+        if (!isUsableValue(value)) return ""
+        return if (value.endsWith("/")) value else "$value/"
+    }
+
+    private fun isUsableValue(value: String): Boolean {
+        return value.isNotBlank() &&
+            !value.startsWith("TODO_", ignoreCase = true) &&
+            !value.startsWith("MY_", ignoreCase = true)
+    }
 }
