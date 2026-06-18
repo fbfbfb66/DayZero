@@ -73,7 +73,7 @@ class DayZeroViewModel(
     init {
         observeRecords()
         observeChatMessages()
-        triggerInitialBackfill("app_start")
+        triggerInitialBackfill("app_start", delayMs = 1_500L)
         triggerBackgroundSync("app_start")
     }
 
@@ -732,10 +732,11 @@ class DayZeroViewModel(
         }
     }
 
-    private fun triggerInitialBackfill(reason: String) {
+    private fun triggerInitialBackfill(reason: String, delayMs: Long = 0L) {
         val coordinator = backfillCoordinator ?: return
         viewModelScope.launch {
             try {
+                if (delayMs > 0L) delay(delayMs)
                 Log.d("DayZeroBackfill", "initial trigger reason=$reason")
                 val stats = coordinator.enqueueInitialBackfillIfNeeded()
                 Log.d(
@@ -791,15 +792,23 @@ class DayZeroViewModel(
                 val syncCoordinator = LocalFirstSyncCoordinator(
                     syncQueueDao = database.syncQueueDao(),
                     identityProvider = identityProvider,
-                    remoteSyncGateway = remoteSyncGateway
+                    remoteSyncGateway = remoteSyncGateway,
+                    dailyRecordDao = database.dailyRecordDao()
                 )
+                val backfillStateStore = BackfillStateStore(application)
                 val backfillCoordinator = BackfillCoordinator(
                     dailyRecordDao = database.dailyRecordDao(),
                     syncQueueDao = database.syncQueueDao(),
                     identityProvider = identityProvider,
-                    stateStore = BackfillStateStore(application)
+                    stateStore = backfillStateStore
                 )
-                val syncHealthReporter = SyncHealthReporter(database.syncQueueDao())
+                val syncHealthReporter = SyncHealthReporter(
+                    syncQueueDao = database.syncQueueDao(),
+                    identityProvider = identityProvider,
+                    backfillStateStore = backfillStateStore,
+                    dailyRecordDao = database.dailyRecordDao(),
+                    remoteSyncEnabledProvider = { SupabaseConfig.isConfigured() }
+                )
 
                 val aiDraftRepository = if (USE_REMOTE_AI) {
                     RemoteAiDraftRepository(NetworkModule.aiDraftApiService, database.aiChatMessageDao())

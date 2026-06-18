@@ -9,6 +9,7 @@ object DayZeroSyncConstants {
     const val STATUS_FAILED_RETRYABLE = "FAILED_RETRYABLE"
     const val STATUS_FAILED_FATAL = "FAILED_FATAL"
     const val STATUS_WAITING_FOR_AUTH = "WAITING_FOR_AUTH"
+    const val STATUS_SYNCED = "SYNCED"
 
     const val OP_UPSERT_DAILY_RECORD = "UPSERT_DAILY_RECORD"
     const val OP_UPSERT_MEAL = "UPSERT_MEAL"

@@ -30,6 +30,42 @@ interface DailyRecordDao {
     @Query("SELECT * FROM daily_records WHERE status = 'Confirmed' ORDER BY date ASC, createdAt ASC")
     suspend fun getConfirmedRecordsForBackfill(): List<DailyRecordEntity>
 
+    @Query(
+        """
+        SELECT * FROM daily_records
+        WHERE status = 'Confirmed'
+          AND updatedAt > :updatedAfter
+        ORDER BY date ASC, createdAt ASC
+        LIMIT :limit
+        """
+    )
+    suspend fun getConfirmedRecordsForBackfillBatch(
+        updatedAfter: Long = 0L,
+        limit: Int = 100
+    ): List<DailyRecordEntity>
+
+    @Query("SELECT MAX(updatedAt) FROM daily_records WHERE status = 'Confirmed'")
+    suspend fun getMaxConfirmedUpdatedAt(): Long?
+
+    @Query("SELECT COUNT(*) FROM daily_records WHERE status = 'Confirmed' AND updatedAt > :updatedAfter")
+    suspend fun countConfirmedRecordsUpdatedAfter(updatedAfter: Long): Int
+
+    @Query(
+        """
+        UPDATE daily_records
+        SET syncStatus = :syncStatus,
+            lastSyncedAt = :lastSyncedAt,
+            remoteId = COALESCE(remoteId, :remoteId)
+        WHERE id = :recordId
+        """
+    )
+    suspend fun markRecordSyncMetadata(
+        recordId: String,
+        syncStatus: String,
+        lastSyncedAt: Long,
+        remoteId: String = recordId
+    )
+
     @Query("DELETE FROM daily_records")
     suspend fun deleteAllRecords()
 }

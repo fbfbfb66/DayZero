@@ -71,21 +71,34 @@ interface SyncQueueDao {
           AND entityType = :entityType
           AND entityLocalId = :entityLocalId
           AND operation = :operation
-          AND status IN ('PENDING', 'PROCESSING', 'DONE', 'FAILED_RETRYABLE', 'WAITING_FOR_AUTH')
+          AND (
+            status IN ('PENDING', 'PROCESSING', 'FAILED_RETRYABLE', 'WAITING_FOR_AUTH')
+            OR (status = 'DONE' AND updatedAt >= :localUpdatedAt)
+          )
         """
     )
-    suspend fun countActiveOrCompleted(
+    suspend fun countBlockingDuplicate(
         ownerLocalId: String,
         entityType: String,
         entityLocalId: String,
-        operation: String
+        operation: String,
+        localUpdatedAt: Long
     ): Int
 
     @Query("SELECT COUNT(*) FROM sync_queue WHERE status = :status")
     suspend fun countByStatus(status: String): Int
 
+    @Query("SELECT MAX(updatedAt) FROM sync_queue")
+    suspend fun getLastSyncAttemptAt(): Long?
+
     @Query("SELECT MAX(updatedAt) FROM sync_queue WHERE status = 'DONE'")
     suspend fun getLastSuccessfulSyncAt(): Long?
+
+    @Query("SELECT MAX(updatedAt) FROM sync_queue WHERE status IN ('FAILED_RETRYABLE', 'FAILED_FATAL')")
+    suspend fun getLastSyncFailureAt(): Long?
+
+    @Query("SELECT MIN(createdAt) FROM sync_queue WHERE status IN ('PENDING', 'FAILED_RETRYABLE', 'WAITING_FOR_AUTH')")
+    suspend fun getOldestPendingAt(): Long?
 
     @Query(
         """
