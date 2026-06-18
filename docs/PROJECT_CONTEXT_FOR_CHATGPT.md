@@ -5,6 +5,7 @@
 - **Local-First Sync Architecture (Phase 5) implemented**. Established local-first sync foundation for daily records, meals, food entries, and weight records using Room as the local source of truth.
 - **Identity Layer & Anonymous Auth**: Added `CurrentIdentityProvider` and `CompositeIdentityProvider`. Implemented `SupabaseAnonymousIdentityProvider` which logs in anonymously and holds a `SupabaseAuthSession` so data can be synced to Supabase without requiring user manual login.
 - **Supabase Remote Sync Gateway**: Added `SupabaseRemoteSyncGateway` which maps queued `SyncPayload` items and pushes them to Supabase via REST/PostgREST. Gracefully falls back to `NoopRemoteSyncGateway` if Supabase config is missing.
+- **UI Integration for Sync Status Completed**: Added `SyncStatusRepository` and UI components (`ui/sync/`) to observe and display the `SyncHealthSnapshot`. Integrated sync status indicators into `AiRecordScreen` and `TrendsScreen`. Also updated `SupabaseRemoteSyncGateway` to handle remote deletions.
 - **Backfill & Sync Health Completed**: Fully implemented `BackfillCoordinator`, `BackfillStateStore`, and `SyncHealthReporter`. The system can now automatically discover unsynced historical records (`DailyRecordDao.getUnsyncedRecords`) and enqueue them, ensuring complete local-to-remote data consistency. Comprehensive testing added via `DayZeroSyncBackfillTest`.
 - **Phase 4D-1 Complete**: Real database writing for `show_confirm_card` (`food_record`) has been fully implemented on the client side, now supporting multiple meals (`meals[]`) and optional weight recording (`weightKg`).
 - **Draft Card State Persistence Fix**: Resolved a critical bug where manually edited weight/meals on the draft card were reset in the UI once the card status transitioned to "confirmed". Now, the local UI state in `FoodDraftConfirmCard.kt` is keyed on `card.id` instead of `card.state` to prevent resets, and `updateCardState(...)` in `DayZeroViewModel.kt` persists the final user edits directly into the Room database chat history.
@@ -60,4 +61,4 @@
 
 - AI architecture reference is `docs/AI_ASSISTANT_TURN_V2_ARCHITECTURE.md`.
 - Data sync architecture reference is `docs/DATA_SYNC_ARCHITECTURE.md`.
-- Next step is **UI Integration for Sync Status**, exposing `SyncHealthSnapshot` to the user interface (e.g., showing a sync icon or last-synced timestamp), and handling remote deletions.
+- Next step is **Offline Retry Optimization** or moving on to **New Feature Development** (e.g., enhancing AI capabilities with long-term memory retrieval or social features).

@@ -9,6 +9,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
+import java.net.URLEncoder
 import java.time.Instant
 import java.util.UUID
 
@@ -60,17 +61,21 @@ class SupabaseRemoteSyncGateway(
     }
 
     override suspend fun softDeleteRecord(payload: SyncPayload): RemoteSyncResult {
+        if (!isConfigured) return RemoteSyncResult.Skipped("supabase_not_configured")
+        val tableName = tableNameForEntity(payload.entityType)
+            ?: return RemoteSyncResult.FatalFailure("unsupported_soft_delete_entity:${payload.entityType}")
         val clientId = payload.clientId()
         val session = sessionProvider.currentSessionOrNull()
             ?: return RemoteSyncResult.Skipped("waiting_for_auth")
+        val deletedAt = deletedAtIso(payload)
         val body = JSONObject()
-            .put("deleted_at", isoNow())
+            .put("deleted_at", deletedAt)
             .put("updated_at", isoNow())
             .toString()
             .toRequestBody(JSON_MEDIA_TYPE)
-        val url = "${restUrl()}daily_records?user_id=eq.${session.userId}&client_id=eq.$clientId"
+        val url = "${restUrl()}$tableName?user_id=eq.${session.userId}&client_id=eq.${filterValue(clientId)}"
 
-        Log.d("DayZeroRemote", "upsert start entityType=${payload.entityType} clientId=$clientId")
+        Log.d("DayZeroRemote", "soft delete start entityType=${payload.entityType} clientId=$clientId")
         return executeRequest(
             request = Request.Builder()
                 .url(url)
@@ -235,6 +240,33 @@ class SupabaseRemoteSyncGateway(
     private fun stableUuid(value: String): String {
         return runCatching { UUID.fromString(value).toString() }
             .getOrElse { UUID.nameUUIDFromBytes(value.toByteArray(Charsets.UTF_8)).toString() }
+    }
+
+    private fun tableNameForEntity(entityType: String): String? {
+        return when (entityType) {
+            "daily_record" -> "daily_records"
+            "meal" -> "meals"
+            "food_entry" -> "food_entries"
+            "weight_record" -> "weight_records"
+            else -> null
+        }
+    }
+
+    private fun deletedAtIso(payload: SyncPayload): String {
+        val value = if (payload.body.has("deletedAt") && !payload.body.isNull("deletedAt")) {
+            payload.body.opt("deletedAt")
+        } else {
+            null
+        }
+        return when (value) {
+            is Number -> Instant.ofEpochMilli(value.toLong()).toString()
+            is String -> value.toLongOrNull()?.let { Instant.ofEpochMilli(it).toString() } ?: value.ifBlank { isoNow() }
+            else -> isoNow()
+        }
+    }
+
+    private fun filterValue(value: String): String {
+        return URLEncoder.encode(value, Charsets.UTF_8.name())
     }
 
     private fun restUrl(): String = "${normalizedUrl()}rest/v1/"

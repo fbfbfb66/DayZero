@@ -53,8 +53,10 @@ class RoomRecordRepository(
     }
 
     override suspend fun deleteRecordById(recordId: String) {
-        dao.deleteRecordById(recordId)
-        enqueueSoftDelete(recordId, identityProvider.currentIdentity())
+        val identity = identityProvider.currentIdentity()
+        val deletedAt = System.currentTimeMillis()
+        dao.deleteRecordById(recordId, deletedAt)
+        enqueueSoftDelete(recordId, identity, deletedAt)
     }
 
     override suspend fun getRecordById(recordId: String): DailyRecord? {
@@ -175,7 +177,7 @@ class RoomRecordRepository(
         }
     }
 
-    private suspend fun enqueueSoftDelete(recordId: String, identity: AppIdentity) {
+    private suspend fun enqueueSoftDelete(recordId: String, identity: AppIdentity, deletedAt: Long = System.currentTimeMillis()) {
         val queueDao = syncQueueDao ?: return
         Log.d(DayZeroSyncConstants.LOG_PREFIX, "enqueue start softDelete=$recordId ownerLocalId=${identity.localOwnerId}")
         try {
@@ -185,7 +187,7 @@ class RoomRecordRepository(
                     entityType = "daily_record",
                     entityLocalId = recordId,
                     operation = DayZeroSyncConstants.OP_SOFT_DELETE_RECORD,
-                    payloadJson = payloadBuilder.softDeletePayload(recordId, identity, now).toString(),
+                    payloadJson = payloadBuilder.softDeletePayload(recordId, identity, deletedAt).toString(),
                     status = DayZeroSyncConstants.STATUS_PENDING,
                     createdAt = now,
                     updatedAt = now,

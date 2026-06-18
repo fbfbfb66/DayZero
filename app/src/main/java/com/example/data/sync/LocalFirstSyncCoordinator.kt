@@ -128,7 +128,9 @@ class LocalFirstSyncCoordinator(
     }
 
     private suspend fun markLocalSyncSuccess(payload: SyncPayload, syncedAt: Long) {
-        if (payload.operation != DayZeroSyncConstants.OP_UPSERT_DAILY_RECORD) return
+        val shouldMarkDailyRecord = payload.operation == DayZeroSyncConstants.OP_UPSERT_DAILY_RECORD ||
+            (payload.operation == DayZeroSyncConstants.OP_SOFT_DELETE_RECORD && payload.entityType == "daily_record")
+        if (!shouldMarkDailyRecord) return
         dailyRecordDao?.markRecordSyncMetadata(
             recordId = payload.entityLocalId,
             syncStatus = DayZeroSyncConstants.STATUS_SYNCED,

@@ -55,11 +55,13 @@ import com.example.ui.theme.BrandGreen
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.WarmBackground
+import com.example.ui.sync.SyncStatusPanel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TrendsScreen(viewModel: DayZeroViewModel) {
     val uiState by viewModel.uiState.collectAsState()
+    val syncStatusUiState by viewModel.syncStatusUiState.collectAsState()
     var selectedRange by remember { mutableStateOf("7天") }
 
     // Aggregate records by date to avoid duplicate X-axis labels
@@ -193,6 +195,11 @@ fun TrendsScreen(viewModel: DayZeroViewModel) {
                 }
             }
             
+            SyncStatusPanel(
+                state = syncStatusUiState,
+                onManualSync = viewModel::runManualSync
+            )
+
             Spacer(modifier = Modifier.height(32.dp))
         }
     }

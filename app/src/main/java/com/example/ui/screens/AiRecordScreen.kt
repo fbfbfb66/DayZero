@@ -65,6 +65,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -74,6 +75,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -113,7 +115,9 @@ import java.util.Locale
 @Composable
 fun AiRecordScreen(viewModel: DayZeroViewModel) {
     val uiState by viewModel.uiState.collectAsState()
+    val syncStatusUiState by viewModel.syncStatusUiState.collectAsState()
     var inputText by remember { mutableStateOf("") }
+    var showClearDataDialog by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val hasAssistantPlaceholder = uiState.chatMessages.lastOrNull()?.let { message ->
         message.role == ChatRole.Assistant && message.text.isBlank() && message.assistantCards.isEmpty()
@@ -301,11 +305,42 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
                         fontSize = 12.sp,
                         color = TextSecondary,
                         modifier = Modifier
-                            .clickable { viewModel.clearAllData() }
+                            .clickable { showClearDataDialog = true }
                             .padding(4.dp)
                     )
                 }
             }
+        }
+
+        if (showClearDataDialog) {
+            AlertDialog(
+                onDismissRequest = { showClearDataDialog = false },
+                title = { Text("确认清空本地数据") },
+                text = {
+                    Text(
+                        if (syncStatusUiState.requiresDangerousOperationWarning) {
+                            "还有部分记录尚未同步。现在继续可能导致这些记录无法在其他设备恢复。"
+                        } else {
+                            "这会清空本机记录和聊天内容。"
+                        }
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            showClearDataDialog = false
+                            viewModel.clearAllData()
+                        }
+                    ) {
+                        Text("继续清空")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showClearDataDialog = false }) {
+                        Text("取消")
+                    }
+                }
+            )
         }
 
         Column(

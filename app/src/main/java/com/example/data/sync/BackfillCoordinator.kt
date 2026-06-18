@@ -132,6 +132,23 @@ class BackfillCoordinator(
         val now = System.currentTimeMillis()
         val localUpdatedAt = entity.updatedAt
 
+        entity.deletedAt?.let { deletedAt ->
+            return enqueueIfMissing(
+                item = SyncQueueEntity(
+                    entityType = ENTITY_DAILY_RECORD,
+                    entityLocalId = record.id,
+                    operation = DayZeroSyncConstants.OP_SOFT_DELETE_RECORD,
+                    payloadJson = payloadBuilder.softDeletePayload(record.id, identity, deletedAt).toString(),
+                    status = DayZeroSyncConstants.STATUS_PENDING,
+                    createdAt = now,
+                    updatedAt = now,
+                    ownerLocalId = identity.localOwnerId
+                ),
+                localUpdatedAt = localUpdatedAt,
+                stats = stats
+            )
+        }
+
         if (isDailyRecordAlreadySynced(entity)) {
             Log.d(LOG_PREFIX, "enqueue skipped already synced entityType=daily_record clientId=${record.id}")
             stats = stats.copy(skippedAlreadySyncedCount = stats.skippedAlreadySyncedCount + 1)
@@ -196,25 +213,6 @@ class BackfillCoordinator(
                         entityLocalId = "${record.id}:weight",
                         operation = DayZeroSyncConstants.OP_UPSERT_WEIGHT_RECORD,
                         payloadJson = payloadBuilder.weightPayload(record.id, record.date.toString(), weightKg, identity).toString(),
-                        status = DayZeroSyncConstants.STATUS_PENDING,
-                        createdAt = now,
-                        updatedAt = now,
-                        ownerLocalId = identity.localOwnerId
-                    ),
-                    localUpdatedAt = localUpdatedAt,
-                    stats = stats
-                )
-            }
-        }
-
-        entity.deletedAt?.let { deletedAt ->
-            if (stats.enqueuedCount < taskBatchLimit) {
-                stats = enqueueIfMissing(
-                    item = SyncQueueEntity(
-                        entityType = ENTITY_DAILY_RECORD,
-                        entityLocalId = record.id,
-                        operation = DayZeroSyncConstants.OP_SOFT_DELETE_RECORD,
-                        payloadJson = payloadBuilder.softDeletePayload(record.id, identity, deletedAt).toString(),
                         status = DayZeroSyncConstants.STATUS_PENDING,
                         createdAt = now,
                         updatedAt = now,

@@ -9,22 +9,31 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface DailyRecordDao {
-    @Query("SELECT * FROM daily_records ORDER BY date DESC")
+    @Query("SELECT * FROM daily_records WHERE deletedAt IS NULL ORDER BY date DESC")
     fun observeAllRecords(): Flow<List<DailyRecordEntity>>
 
-    @Query("SELECT * FROM daily_records WHERE id = :id")
+    @Query("SELECT * FROM daily_records WHERE id = :id AND deletedAt IS NULL")
     suspend fun getRecordById(id: String): DailyRecordEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertRecord(record: DailyRecordEntity)
 
-    @Query("DELETE FROM daily_records WHERE id = :id")
-    suspend fun deleteRecordById(id: String)
+    @Query(
+        """
+        UPDATE daily_records
+        SET deletedAt = :deletedAt,
+            updatedAt = :deletedAt,
+            syncStatus = 'PENDING',
+            syncVersion = :deletedAt
+        WHERE id = :id
+        """
+    )
+    suspend fun deleteRecordById(id: String, deletedAt: Long = System.currentTimeMillis())
     
-    @Query("SELECT COUNT(*) FROM daily_records")
+    @Query("SELECT COUNT(*) FROM daily_records WHERE deletedAt IS NULL")
     suspend fun getRecordCount(): Int
 
-    @Query("SELECT * FROM daily_records WHERE date = :date AND status = :status LIMIT 1")
+    @Query("SELECT * FROM daily_records WHERE date = :date AND status = :status AND deletedAt IS NULL LIMIT 1")
     suspend fun getRecordByDateAndStatus(date: String, status: String): DailyRecordEntity?
 
     @Query("SELECT * FROM daily_records WHERE status = 'Confirmed' ORDER BY date ASC, createdAt ASC")

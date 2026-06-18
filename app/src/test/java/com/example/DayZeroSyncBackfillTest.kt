@@ -6,6 +6,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.example.data.local.database.DayZeroDatabase
 import com.example.data.local.mapper.DailyRecordMapper
 import com.example.data.local.entity.SyncQueueEntity
+import com.example.data.repository.RoomRecordRepository
 import com.example.data.sync.BackfillCoordinator
 import com.example.data.sync.BackfillStateStore
 import com.example.data.sync.DayZeroSyncConstants
@@ -157,6 +158,30 @@ class DayZeroSyncBackfillTest {
         assertEquals(0, snapshot.pendingCount)
         assertTrue(snapshot.isHealthy)
         assertTrue(snapshot.backfillPendingEstimatedCount >= 1)
+    }
+
+    @Test
+    fun repositorySoftDeleteHidesRecordAndEnqueuesDeleteTask() = runTest {
+        database.dailyRecordDao().upsertRecord(
+            mapper.toEntity(
+                domain = sampleConfirmedRecord(),
+                ownerLocalId = LOCAL_OWNER_ID
+            )
+        )
+        val repository = RoomRecordRepository(
+            dao = database.dailyRecordDao(),
+            syncQueueDao = database.syncQueueDao(),
+            identityProvider = StaticIdentityProvider(canRemoteSync = true)
+        )
+
+        repository.deleteRecordById("record-1")
+
+        assertEquals(null, database.dailyRecordDao().getRecordById("record-1"))
+        val tasks = database.syncQueueDao().getPending()
+        assertEquals(1, tasks.size)
+        assertEquals(DayZeroSyncConstants.OP_SOFT_DELETE_RECORD, tasks.first().operation)
+        assertEquals("daily_record", tasks.first().entityType)
+        assertEquals("record-1", tasks.first().entityLocalId)
     }
 
     private fun createBackfillCoordinator(
