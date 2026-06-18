@@ -28,6 +28,7 @@ import com.example.data.sync.SyncHealthReporter
 import com.example.data.sync.SyncScheduler
 import com.example.data.sync.SyncStatusRepository
 import com.example.data.sync.SyncTriggerReason
+import com.example.data.sync.SupabaseCloudBackupCleaner
 import com.example.data.telemetry.AiLatencyTraceLogger
 import com.example.data.repository.FakeAiAssistantRepository
 import com.example.data.repository.FakeAiDraftRepository
@@ -74,7 +75,8 @@ class DayZeroViewModel(
     private val pullCoordinator: PullCoordinator? = null,
     private val syncHealthReporter: SyncHealthReporter? = null,
     syncStatusRepository: SyncStatusRepository? = null,
-    syncScheduler: SyncScheduler? = null
+    syncScheduler: SyncScheduler? = null,
+    private val cloudBackupCleaner: SupabaseCloudBackupCleaner? = null
 ) : ViewModel() {
     private val effectiveSyncScheduler: SyncScheduler = syncScheduler ?: InProcessSyncScheduler(
         scope = viewModelScope,
@@ -556,6 +558,48 @@ class DayZeroViewModel(
         }
     }
 
+    fun clearChatMessages() {
+        viewModelScope.launch {
+            aiDraftRepository.clearChatMessages()
+            _uiState.update {
+                it.copy(
+                    chatMessages = emptyList(),
+                    isAnalyzing = false,
+                    conversationState = AiRecordConversationState.Idle
+                )
+            }
+        }
+    }
+
+    fun clearLocalRecords() {
+        viewModelScope.launch {
+            recordRepository.clearAllRecords()
+            _uiState.update { it.copy(records = emptyList()) }
+            refreshSyncHealthState("clear_local_records")
+        }
+    }
+
+    fun clearCloudBackupForDebug() {
+        if (!BuildConfig.DEBUG) {
+            Log.w("DayZeroRemote", "debug cloud clear ignored in release")
+            return
+        }
+        viewModelScope.launch {
+            Log.w("DayZeroRemote", "debug cloud clear requested")
+            val success = cloudBackupCleaner?.clearCurrentUserCloudBackup() == true
+            refreshSyncHealthState("debug_clear_cloud_backup")
+            _syncStatusUiState.update {
+                it.copy(
+                    actionText = if (success) {
+                        "Cloud backup cleared"
+                    } else {
+                        "Cloud backup clear failed"
+                    }
+                )
+            }
+        }
+    }
+
     fun clearLocalBusinessRecordsForDebug() {
         if (!BuildConfig.DEBUG) {
             Log.w("DayZeroSync", "debug clear local business records ignored in release")
@@ -926,6 +970,14 @@ class DayZeroViewModel(
                 } else {
                     NoopRemotePullGateway()
                 }
+                val cloudBackupCleaner = if (SupabaseConfig.isConfigured() && supabaseIdentityProvider != null) {
+                    SupabaseCloudBackupCleaner(
+                        okHttpClient = NetworkModule.syncOkHttpClient,
+                        sessionProvider = supabaseIdentityProvider
+                    )
+                } else {
+                    null
+                }
                 val syncCoordinator = LocalFirstSyncCoordinator(
                     syncQueueDao = database.syncQueueDao(),
                     identityProvider = identityProvider,
@@ -988,7 +1040,8 @@ class DayZeroViewModel(
                     syncCoordinator = syncCoordinator,
                     backfillCoordinator = backfillCoordinator,
                     pullCoordinator = pullCoordinator,
-                    syncHealthReporter = syncHealthReporter
+                    syncHealthReporter = syncHealthReporter,
+                    cloudBackupCleaner = cloudBackupCleaner
                 ) as T
             }
         }

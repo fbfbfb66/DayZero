@@ -1,4 +1,4 @@
-package com.example.ui.screens
+﻿package com.example.ui.screens
 
 import android.widget.Toast
 import androidx.compose.ui.platform.LocalContext
@@ -67,6 +67,8 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -93,6 +95,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.DayZeroViewModel
+import com.example.BuildConfig
 import com.example.domain.model.ai.ChatRole
 import com.example.ui.theme.BorderNormal
 import com.example.ui.theme.BrandGreen
@@ -111,13 +114,41 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
+private enum class ClearAction(
+    val dialogTitle: String,
+    val dialogMessage: String,
+    val confirmLabel: String
+) {
+    ChatOnly(
+        dialogTitle = "Clear chat?",
+        dialogMessage = "This removes local AI chat messages and cards from this device. Food and weight records stay untouched.",
+        confirmLabel = "Clear chat"
+    ),
+    LocalRecordsOnly(
+        dialogTitle = "Clear local records?",
+        dialogMessage = "This removes local food and weight records from this device. Chat messages stay untouched. Cloud backup is not deleted.",
+        confirmLabel = "Clear records"
+    ),
+    AllLocal(
+        dialogTitle = "Clear local data?",
+        dialogMessage = "This removes local chat messages, cards, food records, and weight records from this device. Cloud backup is not deleted.",
+        confirmLabel = "Clear all local"
+    ),
+    CloudBackupDebug(
+        dialogTitle = "Clear cloud backup?",
+        dialogMessage = "Debug only. This permanently deletes this anonymous user's cloud food and weight backup from Supabase. Local records stay on this device and may be uploaded again by future sync.",
+        confirmLabel = "Clear cloud backup"
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun AiRecordScreen(viewModel: DayZeroViewModel) {
     val uiState by viewModel.uiState.collectAsState()
     val syncStatusUiState by viewModel.syncStatusUiState.collectAsState()
     var inputText by remember { mutableStateOf("") }
-    var showClearDataDialog by remember { mutableStateOf(false) }
+    var showClearMenu by remember { mutableStateOf(false) }
+    var pendingClearAction by remember { mutableStateOf<ClearAction?>(null) }
     val listState = rememberLazyListState()
     val hasAssistantPlaceholder = uiState.chatMessages.lastOrNull()?.let { message ->
         message.role == ChatRole.Assistant && message.text.isBlank() && message.assistantCards.isEmpty()
@@ -300,44 +331,88 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
                         color = TextPrimary
                     )
 
-                    Text(
-                        text = "Clear",
-                        fontSize = 12.sp,
-                        color = TextSecondary,
-                        modifier = Modifier
-                            .clickable { showClearDataDialog = true }
-                            .padding(4.dp)
-                    )
+                    Box {
+                        Text(
+                            text = "Clear",
+                            fontSize = 12.sp,
+                            color = TextSecondary,
+                            modifier = Modifier
+                                .clickable { showClearMenu = true }
+                                .padding(4.dp)
+                        )
+                        DropdownMenu(
+                            expanded = showClearMenu,
+                            onDismissRequest = { showClearMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Clear chat only") },
+                                onClick = {
+                                    showClearMenu = false
+                                    pendingClearAction = ClearAction.ChatOnly
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Clear local records") },
+                                onClick = {
+                                    showClearMenu = false
+                                    pendingClearAction = ClearAction.LocalRecordsOnly
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Clear chat + local records") },
+                                onClick = {
+                                    showClearMenu = false
+                                    pendingClearAction = ClearAction.AllLocal
+                                }
+                            )
+                            if (BuildConfig.DEBUG) {
+                                DropdownMenuItem(
+                                    text = { Text("Clear cloud backup (debug)") },
+                                    onClick = {
+                                        showClearMenu = false
+                                        pendingClearAction = ClearAction.CloudBackupDebug
+                                    }
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
 
-        if (showClearDataDialog) {
+        pendingClearAction?.let { action ->
+            val dangerWarning = syncStatusUiState.requiresDangerousOperationWarning &&
+                action != ClearAction.ChatOnly
             AlertDialog(
-                onDismissRequest = { showClearDataDialog = false },
-                title = { Text("确认清空本地数据") },
+                onDismissRequest = { pendingClearAction = null },
+                title = { Text(action.dialogTitle) },
                 text = {
                     Text(
-                        if (syncStatusUiState.requiresDangerousOperationWarning) {
-                            "还有部分记录尚未同步。现在继续可能导致这些记录无法在其他设备恢复。"
+                        if (dangerWarning) {
+                            "Some records have not finished syncing. Clearing local records now may make them unavailable for cloud restore.\n\n${action.dialogMessage}"
                         } else {
-                            "这会清空本机记录和聊天内容。"
+                            action.dialogMessage
                         }
                     )
                 },
                 confirmButton = {
                     TextButton(
                         onClick = {
-                            showClearDataDialog = false
-                            viewModel.clearAllData()
+                            pendingClearAction = null
+                            when (action) {
+                                ClearAction.ChatOnly -> viewModel.clearChatMessages()
+                                ClearAction.LocalRecordsOnly -> viewModel.clearLocalRecords()
+                                ClearAction.AllLocal -> viewModel.clearAllData()
+                                ClearAction.CloudBackupDebug -> viewModel.clearCloudBackupForDebug()
+                            }
                         }
                     ) {
-                        Text("继续清空")
+                        Text(action.confirmLabel)
                     }
                 },
                 dismissButton = {
-                    TextButton(onClick = { showClearDataDialog = false }) {
-                        Text("取消")
+                    TextButton(onClick = { pendingClearAction = null }) {
+                        Text("Cancel")
                     }
                 }
             )
@@ -670,7 +745,7 @@ fun ConfirmedSummaryCard(record: DailyRecord) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.Check, contentDescription = null, tint = BrandGreen, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("今日已记录摘要", fontWeight = FontWeight.Bold, color = BrandGreen, fontSize = 14.sp)
+                    Text("Today summary", fontWeight = FontWeight.Bold, color = BrandGreen, fontSize = 14.sp)
                 }
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(record.aiSummary, color = TextPrimary, fontSize = 13.sp, lineHeight = 18.sp)
@@ -703,9 +778,9 @@ fun DraftCard(draft: DailyRecord, viewModel: DayZeroViewModel) {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column {
-                        Text("今日记录草稿", color = com.example.ui.theme.TextTertiary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Text("Today's draft", color = com.example.ui.theme.TextTertiary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                         Text(
-                            draft.date.format(DateTimeFormatter.ofPattern("yyyy年M月d日")), 
+                            draft.date.format(DateTimeFormatter.ofPattern("yyyy-MM-dd")), 
                             style = MaterialTheme.typography.titleMedium, 
                             fontWeight = FontWeight.Bold, 
                             fontFamily = androidx.compose.ui.text.font.FontFamily.Serif,
@@ -713,7 +788,7 @@ fun DraftCard(draft: DailyRecord, viewModel: DayZeroViewModel) {
                         )
                     }
                     Column(horizontalAlignment = Alignment.End) {
-                        Text("预估总热量", color = com.example.ui.theme.TextTertiary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Text("Estimated calories", color = com.example.ui.theme.TextTertiary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                         Row(verticalAlignment = Alignment.Bottom) {
                             Text("${draft.totalCalories}", color = BrandGreen, fontWeight = FontWeight.Bold, fontSize = 24.sp)
                             Text(" kcal", color = BrandGreen, fontSize = 12.sp, modifier = Modifier.padding(bottom = 4.dp))
@@ -726,7 +801,7 @@ fun DraftCard(draft: DailyRecord, viewModel: DayZeroViewModel) {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("体重记录 (kg)", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                    Text("浣撻噸璁板綍 (kg)", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
                     androidx.compose.foundation.text.BasicTextField(
                         value = weightInput,
                         onValueChange = { weightInput = it },
@@ -735,7 +810,7 @@ fun DraftCard(draft: DailyRecord, viewModel: DayZeroViewModel) {
                         modifier = Modifier.width(60.dp),
                         decorationBox = { innerTextField ->
                             if (weightInput.isEmpty()) {
-                                Text("点击填写", color = com.example.ui.theme.TextTertiary, fontSize = 14.sp, textAlign = androidx.compose.ui.text.style.TextAlign.End, modifier = Modifier.fillMaxWidth())
+                                Text("鐐瑰嚮濉啓", color = com.example.ui.theme.TextTertiary, fontSize = 14.sp, textAlign = androidx.compose.ui.text.style.TextAlign.End, modifier = Modifier.fillMaxWidth())
                             }
                             innerTextField()
                         }
@@ -775,14 +850,14 @@ fun DraftCard(draft: DailyRecord, viewModel: DayZeroViewModel) {
                                     ) {
                                         Column(modifier = Modifier.weight(1f)) {
                                             Text(food.name, color = TextPrimary)
-                                            Text("${food.quantity} · ${food.estimatedCalories} kcal", color = TextSecondary, fontSize = 12.sp)
+                                            Text("${food.quantity} 路 ${food.estimatedCalories} kcal", color = TextSecondary, fontSize = 12.sp)
                                         }
                                         IconButton(onClick = { /* Demo */ }, modifier = Modifier.size(24.dp)) {
-                                            Icon(Icons.Filled.Edit, contentDescription = "编辑", tint = TextSecondary, modifier = Modifier.size(16.dp))
+                                            Icon(Icons.Filled.Edit, contentDescription = "缂栬緫", tint = TextSecondary, modifier = Modifier.size(16.dp))
                                         }
                                         Spacer(modifier = Modifier.width(8.dp))
                                         IconButton(onClick = { /* TODO Phase 4B */ }, modifier = Modifier.size(24.dp)) {
-                                            Icon(Icons.Filled.DeleteOutline, contentDescription = "删除", tint = Color.Red.copy(alpha = 0.6f), modifier = Modifier.size(16.dp))
+                                            Icon(Icons.Filled.DeleteOutline, contentDescription = "鍒犻櫎", tint = Color.Red.copy(alpha = 0.6f), modifier = Modifier.size(16.dp))
                                         }
                                     }
                                 }
@@ -813,14 +888,14 @@ fun DraftCard(draft: DailyRecord, viewModel: DayZeroViewModel) {
                         modifier = Modifier.weight(1f),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = BrandGreen)
                     ) {
-                        Text("添加")
+                        Text("娣诲姞")
                     }
                     OutlinedButton(
                         onClick = { /* Demo */ },
                         modifier = Modifier.weight(1f),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = BrandGreen)
                     ) {
-                        Text("重估")
+                        Text("閲嶄及")
                     }
                 }
                 
@@ -834,7 +909,7 @@ fun DraftCard(draft: DailyRecord, viewModel: DayZeroViewModel) {
                     colors = ButtonDefaults.buttonColors(containerColor = BrandGreen),
                     shape = RoundedCornerShape(16.dp)
                 ) {
-                    Text("确认录入", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    Text("纭褰曞叆", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
