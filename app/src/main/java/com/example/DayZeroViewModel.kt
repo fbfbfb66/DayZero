@@ -15,12 +15,15 @@ import com.example.data.remote.SupabaseConfig
 import com.example.data.remote.stream.AssistantTurnStreamClient
 import com.example.data.sync.BackfillCoordinator
 import com.example.data.sync.BackfillStateStore
+import com.example.data.sync.InProcessSyncScheduler
 import com.example.data.sync.LocalFirstSyncCoordinator
 import com.example.data.sync.NoopRemoteSyncGateway
 import com.example.data.sync.SupabaseRemoteSyncGateway
 import com.example.data.sync.SyncCoordinator
 import com.example.data.sync.SyncHealthReporter
+import com.example.data.sync.SyncScheduler
 import com.example.data.sync.SyncStatusRepository
+import com.example.data.sync.SyncTriggerReason
 import com.example.data.telemetry.AiLatencyTraceLogger
 import com.example.data.repository.FakeAiAssistantRepository
 import com.example.data.repository.FakeAiDraftRepository
@@ -65,8 +68,21 @@ class DayZeroViewModel(
     private val syncCoordinator: SyncCoordinator? = null,
     private val backfillCoordinator: BackfillCoordinator? = null,
     private val syncHealthReporter: SyncHealthReporter? = null,
-    private val syncStatusRepository: SyncStatusRepository? = null
+    syncStatusRepository: SyncStatusRepository? = null,
+    syncScheduler: SyncScheduler? = null
 ) : ViewModel() {
+    private val effectiveSyncScheduler: SyncScheduler = syncScheduler ?: InProcessSyncScheduler(
+        scope = viewModelScope,
+        syncCoordinator = syncCoordinator,
+        backfillCoordinator = backfillCoordinator,
+        syncHealthReporter = syncHealthReporter
+    )
+    private val effectiveSyncStatusRepository: SyncStatusRepository? = syncStatusRepository ?: SyncStatusRepository(
+        syncCoordinator = syncCoordinator,
+        backfillCoordinator = backfillCoordinator,
+        syncHealthReporter = syncHealthReporter,
+        syncScheduler = effectiveSyncScheduler
+    )
 
     private val _uiState = MutableStateFlow(AppState(currentDate = LocalDate.now()))
     val uiState: StateFlow<AppState> = _uiState.asStateFlow()
@@ -540,7 +556,7 @@ class DayZeroViewModel(
     }
 
     fun runManualSync() {
-        val repository = syncStatusRepository ?: return
+        val repository = effectiveSyncStatusRepository ?: return
         viewModelScope.launch {
             _syncStatusUiState.update { it.copy(isRefreshing = true, actionText = null) }
             val snapshot = repository.runManualSync()
@@ -759,12 +775,12 @@ class DayZeroViewModel(
     }
 
     private fun triggerBackgroundSync(reason: String) {
-        val coordinator = syncCoordinator ?: return
+        val triggerReason = syncTriggerReason(reason)
+        val job = effectiveSyncScheduler.requestSync(triggerReason) ?: return
         viewModelScope.launch {
             try {
                 Log.d("DayZeroSync", "runOnce trigger reason=$reason")
-                coordinator.runOnce()
-                syncStatusRepository?.logSnapshot() ?: syncHealthReporter?.logSnapshot()
+                job.join()
                 refreshSyncHealthState(reason = "sync_$reason")
             } catch (e: Exception) {
                 Log.e("DayZeroSync", "runOnce trigger error reason=$reason", e)
@@ -773,23 +789,13 @@ class DayZeroViewModel(
     }
 
     private fun triggerInitialBackfill(reason: String, delayMs: Long = 0L) {
-        val coordinator = backfillCoordinator ?: return
         viewModelScope.launch {
             try {
                 if (delayMs > 0L) delay(delayMs)
                 Log.d("DayZeroBackfill", "initial trigger reason=$reason")
-                val stats = coordinator.enqueueInitialBackfillIfNeeded()
-                Log.d(
-                    "DayZeroBackfill",
-                    "initial result scannedDailyRecords=${stats.scannedDailyRecordCount} " +
-                        "enqueued=${stats.enqueuedCount} skippedQueued=${stats.skippedAlreadyQueuedCount} " +
-                        "skippedSynced=${stats.skippedAlreadySyncedCount} errors=${stats.errorCount}"
-                )
-                syncStatusRepository?.logSnapshot() ?: syncHealthReporter?.logSnapshot()
+                val job = effectiveSyncScheduler.requestSyncAndBackfill(syncTriggerReason(reason))
+                job?.join()
                 refreshSyncHealthState(reason = "backfill_$reason")
-                if (stats.enqueuedCount > 0) {
-                    triggerBackgroundSync("backfill_enqueued")
-                }
             } catch (e: Exception) {
                 Log.e("DayZeroBackfill", "initial trigger error reason=$reason", e)
             }
@@ -797,7 +803,7 @@ class DayZeroViewModel(
     }
 
     private suspend fun refreshSyncHealthState(reason: String) {
-        val snapshot = syncStatusRepository?.snapshot()
+        val snapshot = effectiveSyncStatusRepository?.snapshot()
         if (snapshot == null) {
             Log.d("DayZeroHealth", "snapshot skipped reason=$reason")
             return
@@ -815,6 +821,15 @@ class DayZeroViewModel(
                 "retryable=${snapshot.retryableFailureCount} fatal=${snapshot.fatalFailureCount} " +
                 "hasRemoteIdentity=${snapshot.hasRemoteIdentity} isHealthy=${snapshot.isHealthy}"
         )
+    }
+
+    private fun syncTriggerReason(reason: String): SyncTriggerReason {
+        return when (reason) {
+            "app_start" -> SyncTriggerReason.APP_START
+            "food_confirm_enqueue" -> SyncTriggerReason.RECORD_CONFIRMED
+            "backfill_enqueued" -> SyncTriggerReason.BACKFILL_COMPLETED
+            else -> SyncTriggerReason.RETRY
+        }
     }
 
     companion object {
@@ -871,12 +886,6 @@ class DayZeroViewModel(
                     dailyRecordDao = database.dailyRecordDao(),
                     remoteSyncEnabledProvider = { SupabaseConfig.isConfigured() }
                 )
-                val syncStatusRepository = SyncStatusRepository(
-                    syncCoordinator = syncCoordinator,
-                    backfillCoordinator = backfillCoordinator,
-                    syncHealthReporter = syncHealthReporter
-                )
-
                 val aiDraftRepository = if (USE_REMOTE_AI) {
                     RemoteAiDraftRepository(NetworkModule.aiDraftApiService, database.aiChatMessageDao())
                 } else {
@@ -910,8 +919,7 @@ class DayZeroViewModel(
                     latencyLogger = latencyLogger,
                     syncCoordinator = syncCoordinator,
                     backfillCoordinator = backfillCoordinator,
-                    syncHealthReporter = syncHealthReporter,
-                    syncStatusRepository = syncStatusRepository
+                    syncHealthReporter = syncHealthReporter
                 ) as T
             }
         }

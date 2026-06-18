@@ -16,7 +16,7 @@ import com.example.data.local.entity.SyncQueueEntity
 
 @Database(
     entities = [DailyRecordEntity::class, AiChatMessageEntity::class, SyncQueueEntity::class],
-    version = 8,
+    version = 9,
     exportSchema = false
 )
 abstract class DayZeroDatabase : RoomDatabase() {
@@ -92,6 +92,21 @@ abstract class DayZeroDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                Log.d("DayZeroSync", "room migration start 8->9")
+                try {
+                    db.execSQL("ALTER TABLE sync_queue ADD COLUMN lastAttemptAt INTEGER NOT NULL DEFAULT 0")
+                    db.execSQL("ALTER TABLE sync_queue ADD COLUMN lastStatusReason TEXT")
+                    db.execSQL("CREATE INDEX IF NOT EXISTS index_sync_queue_status_nextAttemptAt ON sync_queue(status, nextAttemptAt)")
+                    Log.d("DayZeroSync", "room migration success 8->9")
+                } catch (e: Exception) {
+                    Log.e("DayZeroSync", "room migration error 8->9", e)
+                    throw e
+                }
+            }
+        }
+
         fun getDatabase(context: Context): DayZeroDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -99,7 +114,7 @@ abstract class DayZeroDatabase : RoomDatabase() {
                     DayZeroDatabase::class.java,
                     "dayzero_database"
                 )
-                .addMigrations(MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
+                .addMigrations(MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
                 .build()
                 INSTANCE = instance
                 instance

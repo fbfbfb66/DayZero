@@ -5,7 +5,8 @@ import android.util.Log
 class SyncStatusRepository(
     private val syncCoordinator: SyncCoordinator?,
     private val backfillCoordinator: BackfillCoordinator?,
-    private val syncHealthReporter: SyncHealthReporter?
+    private val syncHealthReporter: SyncHealthReporter?,
+    private val syncScheduler: SyncScheduler? = null
 ) {
     suspend fun snapshot(): SyncHealthSnapshot? {
         return runCatching {
@@ -26,8 +27,13 @@ class SyncStatusRepository(
     suspend fun runManualSync(): SyncHealthSnapshot? {
         Log.d("DayZeroSync", "manual sync start")
         return try {
-            backfillCoordinator?.enqueueMissingRecords()
-            syncCoordinator?.runOnce()
+            val job = syncScheduler?.requestSyncAndBackfill(SyncTriggerReason.MANUAL)
+            if (job != null) {
+                job.join()
+            } else {
+                backfillCoordinator?.enqueueMissingRecords()
+                syncCoordinator?.runOnce()
+            }
             val snapshot = snapshot()
             Log.d("DayZeroSync", "manual sync finish")
             snapshot

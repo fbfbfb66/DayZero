@@ -31,26 +31,63 @@ interface SyncQueueDao {
         LIMIT :limit
         """
     )
-    suspend fun getPending(now: Long = System.currentTimeMillis(), limit: Int = 50): List<SyncQueueEntity>
+    suspend fun getRunnableTasks(now: Long = System.currentTimeMillis(), limit: Int = 50): List<SyncQueueEntity>
 
-    @Query("UPDATE sync_queue SET status = 'PROCESSING', updatedAt = :updatedAt WHERE id = :id")
-    suspend fun markProcessing(id: String, updatedAt: Long = System.currentTimeMillis())
+    suspend fun getPending(now: Long = System.currentTimeMillis(), limit: Int = 50): List<SyncQueueEntity> {
+        return getRunnableTasks(now, limit)
+    }
 
-    @Query("UPDATE sync_queue SET status = 'DONE', updatedAt = :updatedAt, nextAttemptAt = 0 WHERE id = :id")
+    @Query(
+        """
+        UPDATE sync_queue
+        SET status = 'PROCESSING',
+            updatedAt = :now,
+            lastAttemptAt = :now,
+            lastStatusReason = :reason
+        WHERE id = :id
+          AND status IN ('PENDING', 'FAILED_RETRYABLE', 'WAITING_FOR_AUTH')
+          AND nextAttemptAt <= :now
+        """
+    )
+    suspend fun markProcessing(
+        id: String,
+        now: Long = System.currentTimeMillis(),
+        reason: String? = null
+    ): Int
+
+    @Query("UPDATE sync_queue SET status = 'DONE', updatedAt = :updatedAt, nextAttemptAt = 0, lastStatusReason = NULL WHERE id = :id")
     suspend fun markDone(id: String, updatedAt: Long = System.currentTimeMillis())
 
-    @Query("UPDATE sync_queue SET status = 'FAILED_RETRYABLE', retryCount = retryCount + 1, lastError = :error, updatedAt = :updatedAt, nextAttemptAt = :nextAttemptAt WHERE id = :id")
+    @Query(
+        """
+        UPDATE sync_queue
+        SET status = 'FAILED_RETRYABLE',
+            retryCount = :retryCount,
+            lastError = :error,
+            lastStatusReason = :reason,
+            updatedAt = :updatedAt,
+            nextAttemptAt = :nextAttemptAt
+        WHERE id = :id
+        """
+    )
     suspend fun markRetryableFailure(
         id: String,
         error: String?,
+        retryCount: Int,
         updatedAt: Long = System.currentTimeMillis(),
-        nextAttemptAt: Long = updatedAt + 60_000L
+        nextAttemptAt: Long,
+        reason: String? = null
     )
 
-    @Query("UPDATE sync_queue SET status = 'FAILED_FATAL', lastError = :error, updatedAt = :updatedAt, nextAttemptAt = 0 WHERE id = :id")
-    suspend fun markFatalFailure(id: String, error: String?, updatedAt: Long = System.currentTimeMillis())
+    @Query("UPDATE sync_queue SET status = 'FAILED_FATAL', lastError = :error, lastStatusReason = :reason, updatedAt = :updatedAt, nextAttemptAt = 0 WHERE id = :id")
+    suspend fun markFatalFailure(
+        id: String,
+        error: String?,
+        updatedAt: Long = System.currentTimeMillis(),
+        reason: String? = null
+    )
 
-    @Query("UPDATE sync_queue SET status = 'WAITING_FOR_AUTH', lastError = :reason, updatedAt = :updatedAt, nextAttemptAt = :nextAttemptAt WHERE id = :id")
+    @Query("UPDATE sync_queue SET status = 'WAITING_FOR_AUTH', lastError = :reason, lastStatusReason = :reason, updatedAt = :updatedAt, nextAttemptAt = :nextAttemptAt WHERE id = :id")
     suspend fun markWaitingForAuth(
         id: String,
         reason: String?,
@@ -63,6 +100,18 @@ interface SyncQueueDao {
 
     @Query("SELECT COUNT(*) FROM sync_queue WHERE status IN ('PENDING', 'FAILED_RETRYABLE', 'WAITING_FOR_AUTH')")
     suspend fun getPendingCount(): Int
+
+    @Query("SELECT COUNT(*) FROM sync_queue WHERE status = 'PENDING'")
+    suspend fun countPending(): Int
+
+    @Query("SELECT COUNT(*) FROM sync_queue WHERE status = 'FAILED_RETRYABLE'")
+    suspend fun countRetryable(): Int
+
+    @Query("SELECT COUNT(*) FROM sync_queue WHERE status = 'FAILED_FATAL'")
+    suspend fun countFatal(): Int
+
+    @Query("SELECT COUNT(*) FROM sync_queue WHERE status = 'WAITING_FOR_AUTH'")
+    suspend fun countWaitingForAuth(): Int
 
     @Query(
         """
@@ -87,6 +136,30 @@ interface SyncQueueDao {
 
     @Query("SELECT COUNT(*) FROM sync_queue WHERE status = :status")
     suspend fun countByStatus(status: String): Int
+
+    @Query("SELECT * FROM sync_queue WHERE status = :status ORDER BY createdAt ASC")
+    suspend fun getTasksByStatus(status: String): List<SyncQueueEntity>
+
+    @Query(
+        """
+        UPDATE sync_queue
+        SET status = 'FAILED_RETRYABLE',
+            retryCount = retryCount + 1,
+            lastError = 'stuck_processing_reset',
+            lastStatusReason = 'stuck_processing_reset',
+            updatedAt = :now,
+            nextAttemptAt = :now
+        WHERE status = 'PROCESSING'
+          AND updatedAt < :beforeTimestamp
+        """
+    )
+    suspend fun resetStuckProcessingTasks(
+        beforeTimestamp: Long,
+        now: Long = System.currentTimeMillis()
+    ): Int
+
+    @Query("DELETE FROM sync_queue WHERE status = 'DONE' AND updatedAt < :beforeTimestamp")
+    suspend fun deleteDoneOlderThan(beforeTimestamp: Long): Int
 
     @Query("SELECT MAX(updatedAt) FROM sync_queue")
     suspend fun getLastSyncAttemptAt(): Long?

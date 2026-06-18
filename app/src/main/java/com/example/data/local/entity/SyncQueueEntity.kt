@@ -8,7 +8,10 @@ import java.util.UUID
 
 @Entity(
     tableName = "sync_queue",
-    indices = [Index(value = ["status", "createdAt"])]
+    indices = [
+        Index(value = ["status", "createdAt"]),
+        Index(value = ["status", "nextAttemptAt"])
+    ]
 )
 data class SyncQueueEntity(
     @PrimaryKey val id: String = UUID.randomUUID().toString(),
@@ -24,5 +27,8 @@ data class SyncQueueEntity(
     @ColumnInfo(defaultValue = "'local_uninitialized'")
     val ownerLocalId: String = "local_uninitialized",
     @ColumnInfo(defaultValue = "0")
-    val nextAttemptAt: Long = 0L
+    val nextAttemptAt: Long = 0L,
+    @ColumnInfo(defaultValue = "0")
+    val lastAttemptAt: Long = 0L,
+    val lastStatusReason: String? = null
 )
