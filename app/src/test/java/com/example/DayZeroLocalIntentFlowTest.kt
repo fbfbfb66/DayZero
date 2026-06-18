@@ -1,6 +1,8 @@
 package com.example
 
+import androidx.test.core.app.ApplicationProvider
 import com.example.data.repository.FakeAiDraftRepository
+import com.example.data.telemetry.AiLatencyTraceLogger
 import com.example.domain.model.DailyRecord
 import com.example.domain.model.MealType
 import com.example.domain.model.RecordStatus
@@ -83,7 +85,8 @@ class DayZeroLocalIntentFlowTest {
                 override suspend fun sendMessage(request: AiAssistantRequest): AiAssistantTurn {
                     error("network down")
                 }
-            }
+            },
+            latencyLogger = createLatencyLogger()
         )
 
         viewModel.sendAiMessage("Weight input: 94kg today")
@@ -111,8 +114,13 @@ class DayZeroLocalIntentFlowTest {
                         suggestedReplies = emptyList()
                     )
                 }
-            }
+            },
+            latencyLogger = createLatencyLogger()
         )
+    }
+
+    private fun createLatencyLogger(): AiLatencyTraceLogger {
+        return AiLatencyTraceLogger(ApplicationProvider.getApplicationContext())
     }
 
     private suspend fun TestScope.sendAndAssertPureChat(viewModel: DayZeroViewModel, text: String) {

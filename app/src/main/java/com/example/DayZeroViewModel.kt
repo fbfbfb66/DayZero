@@ -5,10 +5,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.CreationExtras
+import com.example.data.identity.LocalIdentityProvider
 import com.example.data.local.database.DayZeroDatabase
 import com.example.data.remote.NetworkModule
 import com.example.data.remote.PromptCacheKeyProvider
 import com.example.data.remote.stream.AssistantTurnStreamClient
+import com.example.data.sync.LocalFirstSyncCoordinator
+import com.example.data.sync.SyncCoordinator
 import com.example.data.telemetry.AiLatencyTraceLogger
 import com.example.data.repository.FakeAiAssistantRepository
 import com.example.data.repository.FakeAiDraftRepository
@@ -47,7 +50,8 @@ class DayZeroViewModel(
     private val recordRepository: RecordRepository,
     private val aiDraftRepository: AiDraftRepository,
     private val aiAssistantRepository: AiAssistantRepository,
-    private val latencyLogger: AiLatencyTraceLogger
+    private val latencyLogger: AiLatencyTraceLogger,
+    private val syncCoordinator: SyncCoordinator? = null
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(AppState(currentDate = LocalDate.now()))
@@ -59,6 +63,7 @@ class DayZeroViewModel(
     init {
         observeRecords()
         observeChatMessages()
+        triggerBackgroundSync("app_start")
     }
 
     private fun observeRecords() {
@@ -598,6 +603,7 @@ class DayZeroViewModel(
                     )
                     latencyLogger.mark(traceId, "room_daily_record_upsert_start")
                     recordRepository.upsertRecord(updatedRecord)
+                    triggerBackgroundSync("food_confirm_enqueue")
                     latencyLogger.mark(
                         traceId,
                         "room_daily_record_upsert_complete",
@@ -702,6 +708,18 @@ class DayZeroViewModel(
         return "ai_reply_with_card:${cards.joinToString(",") { it.type.name }}"
     }
 
+    private fun triggerBackgroundSync(reason: String) {
+        val coordinator = syncCoordinator ?: return
+        viewModelScope.launch {
+            try {
+                Log.d("DayZeroSync", "runOnce trigger reason=$reason")
+                coordinator.runOnce()
+            } catch (e: Exception) {
+                Log.e("DayZeroSync", "runOnce trigger error reason=$reason", e)
+            }
+        }
+    }
+
     companion object {
         private const val USE_REMOTE_AI = true
 
@@ -714,6 +732,11 @@ class DayZeroViewModel(
                 val application = checkNotNull(extras[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY])
                 val database = DayZeroDatabase.getDatabase(application)
                 val latencyLogger = AiLatencyTraceLogger(application)
+                val identityProvider = LocalIdentityProvider(application)
+                val syncCoordinator = LocalFirstSyncCoordinator(
+                    syncQueueDao = database.syncQueueDao(),
+                    identityProvider = identityProvider
+                )
 
                 val aiDraftRepository = if (USE_REMOTE_AI) {
                     RemoteAiDraftRepository(NetworkModule.aiDraftApiService, database.aiChatMessageDao())
@@ -738,10 +761,15 @@ class DayZeroViewModel(
                 }
 
                 return DayZeroViewModel(
-                    recordRepository = RoomRecordRepository(database.dailyRecordDao()),
+                    recordRepository = RoomRecordRepository(
+                        dao = database.dailyRecordDao(),
+                        syncQueueDao = database.syncQueueDao(),
+                        identityProvider = identityProvider
+                    ),
                     aiDraftRepository = aiDraftRepository,
                     aiAssistantRepository = aiAssistantRepository,
-                    latencyLogger = latencyLogger
+                    latencyLogger = latencyLogger,
+                    syncCoordinator = syncCoordinator
                 ) as T
             }
         }

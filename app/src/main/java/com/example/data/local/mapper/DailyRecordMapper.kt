@@ -32,7 +32,7 @@ class DailyRecordMapper {
         )
     }
 
-    fun toEntity(domain: DailyRecord): DailyRecordEntity {
+    fun toEntity(domain: DailyRecord, ownerLocalId: String = "local_uninitialized"): DailyRecordEntity {
         val sortedMeals = com.example.domain.model.MealSortPolicy.sortMeals(domain.meals)
         val mealsJson = adapter.toJson(sortedMeals)
         val now = System.currentTimeMillis()
@@ -44,7 +44,11 @@ class DailyRecordMapper {
             weightKg = domain.weightKg,
             aiSummary = domain.aiSummary,
             createdAt = now, // In a real app, we might want to preserve this
-            updatedAt = now
+            updatedAt = now,
+            clientId = domain.id,
+            syncStatus = "PENDING",
+            syncVersion = now,
+            ownerLocalId = ownerLocalId
         )
     }
 }

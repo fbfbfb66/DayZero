@@ -1,8 +1,9 @@
 package com.example.ui.screens
 
-import android.util.Log
 import android.widget.Toast
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.RepeatMode
@@ -32,6 +33,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -43,6 +45,18 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.imeNestedScroll
+import androidx.compose.animation.animateColor
+import androidx.compose.animation.core.updateTransition
+import androidx.compose.animation.core.animateDp
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.foundation.layout.imeAnimationTarget
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.unit.coerceAtLeast
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -95,7 +109,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun AiRecordScreen(viewModel: DayZeroViewModel) {
     val uiState by viewModel.uiState.collectAsState()
@@ -120,8 +134,8 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
             state = listState,
             modifier = Modifier
                 .fillMaxSize()
-                .imePadding(),
-            contentPadding = PaddingValues(start = 16.dp, top = 110.dp, end = 16.dp, bottom = 180.dp),
+                .imeNestedScroll(),
+            contentPadding = PaddingValues(start = 16.dp, top = 110.dp, end = 16.dp, bottom = 120.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             if (uiState.chatMessages.isEmpty()) {
@@ -257,7 +271,9 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
         }
 
         Surface(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth(),
             color = WarmBackground.copy(alpha = 0.96f),
             shadowElevation = 0.dp
         ) {
@@ -298,80 +314,154 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
                 .fillMaxWidth()
                 .imePadding()
         ) {
-            Text(
-                text = "assistant-turn-v2 pure chat entrypoint",
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 4.dp),
-                textAlign = TextAlign.Center,
-                color = TextTertiary.copy(alpha = 0.7f),
-                fontSize = 10.sp
-            )
 
-            Surface(
+            var isFocused by remember { mutableStateOf(false) }
+            val imeTargetBottom = WindowInsets.imeAnimationTarget.getBottom(LocalDensity.current)
+            val isSeparated = isFocused || (imeTargetBottom > 0)
+
+            val focusManager = LocalFocusManager.current
+            LaunchedEffect(imeTargetBottom) {
+                if (imeTargetBottom == 0 && isFocused) {
+                    focusManager.clearFocus()
+                }
+            }
+
+            val transition = updateTransition(targetState = isSeparated, label = "InputState")
+
+            val plusBgAlpha by transition.animateFloat(
+                transitionSpec = { spring(stiffness = Spring.StiffnessMedium, dampingRatio = 1f) },
+                label = "plusBgAlpha"
+            ) { separated -> if (separated) 1f else 0f }
+
+            val plusBorderColor by transition.animateColor(
+                transitionSpec = { spring(stiffness = Spring.StiffnessMedium, dampingRatio = 1f) },
+                label = "plusBorderColor"
+            ) { separated -> if (separated) BorderNormal.copy(alpha = 0.5f) else Color.Transparent }
+
+            val plusOffset by transition.animateDp(
+                transitionSpec = { spring(stiffness = 600f, dampingRatio = 0.6f) },
+                label = "plusOffset"
+            ) { separated -> if (separated) 0.dp else 4.dp }
+
+            val plusScale by transition.animateFloat(
+                transitionSpec = { spring(stiffness = 600f, dampingRatio = 0.6f) },
+                label = "plusScale"
+            ) { separated -> if (separated) 1f else 0.9f }
+
+            val textFieldPaddingStart by transition.animateDp(
+                transitionSpec = { spring(stiffness = 600f, dampingRatio = 0.6f) },
+                label = "textFieldPaddingStart"
+            ) { separated -> if (separated) 56.dp else 0.dp }
+
+            val innerGap by transition.animateDp(
+                transitionSpec = { spring(stiffness = 600f, dampingRatio = 0.6f) },
+                label = "innerGap"
+            ) { separated -> if (separated) 0.dp else 48.dp }
+
+            Box(
                 modifier = Modifier
                     .padding(horizontal = 12.dp)
                     .fillMaxWidth()
-                    .animateContentSize(),
-                shape = RoundedCornerShape(28.dp),
-                color = Color.White,
-                border = androidx.compose.foundation.BorderStroke(1.dp, BorderNormal.copy(alpha = 0.5f)),
-                shadowElevation = 0.dp
             ) {
-                Row(
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .offset(x = plusOffset)
+                        .padding(bottom = 6.dp)
+                        .size(44.dp)
+                        .graphicsLayer {
+                            scaleX = plusScale
+                            scaleY = plusScale
+                        }
+                        .background(
+                            color = Color.White.copy(alpha = plusBgAlpha),
+                            shape = CircleShape
+                        )
+                        .border(1.dp, plusBorderColor, CircleShape)
+                )
+
+                Surface(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 4.dp, vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        .padding(start = textFieldPaddingStart.coerceAtLeast(0.dp))
+                        .heightIn(max = 220.dp)
+                        .animateContentSize(),
+                    shape = RoundedCornerShape(26.dp),
+                    color = Color.White,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, BorderNormal.copy(alpha = 0.5f)),
+                    shadowElevation = 0.dp
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = innerGap.coerceAtLeast(0.dp), end = 4.dp, top = 2.dp, bottom = 2.dp),
+                        verticalAlignment = Alignment.Bottom
+                    ) {
+                        OutlinedTextField(
+                            value = inputText,
+                            onValueChange = { inputText = it },
+                            modifier = Modifier
+                                .weight(1f)
+                                .onFocusChanged { isFocused = it.isFocused },
+                            placeholder = { Text("Chat with DayZero...", color = TextSecondary) },
+                            enabled = !uiState.isAnalyzing,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                unfocusedBorderColor = Color.Transparent,
+                                focusedBorderColor = Color.Transparent,
+                                unfocusedContainerColor = Color.Transparent,
+                                focusedContainerColor = Color.Transparent,
+                                disabledBorderColor = Color.Transparent,
+                                disabledContainerColor = Color.Transparent
+                            )
+                        )
+
+                        Box(
+                            modifier = Modifier
+                                .padding(end = 2.dp, bottom = 6.dp)
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .background(if (inputText.isNotBlank()) BrandGreen else BrandGreen.copy(alpha = 0.3f))
+                                .clickable(enabled = inputText.isNotBlank() && !uiState.isAnalyzing) {
+                                    viewModel.sendAiMessage(inputText)
+                                    inputText = ""
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (uiState.isAnalyzing) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    strokeWidth = 2.dp,
+                                    color = Color.White
+                                )
+                            } else {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.Send,
+                                    contentDescription = "Send",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .offset(x = plusOffset)
+                        .padding(bottom = 6.dp)
+                        .size(44.dp)
+                        .graphicsLayer {
+                            scaleX = plusScale
+                            scaleY = plusScale
+                        },
+                    contentAlignment = Alignment.Center
                 ) {
                     IconButton(
                         onClick = {},
                         enabled = false
                     ) {
                         Icon(Icons.Filled.Add, contentDescription = "More", tint = TextSecondary.copy(alpha = 0.5f))
-                    }
-
-                    OutlinedTextField(
-                        value = inputText,
-                        onValueChange = { inputText = it },
-                        modifier = Modifier.weight(1f),
-                        placeholder = { Text("Chat with DayZero...", color = TextSecondary) },
-                        enabled = !uiState.isAnalyzing,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            unfocusedBorderColor = Color.Transparent,
-                            focusedBorderColor = Color.Transparent,
-                            unfocusedContainerColor = Color.Transparent,
-                            focusedContainerColor = Color.Transparent
-                        ),
-                        maxLines = 4
-                    )
-
-                    Box(
-                        modifier = Modifier
-                            .padding(end = 6.dp)
-                            .size(40.dp)
-                            .clip(CircleShape)
-                            .background(if (inputText.isNotBlank()) BrandGreen else BrandGreen.copy(alpha = 0.3f))
-                            .clickable(enabled = inputText.isNotBlank() && !uiState.isAnalyzing) {
-                                viewModel.sendAiMessage(inputText)
-                                inputText = ""
-                            },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        if (uiState.isAnalyzing) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
-                                strokeWidth = 2.dp,
-                                color = Color.White
-                            )
-                        } else {
-                            Icon(
-                                Icons.AutoMirrored.Filled.Send,
-                                contentDescription = "Send",
-                                tint = Color.White,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
                     }
                 }
             }
