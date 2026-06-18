@@ -87,26 +87,37 @@ class PullCoordinator(
         val sinceFood = if (effectiveMode == PullMode.INITIAL_RESTORE) null else state.foodEntriesCursorUpdatedAt
         val sinceWeight = if (effectiveMode == PullMode.INITIAL_RESTORE) null else state.weightRecordsCursorUpdatedAt
 
-        return try {
-            val dailyRecords = pullAll("daily_records", sinceDaily) { since, limit ->
+        val dailyResult = pullAll("daily_records", sinceDaily) { since, limit ->
                 remotePullGateway.pullDailyRecords(since, limit)
             }
-            val meals = pullAll("meals", sinceMeals) { since, limit ->
+        val mealsResult = pullAll("meals", sinceMeals) { since, limit ->
                 remotePullGateway.pullMeals(since, limit)
             }
-            val foods = pullAll("food_entries", sinceFood) { since, limit ->
+        val foodsResult = pullAll("food_entries", sinceFood) { since, limit ->
                 remotePullGateway.pullFoodEntries(since, limit)
             }
-            val weights = pullAll("weight_records", sinceWeight) { since, limit ->
+        val weightsResult = pullAll("weight_records", sinceWeight) { since, limit ->
                 remotePullGateway.pullWeightRecords(since, limit)
             }
 
-            var stats = PullStats(
-                pulledDailyRecordCount = dailyRecords.size,
-                pulledMealCount = meals.size,
-                pulledFoodEntryCount = foods.size,
-                pulledWeightRecordCount = weights.size
-            )
+        var stats = PullStats(
+            pulledDailyRecordCount = dailyResult.items.size,
+            pulledMealCount = mealsResult.items.size,
+            pulledFoodEntryCount = foodsResult.items.size,
+            pulledWeightRecordCount = weightsResult.items.size,
+            partialFailureCount = listOf(dailyResult, mealsResult, foodsResult, weightsResult).count { !it.success }
+        )
+        val firstFailure = listOf(dailyResult, mealsResult, foodsResult, weightsResult)
+            .firstOrNull { !it.success }
+            ?.error
+        val hasFatalFailure = listOf(dailyResult, mealsResult, foodsResult, weightsResult).any { it.fatal }
+        val childTablesHealthy = mealsResult.success && foodsResult.success && weightsResult.success
+        val dailyRecords = if (dailyResult.success && childTablesHealthy) dailyResult.items else emptyList()
+        val meals = if (childTablesHealthy) mealsResult.items else emptyList()
+        val foods = if (childTablesHealthy) foodsResult.items else emptyList()
+        val weights = if (childTablesHealthy) weightsResult.items else emptyList()
+
+        return try {
             val mealsByRecord = meals.filter { it.deletedAt == null }.groupBy { it.dailyRecordClientId }
             val foodsByMeal = foods.filter { it.deletedAt == null }.groupBy { it.mealClientId }
             val weightsByRecord = weights.filter { it.deletedAt == null && !it.dailyRecordClientId.isNullOrBlank() }
@@ -127,7 +138,7 @@ class PullCoordinator(
                 val knownDailyClientIds = dailyRecords.map { it.clientId }.toSet()
                 val knownMealClientIds = meals.map { it.clientId }.toSet()
                 val skippedChildren = meals.count { it.dailyRecordClientId !in knownDailyClientIds } +
-                    foods.count { it.dailyRecordClientId !in knownDailyClientIds && it.mealClientId !in knownMealClientIds }
+                    foods.count { it.dailyRecordClientId !in knownDailyClientIds || it.mealClientId !in knownMealClientIds }
                 if (skippedChildren > 0) {
                     Log.d("DayZeroPull", "skipped missing parent count=$skippedChildren")
                     stats = stats.copy(
@@ -138,12 +149,20 @@ class PullCoordinator(
             }
 
             stateStore.updateCursors(
-                dailyRecordsCursorUpdatedAt = maxOfCursor(state.dailyRecordsCursorUpdatedAt, dailyRecords.maxOfOrNull { it.updatedAt }),
-                mealsCursorUpdatedAt = maxOfCursor(state.mealsCursorUpdatedAt, meals.maxOfOrNull { it.updatedAt }),
-                foodEntriesCursorUpdatedAt = maxOfCursor(state.foodEntriesCursorUpdatedAt, foods.maxOfOrNull { it.updatedAt }),
-                weightRecordsCursorUpdatedAt = maxOfCursor(state.weightRecordsCursorUpdatedAt, weights.maxOfOrNull { it.updatedAt })
+                dailyRecordsCursorUpdatedAt = if (dailyResult.success && childTablesHealthy) maxOfCursor(state.dailyRecordsCursorUpdatedAt, dailyResult.cursorUpdatedAt) else state.dailyRecordsCursorUpdatedAt,
+                mealsCursorUpdatedAt = if (mealsResult.success && childTablesHealthy) maxOfCursor(state.mealsCursorUpdatedAt, mealsResult.cursorUpdatedAt) else state.mealsCursorUpdatedAt,
+                foodEntriesCursorUpdatedAt = if (foodsResult.success && childTablesHealthy) maxOfCursor(state.foodEntriesCursorUpdatedAt, foodsResult.cursorUpdatedAt) else state.foodEntriesCursorUpdatedAt,
+                weightRecordsCursorUpdatedAt = if (weightsResult.success && childTablesHealthy) maxOfCursor(state.weightRecordsCursorUpdatedAt, weightsResult.cursorUpdatedAt) else state.weightRecordsCursorUpdatedAt
             )
-            stateStore.markCompleted(System.currentTimeMillis(), stats)
+            if (stats.partialFailureCount > 0) {
+                if (hasFatalFailure) {
+                    stateStore.markFatalFailure(firstFailure ?: "partial_pull_fatal", stats = stats)
+                } else {
+                    stateStore.markRetryableFailure(firstFailure ?: "partial_pull_failure", stats = stats)
+                }
+            } else {
+                stateStore.markCompleted(System.currentTimeMillis(), stats)
+            }
             Log.d("DayZeroPull", "run success applied=${stats.appliedCount} skipped=${stats.skippedCount} conflict=${stats.conflictCount}")
             stats
         } catch (error: PullRunException) {
@@ -171,7 +190,10 @@ class PullCoordinator(
         val local = dailyRecordDao.getRecordByClientIdIncludingDeleted(remote.clientId)
         if (local != null && isLocalDirty(local, ownerLocalId)) {
             Log.d("DayZeroPull", "skip dirty local clientId=${remote.clientId}")
-            return currentStats.copy(conflictCount = currentStats.conflictCount + 1)
+            return currentStats.copy(
+                conflictCount = currentStats.conflictCount + 1,
+                skippedDirtyLocalCount = currentStats.skippedDirtyLocalCount + 1
+            )
         }
 
         if (remote.deletedAt != null) {
@@ -265,27 +287,46 @@ class PullCoordinator(
         label: String,
         initialSince: Long?,
         pullPage: suspend (Long?, Int) -> RemotePullResult<T>
-    ): List<T> {
+    ): TablePullResult<T> {
         val items = mutableListOf<T>()
         var since = initialSince
         var page = 0
+        var cursor: Long? = null
         while (page < MAX_PAGES_PER_RUN) {
             when (val result = pullPage(since, batchLimit)) {
                 is RemotePullResult.Success -> {
                     items += result.items
+                    cursor = maxOfCursor(cursor, result.items.maxRemoteUpdatedAt())
                     if (!result.hasMore || result.items.isEmpty()) break
                     val nextCursor = result.items.maxRemoteUpdatedAt()
-                    if (nextCursor == null || nextCursor == since) break
+                    if (result.items.hasSingleUpdatedAt()) {
+                        Log.e("DayZeroPull", "partial failure same updated_at cursor risk table=$label")
+                        return TablePullResult(
+                            items = items,
+                            cursorUpdatedAt = initialSince,
+                            success = false,
+                            error = "same_updated_at_cursor_risk:$label"
+                        )
+                    }
+                    if (nextCursor == null || nextCursor == since) {
+                        Log.e("DayZeroPull", "partial failure same updated_at cursor risk table=$label")
+                        return TablePullResult(
+                            items = items,
+                            cursorUpdatedAt = initialSince,
+                            success = false,
+                            error = "same_updated_at_cursor_risk:$label"
+                        )
+                    }
                     since = nextCursor
                     page += 1
                 }
 
-                is RemotePullResult.RetryableFailure -> throw PullRunException("pull_retryable:$label:${result.message}", fatal = false)
-                is RemotePullResult.FatalFailure -> throw PullRunException("pull_fatal:$label:${result.message}", fatal = true)
-                is RemotePullResult.Skipped -> throw PullRunException("pull_skipped:$label:${result.reason}", fatal = false)
+                is RemotePullResult.RetryableFailure -> return TablePullResult(items, cursor, success = false, error = "pull_retryable:$label:${result.message}")
+                is RemotePullResult.FatalFailure -> return TablePullResult(items, cursor, success = false, fatal = true, error = "pull_fatal:$label:${result.message}")
+                is RemotePullResult.Skipped -> return TablePullResult(items, cursor, success = false, error = "pull_skipped:$label:${result.reason}")
             }
         }
-        return items
+        return TablePullResult(items = items, cursorUpdatedAt = cursor, success = true)
     }
 
     private fun <T> List<T>.maxRemoteUpdatedAt(): Long? {
@@ -300,11 +341,32 @@ class PullCoordinator(
         }.maxOrNull()
     }
 
+    private fun <T> List<T>.hasSingleUpdatedAt(): Boolean {
+        val values = mapNotNull {
+            when (it) {
+                is DailyRecordRemoteDto -> it.updatedAt
+                is MealRemoteDto -> it.updatedAt
+                is FoodEntryRemoteDto -> it.updatedAt
+                is WeightRecordRemoteDto -> it.updatedAt
+                else -> null
+            }
+        }.distinct()
+        return size > 1 && values.size == 1
+    }
+
     private fun maxOfCursor(current: Long?, next: Long?): Long? {
         return listOfNotNull(current, next).maxOrNull()
     }
 
     private class PullRunException(message: String, val fatal: Boolean) : Exception(message)
+
+    private data class TablePullResult<T>(
+        val items: List<T>,
+        val cursorUpdatedAt: Long?,
+        val success: Boolean,
+        val fatal: Boolean = false,
+        val error: String? = null
+    )
 
     private companion object {
         private const val DEFAULT_BATCH_LIMIT = 100

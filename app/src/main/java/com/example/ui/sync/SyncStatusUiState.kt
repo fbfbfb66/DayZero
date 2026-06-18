@@ -1,6 +1,7 @@
 package com.example.ui.sync
 
 import com.example.data.sync.BackfillStatus
+import com.example.data.sync.PullStatus
 import com.example.data.sync.SyncHealthSnapshot
 import java.util.concurrent.TimeUnit
 
@@ -23,6 +24,7 @@ data class SyncStatusUiState(
     val pendingText: String? = null,
     val showManualSync: Boolean = false,
     val showManualRestore: Boolean = false,
+    val manualRestoreText: String = "检查云端更新",
     val showWarning: Boolean = false,
     val showDanger: Boolean = false,
     val requiresDangerousOperationWarning: Boolean = false,
@@ -45,8 +47,6 @@ object SyncStatusUiStateMapper {
                 message = "云端同步未启用，本地记录不受影响",
                 lastSyncedText = "最近同步：从未同步",
                 pendingText = pendingText,
-                showManualSync = false,
-                showManualRestore = false,
                 requiresDangerousOperationWarning = dangerousOperationWarning
             )
         }
@@ -60,7 +60,7 @@ object SyncStatusUiStateMapper {
                 lastSyncedText = lastSyncedText,
                 pendingText = pendingText,
                 showManualSync = true,
-                showManualRestore = false,
+                manualRestoreText = "正在恢复云端记录",
                 requiresDangerousOperationWarning = dangerousOperationWarning
             )
         }
@@ -74,7 +74,6 @@ object SyncStatusUiStateMapper {
                 lastSyncedText = lastSyncedText,
                 pendingText = pendingText,
                 showManualSync = true,
-                showManualRestore = false,
                 requiresDangerousOperationWarning = dangerousOperationWarning
             )
         }
@@ -83,26 +82,44 @@ object SyncStatusUiStateMapper {
             return SyncStatusUiState(
                 visible = showOnMainSurface,
                 level = SyncStatusLevel.Pending,
-                title = "可以检查云端记录",
+                title = "可从云端恢复你的记录",
                 message = "如果云端有备份，会先恢复到本地记录",
                 lastSyncedText = "最近恢复：${formatRelativeTime(snapshot.lastPullSuccessAt)}",
                 pendingText = pendingText,
                 showManualSync = true,
                 showManualRestore = true,
+                manualRestoreText = "恢复云端记录",
                 requiresDangerousOperationWarning = dangerousOperationWarning
             )
         }
 
-        if (snapshot.fatalFailureCount > 0) {
+        if (snapshot.pullPartialFailureCount > 0 || snapshot.pullStatus == PullStatus.FAILED_RETRYABLE) {
             return SyncStatusUiState(
                 visible = showOnMainSurface,
-                level = SyncStatusLevel.Error,
-                title = "部分记录需要处理",
-                message = "本地记录仍然可用，云端同步遇到不可自动恢复的问题",
+                level = SyncStatusLevel.Warning,
+                title = "部分云端记录稍后继续恢复",
+                message = "本地记录仍可正常使用，后台会继续检查云端更新",
                 lastSyncedText = lastSyncedText,
                 pendingText = pendingText,
                 showManualSync = true,
                 showManualRestore = snapshot.hasRemoteIdentity,
+                manualRestoreText = "检查云端更新",
+                showWarning = true,
+                requiresDangerousOperationWarning = dangerousOperationWarning
+            )
+        }
+
+        if (snapshot.fatalFailureCount > 0 || snapshot.pullStatus == PullStatus.FAILED_FATAL) {
+            return SyncStatusUiState(
+                visible = showOnMainSurface,
+                level = SyncStatusLevel.Error,
+                title = "部分记录需要处理",
+                message = "本地记录仍然可用，云端同步遇到不能自动恢复的问题",
+                lastSyncedText = lastSyncedText,
+                pendingText = pendingText,
+                showManualSync = true,
+                showManualRestore = snapshot.hasRemoteIdentity,
+                manualRestoreText = "检查云端更新",
                 showWarning = true,
                 showDanger = true,
                 requiresDangerousOperationWarning = dangerousOperationWarning
@@ -119,6 +136,7 @@ object SyncStatusUiStateMapper {
                 pendingText = pendingText,
                 showManualSync = true,
                 showManualRestore = snapshot.hasRemoteIdentity,
+                manualRestoreText = "检查云端更新",
                 showWarning = true,
                 requiresDangerousOperationWarning = dangerousOperationWarning
             )
@@ -134,6 +152,7 @@ object SyncStatusUiStateMapper {
                 pendingText = pendingText,
                 showManualSync = true,
                 showManualRestore = snapshot.hasRemoteIdentity,
+                manualRestoreText = "检查云端更新",
                 requiresDangerousOperationWarning = dangerousOperationWarning
             )
         }
@@ -148,10 +167,16 @@ object SyncStatusUiStateMapper {
                 pendingText = pendingText,
                 showManualSync = true,
                 showManualRestore = snapshot.hasRemoteIdentity,
+                manualRestoreText = "检查云端更新",
                 requiresDangerousOperationWarning = dangerousOperationWarning
             )
         }
 
+        val pullText = if (snapshot.initialRestoreCompleted) {
+            "云端记录已恢复"
+        } else {
+            "已检查云端更新"
+        }
         return SyncStatusUiState(
             visible = showOnMainSurface,
             level = SyncStatusLevel.Normal,
@@ -161,8 +186,10 @@ object SyncStatusUiStateMapper {
             pendingText = pendingText,
             showManualSync = true,
             showManualRestore = snapshot.hasRemoteIdentity,
+            manualRestoreText = "检查云端更新",
             showWarning = !snapshot.isHealthy,
-            requiresDangerousOperationWarning = dangerousOperationWarning
+            requiresDangerousOperationWarning = dangerousOperationWarning,
+            actionText = pullText.takeIf { snapshot.lastPullSuccessAt != null }
         )
     }
 
@@ -181,9 +208,9 @@ object SyncStatusUiStateMapper {
         val days = TimeUnit.MILLISECONDS.toDays(ageMs)
         return when {
             minutes < 1 -> "刚刚"
-            minutes < 60 -> "${minutes} 分钟前"
-            hours < 24 -> "${hours} 小时前"
-            else -> "${days} 天前"
+            minutes < 60 -> "$minutes 分钟前"
+            hours < 24 -> "$hours 小时前"
+            else -> "$days 天前"
         }
     }
 }

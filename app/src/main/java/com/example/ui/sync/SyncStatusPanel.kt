@@ -58,7 +58,7 @@ fun SyncStatusPanel(
                             onClick = onManualRestoreCheck,
                             enabled = !state.isRefreshing
                         ) {
-                            Text("检查云端记录", color = TextPrimary)
+                            Text(state.manualRestoreText, color = TextPrimary)
                         }
                     }
                     if (state.showManualSync) {

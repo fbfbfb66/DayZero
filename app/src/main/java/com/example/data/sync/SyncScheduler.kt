@@ -57,7 +57,7 @@ class InProcessSyncScheduler(
     }
 
     override fun requestSyncAndPull(reason: SyncTriggerReason): Job? {
-        return request(reason = reason, runBackfill = false, runSync = true, pullMode = PullMode.MANUAL_RESTORE_CHECK)
+        return request(reason = reason, runBackfill = true, runSync = true, pullMode = PullMode.MANUAL_RESTORE_CHECK)
     }
 
     private fun request(
@@ -78,7 +78,12 @@ class InProcessSyncScheduler(
                     if (reason != SyncTriggerReason.MANUAL && debounceMs > 0L) {
                         delay(debounceMs)
                     }
+                    if (runSync) {
+                        Log.d("DayZeroSync", "scheduler step push pending reason=$reason")
+                        syncCoordinator?.runOnce()
+                    }
                     if (runBackfill) {
+                        Log.d("DayZeroBackfill", "scheduler step backfill reason=$reason")
                         val stats = if (reason == SyncTriggerReason.APP_START) {
                             backfillCoordinator?.enqueueInitialBackfillIfNeeded()
                         } else {
@@ -91,15 +96,26 @@ class InProcessSyncScheduler(
                             )
                         }
                     }
-                    if (runSync) {
+                    if (runSync && runBackfill) {
+                        Log.d("DayZeroSync", "scheduler step push pending after backfill reason=$reason")
                         syncCoordinator?.runOnce()
                     }
                     when (pullMode) {
-                        PullMode.INITIAL_RESTORE -> pullCoordinator?.runInitialRestoreIfLocalEmpty()
-                        PullMode.INCREMENTAL -> pullCoordinator?.runIncrementalPull()
-                        PullMode.MANUAL_RESTORE_CHECK -> pullCoordinator?.runOnce(PullMode.MANUAL_RESTORE_CHECK)
+                        PullMode.INITIAL_RESTORE -> {
+                            Log.d("DayZeroPull", "scheduler step initial restore reason=$reason")
+                            pullCoordinator?.runInitialRestoreIfLocalEmpty()
+                        }
+                        PullMode.INCREMENTAL -> {
+                            Log.d("DayZeroPull", "scheduler step pull incremental reason=$reason")
+                            pullCoordinator?.runIncrementalPull()
+                        }
+                        PullMode.MANUAL_RESTORE_CHECK -> {
+                            Log.d("DayZeroPull", "scheduler step pull manual check reason=$reason")
+                            pullCoordinator?.runOnce(PullMode.MANUAL_RESTORE_CHECK)
+                        }
                         null -> Unit
                     }
+                    Log.d("DayZeroHealth", "scheduler step health refresh reason=$reason")
                     syncHealthReporter?.logSnapshot()
                 } catch (error: Exception) {
                     Log.e("DayZeroSync", "scheduler error reason=$reason type=${error::class.java.simpleName}", error)

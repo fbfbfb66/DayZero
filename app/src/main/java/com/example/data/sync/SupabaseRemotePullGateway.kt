@@ -146,6 +146,8 @@ class SupabaseRemotePullGateway(
     }
 
     private fun dailyRecordFromJson(json: JSONObject): DailyRecordRemoteDto {
+        // Temporary legacy compatibility: canonical migration fields are record_date, quantity,
+        // estimated_calories, and measured_date. Remove alias reads after real data is aligned.
         return DailyRecordRemoteDto(
             userId = json.optString("user_id"),
             clientId = json.getString("client_id"),

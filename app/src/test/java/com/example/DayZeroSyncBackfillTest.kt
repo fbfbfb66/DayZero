@@ -16,6 +16,7 @@ import com.example.data.sync.RemoteSyncResult
 import com.example.data.sync.InProcessSyncScheduler
 import com.example.data.sync.PullCoordinator
 import com.example.data.sync.PullStateStore
+import com.example.data.sync.PullStatus
 import com.example.data.sync.RemotePullGateway
 import com.example.data.sync.RemotePullResult
 import com.example.data.sync.SyncCoordinator
@@ -360,6 +361,74 @@ class DayZeroSyncBackfillTest {
         assertEquals(DayZeroSyncConstants.STATUS_SYNCED, deleted.syncStatus)
     }
 
+    @Test
+    fun pullPartialFailureDoesNotAdvanceFailedTableCursorOrWritePartialAggregate() = runTest {
+        val stateStore = PullStateStore(context)
+        val pullCoordinator = createPullCoordinator(
+            gateway = FakePullGateway(
+                dailyRecords = listOf(remoteDailyRecord("remote-record-1")),
+                mealsFailure = RemotePullResult.RetryableFailure("network_timeout")
+            ),
+            stateStore = stateStore
+        )
+
+        val stats = pullCoordinator.runOnce(com.example.data.sync.PullMode.INCREMENTAL)
+        val state = stateStore.snapshot()
+
+        assertEquals(1, stats.partialFailureCount)
+        assertEquals(0, stats.appliedCount)
+        assertEquals(PullStatus.FAILED_RETRYABLE, state.status)
+        assertEquals(1, state.partialFailureCount)
+        assertEquals(null, state.dailyRecordsCursorUpdatedAt)
+        assertEquals(null, state.mealsCursorUpdatedAt)
+        assertEquals(null, database.dailyRecordDao().getRecordByClientIdIncludingDeleted("remote-record-1"))
+    }
+
+    @Test
+    fun pullDetectsSameUpdatedAtCursorRiskWithoutAdvancingCursor() = runTest {
+        val stateStore = PullStateStore(context)
+        val pullCoordinator = createPullCoordinator(
+            gateway = FakePullGateway(
+                dailyRecords = listOf(
+                    remoteDailyRecord("remote-record-1", updatedAt = 2_000L),
+                    remoteDailyRecord("remote-record-2", updatedAt = 2_000L),
+                    remoteDailyRecord("remote-record-3", updatedAt = 2_000L)
+                )
+            ),
+            stateStore = stateStore,
+            batchLimit = 2
+        )
+
+        val stats = pullCoordinator.runOnce(com.example.data.sync.PullMode.INCREMENTAL)
+        val state = stateStore.snapshot()
+
+        assertEquals(1, stats.partialFailureCount)
+        assertEquals(2, stats.pulledDailyRecordCount)
+        assertEquals(PullStatus.FAILED_RETRYABLE, state.status)
+        assertTrue(state.lastError.orEmpty().contains("same_updated_at_cursor_risk"))
+        assertEquals(null, state.dailyRecordsCursorUpdatedAt)
+    }
+
+    @Test
+    fun pullCountsMissingParentRowsWithoutCrashing() = runTest {
+        val stateStore = PullStateStore(context)
+        val pullCoordinator = createPullCoordinator(
+            gateway = FakePullGateway(
+                meals = listOf(remoteMeal("remote-meal-1", "missing-record")),
+                foods = listOf(remoteFood("remote-food-1", "missing-meal", "missing-record"))
+            ),
+            stateStore = stateStore
+        )
+
+        val stats = pullCoordinator.runOnce(com.example.data.sync.PullMode.INCREMENTAL)
+        val state = stateStore.snapshot()
+
+        assertEquals(2, stats.skippedMissingParentCount)
+        assertEquals(PullStatus.COMPLETED, state.status)
+        assertEquals(2, state.skippedMissingParentCount)
+        assertEquals(0, database.dailyRecordDao().countBusinessRecordsIncludingDeleted())
+    }
+
     private fun createBackfillCoordinator(
         canRemoteSync: Boolean,
         stateStore: BackfillStateStore = BackfillStateStore(context)
@@ -372,12 +441,17 @@ class DayZeroSyncBackfillTest {
         )
     }
 
-    private fun createPullCoordinator(gateway: RemotePullGateway): PullCoordinator {
+    private fun createPullCoordinator(
+        gateway: RemotePullGateway,
+        stateStore: PullStateStore = PullStateStore(context),
+        batchLimit: Int = 100
+    ): PullCoordinator {
         return PullCoordinator(
             database = database,
             remotePullGateway = gateway,
             identityProvider = StaticIdentityProvider(canRemoteSync = true),
-            stateStore = PullStateStore(context)
+            stateStore = stateStore,
+            batchLimit = batchLimit
         )
     }
 
@@ -531,7 +605,11 @@ class DayZeroSyncBackfillTest {
         private val dailyRecords: List<DailyRecordRemoteDto> = emptyList(),
         private val meals: List<MealRemoteDto> = emptyList(),
         private val foods: List<FoodEntryRemoteDto> = emptyList(),
-        private val weights: List<WeightRecordRemoteDto> = emptyList()
+        private val weights: List<WeightRecordRemoteDto> = emptyList(),
+        private val dailyRecordsFailure: RemotePullResult<DailyRecordRemoteDto>? = null,
+        private val mealsFailure: RemotePullResult<MealRemoteDto>? = null,
+        private val foodsFailure: RemotePullResult<FoodEntryRemoteDto>? = null,
+        private val weightsFailure: RemotePullResult<WeightRecordRemoteDto>? = null
     ) : RemotePullGateway {
         override suspend fun canPull(identity: AppIdentity): Boolean = identity.canRemoteSync
 
@@ -539,28 +617,36 @@ class DayZeroSyncBackfillTest {
             sinceUpdatedAt: Long?,
             limit: Int
         ): RemotePullResult<DailyRecordRemoteDto> {
-            return RemotePullResult.Success(dailyRecords.filterSince(sinceUpdatedAt).take(limit), dailyRecords.size > limit)
+            dailyRecordsFailure?.let { return it }
+            val filtered = dailyRecords.filterSince(sinceUpdatedAt)
+            return RemotePullResult.Success(filtered.take(limit), filtered.size > limit)
         }
 
         override suspend fun pullMeals(
             sinceUpdatedAt: Long?,
             limit: Int
         ): RemotePullResult<MealRemoteDto> {
-            return RemotePullResult.Success(meals.filterSince(sinceUpdatedAt).take(limit), meals.size > limit)
+            mealsFailure?.let { return it }
+            val filtered = meals.filterSince(sinceUpdatedAt)
+            return RemotePullResult.Success(filtered.take(limit), filtered.size > limit)
         }
 
         override suspend fun pullFoodEntries(
             sinceUpdatedAt: Long?,
             limit: Int
         ): RemotePullResult<FoodEntryRemoteDto> {
-            return RemotePullResult.Success(foods.filterSince(sinceUpdatedAt).take(limit), foods.size > limit)
+            foodsFailure?.let { return it }
+            val filtered = foods.filterSince(sinceUpdatedAt)
+            return RemotePullResult.Success(filtered.take(limit), filtered.size > limit)
         }
 
         override suspend fun pullWeightRecords(
             sinceUpdatedAt: Long?,
             limit: Int
         ): RemotePullResult<WeightRecordRemoteDto> {
-            return RemotePullResult.Success(weights.filterSince(sinceUpdatedAt).take(limit), weights.size > limit)
+            weightsFailure?.let { return it }
+            val filtered = weights.filterSince(sinceUpdatedAt)
+            return RemotePullResult.Success(filtered.take(limit), filtered.size > limit)
         }
 
         private fun <T> List<T>.filterSince(sinceUpdatedAt: Long?): List<T> {

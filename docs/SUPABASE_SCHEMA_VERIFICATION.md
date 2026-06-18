@@ -98,6 +98,8 @@ The Android client may use only the configured publishable/anon key. A `service_
 
 Remote pull depends on `updated_at` being sortable and present on every synced table. Incremental pull uses `updated_at > cursor` and orders by `updated_at.asc`.
 
+Current pull cursors are per table and use `updated_at` only. The Android pull coordinator detects the unsafe case where a page has `hasMore=true` and multiple rows share the same `updated_at`; in that case it records a partial pull failure and does not advance that table cursor. TODO: if real production data reaches this edge case, upgrade the cursor model to `updated_at + client_id` so equal-timestamp pages can be resumed without risk of skipping rows.
+
 Deletes are soft deletes:
 
 - Set `deleted_at` to a timestamp.
@@ -105,6 +107,29 @@ Deletes are soft deletes:
 - Do not use SQL `DELETE` for normal record sync.
 
 `local_owner_id` is only a client migration/binding helper. It must not be used as a remote authorization boundary.
+
+## Canonical Field Names
+
+The current canonical remote schema is the migration schema in `supabase/migrations/20260618120000_dayzero_core_records.sql`.
+
+Canonical names used by push and expected by pull:
+
+- `daily_records.record_date`
+- `food_entries.quantity`
+- `food_entries.estimated_calories`
+- `meals.daily_record_client_id`
+- `food_entries.meal_client_id`
+- `food_entries.daily_record_client_id`
+- `weight_records.measured_date`
+- `weight_records.daily_record_client_id`
+
+Temporary legacy compatibility exists only in the Android pull parser for these historical or idealized aliases:
+
+- `daily_records.local_date` -> `record_date`
+- `food_entries.amount_text` -> `quantity`
+- `food_entries.calories` -> `estimated_calories`
+
+This compatibility layer is for old/manual rows only. Do not add new Table Editor rows using the legacy names, and do not make push write one name while pull reads another. After real data is confirmed to use only the canonical schema, remove the temporary compatibility branch.
 
 ## Table Editor Checklist
 
@@ -152,6 +177,54 @@ To verify isolation:
 3. Query as user B through PostgREST.
 4. Confirm user B cannot select user A rows.
 5. Confirm user B cannot update or soft-delete user A rows.
+
+## Real Supabase Verification Checklist
+
+Use this checklist for DB-SYNC-11 real-device verification. Table Editor is for observing state only; schema changes must still be represented by SQL migration files.
+
+1. Start the app on a real device with the configured Supabase URL and Android anon/publishable key.
+2. Confirm logs show a real anonymous identity from `SupabaseAnonymousIdentityProvider`.
+3. Confirm Android source, resources, generated build config, logs, and preferences do not contain a `service_role` key.
+4. In the app, send `中午吃了一份鸡蛋肠粉`, wait for the AI reply and `show_confirm_card`, then tap confirm.
+5. Confirm Room has a local daily record, meal, and food entry. UI must show the record from Room without waiting for Supabase.
+6. Confirm `sync_queue` is created and processed.
+7. In Supabase Table Editor, check `daily_records` for the new row.
+8. Check `meals` for the related row and confirm `daily_record_client_id` is present.
+9. Check `food_entries` and confirm `meal_client_id` and `daily_record_client_id` are present.
+10. If the confirmation includes weight, check `weight_records` and confirm `daily_record_client_id` is present when applicable.
+11. For each row, confirm `user_id`, `client_id`, `updated_at`, `deleted_at`, and `schema_version` exist.
+12. Confirm `user_id` matches the authenticated anonymous user id for the device session.
+13. Sort each table by `updated_at` and confirm rows can be ordered for incremental pull.
+14. Repeat the same confirm/upsert with the same `client_id` in a controlled test and confirm `unique(user_id, client_id)` prevents duplicate rows.
+15. Use a second anonymous user and confirm RLS prevents reading or modifying the first user's rows.
+16. Use the debug-only local business-record clear helper, keeping identity/session/chat/config intact.
+17. Trigger initial restore.
+18. Confirm pull reads `daily_records`, `meals`, `food_entries`, and `weight_records`.
+19. Confirm Room is repopulated and UI displays restored records through Room.
+20. Confirm initial restore does not generate new push `sync_queue` tasks.
+
+## Partial Pull Verification
+
+When validating pull reliability, check these failure modes:
+
+- If `daily_records` fails, the daily cursor must not advance.
+- If `meals` fails, the meals cursor must not advance and the local daily aggregate must not be rewritten with missing meals.
+- If `food_entries` fails, the food cursor must not advance and the local daily aggregate must not be rewritten with missing foods.
+- If `weight_records` fails, the weight cursor must not advance and restore should be reported as partial.
+- If a remote child row lacks its parent relation client id, the pull coordinator must increment `skippedMissingParentCount` and continue.
+- Single bad records or one table failure must not crash the app, block UI, or affect local confirmed records.
+
+## Manual Sync Order
+
+Manual sync should run this background sequence:
+
+1. Push pending local queue tasks.
+2. Backfill local unsynced records into the queue.
+3. Push pending queue tasks again.
+4. Pull safe remote incremental updates.
+5. Refresh sync health.
+
+This order keeps local changes ahead of remote pull, reduces avoidable conflicts, and still keeps UI local-first.
 
 ## Current Non-Goals
 

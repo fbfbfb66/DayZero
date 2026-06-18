@@ -26,6 +26,9 @@ class PullStateStore(context: Context) {
             appliedCount = preferences.getInt(KEY_APPLIED, 0),
             skippedCount = preferences.getInt(KEY_SKIPPED, 0),
             conflictCount = preferences.getInt(KEY_CONFLICT, 0),
+            partialFailureCount = preferences.getInt(KEY_PARTIAL_FAILURE, 0),
+            skippedDirtyLocalCount = preferences.getInt(KEY_SKIPPED_DIRTY, 0),
+            skippedMissingParentCount = preferences.getInt(KEY_SKIPPED_MISSING_PARENT, 0),
             schemaVersion = preferences.getInt(KEY_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION)
         )
     }
@@ -53,8 +56,11 @@ class PullStateStore(context: Context) {
             .putInt(KEY_APPLIED, stats.appliedCount)
             .putInt(KEY_SKIPPED, stats.skippedCount)
             .putInt(KEY_CONFLICT, stats.conflictCount)
+            .putInt(KEY_PARTIAL_FAILURE, stats.partialFailureCount)
+            .putInt(KEY_SKIPPED_DIRTY, stats.skippedDirtyLocalCount)
+            .putInt(KEY_SKIPPED_MISSING_PARENT, stats.skippedMissingParentCount)
             .putInt(KEY_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION)
-            .remove(KEY_LAST_ERROR)
+            .let { editor -> if (stats.partialFailureCount > 0) editor else editor.remove(KEY_LAST_ERROR) }
             .apply()
     }
 
@@ -101,6 +107,9 @@ class PullStateStore(context: Context) {
             .putInt(KEY_APPLIED, stats.appliedCount)
             .putInt(KEY_SKIPPED, stats.skippedCount)
             .putInt(KEY_CONFLICT, stats.conflictCount)
+            .putInt(KEY_PARTIAL_FAILURE, stats.partialFailureCount)
+            .putInt(KEY_SKIPPED_DIRTY, stats.skippedDirtyLocalCount)
+            .putInt(KEY_SKIPPED_MISSING_PARENT, stats.skippedMissingParentCount)
     }
 
     private fun android.content.SharedPreferences.readLongOrNull(key: String): Long? {
@@ -135,6 +144,9 @@ class PullStateStore(context: Context) {
         private const val KEY_APPLIED = "appliedCount"
         private const val KEY_SKIPPED = "skippedCount"
         private const val KEY_CONFLICT = "conflictCount"
+        private const val KEY_PARTIAL_FAILURE = "partialFailureCount"
+        private const val KEY_SKIPPED_DIRTY = "skippedDirtyLocalCount"
+        private const val KEY_SKIPPED_MISSING_PARENT = "skippedMissingParentCount"
         private const val KEY_SCHEMA_VERSION = "schemaVersion"
     }
 }
@@ -158,6 +170,9 @@ data class PullState(
     val appliedCount: Int,
     val skippedCount: Int,
     val conflictCount: Int,
+    val partialFailureCount: Int,
+    val skippedDirtyLocalCount: Int,
+    val skippedMissingParentCount: Int,
     val schemaVersion: Int
 )
 
@@ -169,6 +184,8 @@ data class PullStats(
     val appliedCount: Int = 0,
     val skippedCount: Int = 0,
     val conflictCount: Int = 0,
+    val partialFailureCount: Int = 0,
+    val skippedDirtyLocalCount: Int = 0,
     val skippedMissingParentCount: Int = 0
 )
 

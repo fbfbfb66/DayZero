@@ -55,6 +55,9 @@ class SyncHealthReporter(
             pullError = pullState?.lastError,
             pulledCount = pulledCount,
             pullConflictCount = pullState?.conflictCount ?: 0,
+            pullPartialFailureCount = pullState?.partialFailureCount ?: 0,
+            pullSkippedMissingParentCount = pullState?.skippedMissingParentCount ?: 0,
+            pullSkippedDirtyLocalCount = pullState?.skippedDirtyLocalCount ?: 0,
             initialRestoreAvailable = remoteSyncEnabled && hasRemoteIdentity && businessRecordCount == 0,
             initialRestoreCompleted = pullState?.status == PullStatus.COMPLETED && businessRecordCount > 0,
             isRestoring = pullState?.status == PullStatus.RUNNING,
@@ -80,6 +83,7 @@ class SyncHealthReporter(
                 "done=${health.doneCount} retryable=${health.retryableFailureCount} fatal=${health.fatalFailureCount} " +
                 "waitingForAuth=${health.waitingForAuthCount} backfillStatus=${health.backfillStatus.value} " +
                 "pullStatus=${health.pullStatus.value} pulled=${health.pulledCount} pullConflict=${health.pullConflictCount} " +
+                "pullPartial=${health.pullPartialFailureCount} pullMissingParent=${health.pullSkippedMissingParentCount} " +
                 "backfillPendingEstimated=${health.backfillPendingEstimatedCount} isHealthy=${health.isHealthy}"
         )
     }

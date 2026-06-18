@@ -556,6 +556,20 @@ class DayZeroViewModel(
         }
     }
 
+    fun clearLocalBusinessRecordsForDebug() {
+        if (!BuildConfig.DEBUG) {
+            Log.w("DayZeroSync", "debug clear local business records ignored in release")
+            return
+        }
+        viewModelScope.launch {
+            Log.w("DayZeroSync", "debug clear local business records start")
+            recordRepository.clearAllRecords()
+            _uiState.update { it.copy(records = emptyList()) }
+            refreshSyncHealthState("debug_clear_local_business_records")
+            Log.w("DayZeroSync", "debug clear local business records success")
+        }
+    }
+
     fun refreshSyncHealth(reason: String = "manual") {
         viewModelScope.launch {
             refreshSyncHealthState(reason = reason)
