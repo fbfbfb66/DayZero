@@ -8,6 +8,8 @@ import com.example.data.sync.remote.FoodEntryRemoteDto
 import com.example.data.sync.remote.MealRemoteDto
 import com.example.data.sync.remote.WeightRecordRemoteDto
 import com.example.domain.identity.AppIdentity
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -102,55 +104,57 @@ class SupabaseRemotePullGateway(
             .build()
 
         Log.d("DayZeroRemote", "pull start table=$tableName limit=$limit since=${sinceUpdatedAt ?: "none"}")
-        return try {
-            okHttpClient.newCall(request).execute().use { response ->
-                val body = response.body?.string().orEmpty()
-                when {
-                    response.isSuccessful -> {
-                        val array = JSONArray(body)
-                        val items = buildList {
-                            for (index in 0 until array.length()) {
-                                val item = array.getJSONObject(index)
-                                val clientId = item.optString("client_id")
-                                if (clientId.isBlank()) {
-                                    Log.e("DayZeroRemote", "pull skipped row table=$tableName reason=missing_client_id")
-                                    continue
-                                }
-                                runCatching {
-                                    mapper(item)
-                                }.onSuccess { mapped ->
-                                    add(mapped)
-                                }.onFailure { error ->
-                                    Log.e(
-                                        "DayZeroRemote",
-                                        "pull skipped row table=$tableName clientId=$clientId reason=${error::class.java.simpleName}"
-                                    )
+        return withContext(Dispatchers.IO) {
+            try {
+                okHttpClient.newCall(request).execute().use { response ->
+                    val body = response.body?.string().orEmpty()
+                    when {
+                        response.isSuccessful -> {
+                            val array = JSONArray(body)
+                            val items = buildList {
+                                for (index in 0 until array.length()) {
+                                    val item = array.getJSONObject(index)
+                                    val clientId = item.optString("client_id")
+                                    if (clientId.isBlank()) {
+                                        Log.e("DayZeroRemote", "pull skipped row table=$tableName reason=missing_client_id")
+                                        continue
+                                    }
+                                    runCatching {
+                                        mapper(item)
+                                    }.onSuccess { mapped ->
+                                        add(mapped)
+                                    }.onFailure { error ->
+                                        Log.e(
+                                            "DayZeroRemote",
+                                            "pull skipped row table=$tableName clientId=$clientId reason=${error::class.java.simpleName}"
+                                        )
+                                    }
                                 }
                             }
+                            Log.d("DayZeroRemote", "pull success table=$tableName count=${items.size}")
+                            RemotePullResult.Success(items = items, hasMore = items.size >= limit)
                         }
-                        Log.d("DayZeroRemote", "pull success table=$tableName count=${items.size}")
-                        RemotePullResult.Success(items = items, hasMore = items.size >= limit)
-                    }
 
-                    response.code in RETRYABLE_STATUS_CODES -> {
-                        Log.e("DayZeroRemote", "pull retryable table=$tableName reason=http_${response.code}")
-                        RemotePullResult.RetryableFailure("http_${response.code}")
-                    }
+                        response.code in RETRYABLE_STATUS_CODES -> {
+                            Log.e("DayZeroRemote", "pull retryable table=$tableName reason=http_${response.code}")
+                            RemotePullResult.RetryableFailure("http_${response.code}")
+                        }
 
-                    response.code in FATAL_STATUS_CODES -> {
-                        Log.e("DayZeroRemote", "pull fatal table=$tableName reason=http_${response.code}")
-                        RemotePullResult.FatalFailure("http_${response.code}")
-                    }
+                        response.code in FATAL_STATUS_CODES -> {
+                            Log.e("DayZeroRemote", "pull fatal table=$tableName reason=http_${response.code}")
+                            RemotePullResult.FatalFailure("http_${response.code}")
+                        }
 
-                    else -> {
-                        Log.e("DayZeroRemote", "pull retryable table=$tableName reason=http_${response.code}")
-                        RemotePullResult.RetryableFailure("http_${response.code}")
+                        else -> {
+                            Log.e("DayZeroRemote", "pull retryable table=$tableName reason=http_${response.code}")
+                            RemotePullResult.RetryableFailure("http_${response.code}")
+                        }
                     }
                 }
+            } catch (e: Exception) {
+                Log.e("DayZeroRemote", "pull retryable table=$tableName reason=${e::class.java.simpleName}", e)
+                RemotePullResult.RetryableFailure(e.message ?: e::class.java.simpleName)
             }
-        } catch (e: Exception) {
-            Log.e("DayZeroRemote", "pull retryable table=$tableName reason=${e::class.java.simpleName}", e)
-            RemotePullResult.RetryableFailure(e.message ?: e::class.java.simpleName)
         }
     }
 

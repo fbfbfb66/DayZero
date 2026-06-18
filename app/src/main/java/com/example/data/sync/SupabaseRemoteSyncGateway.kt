@@ -4,6 +4,8 @@ import android.util.Log
 import com.example.data.identity.SupabaseAuthSessionProvider
 import com.example.data.remote.SupabaseConfig
 import com.example.domain.identity.AppIdentity
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -121,12 +123,12 @@ class SupabaseRemoteSyncGateway(
         )
     }
 
-    private fun executeRequest(
+    private suspend fun executeRequest(
         request: Request,
         entityType: String,
         clientId: String
-    ): RemoteSyncResult {
-        return try {
+    ): RemoteSyncResult = withContext(Dispatchers.IO) {
+        try {
             okHttpClient.newCall(request).execute().use { response ->
                 when {
                     response.isSuccessful -> {
