@@ -17,6 +17,16 @@ data class SyncHealthSnapshot(
     val backfillStatus: BackfillStatus,
     val backfillLastSuccessAt: Long?,
     val backfillPendingEstimatedCount: Int,
+    val pullStatus: PullStatus = PullStatus.NOT_STARTED,
+    val lastPullAttemptAt: Long? = null,
+    val lastPullSuccessAt: Long? = null,
+    val lastPullFailureAt: Long? = null,
+    val pullError: String? = null,
+    val pulledCount: Int = 0,
+    val pullConflictCount: Int = 0,
+    val initialRestoreAvailable: Boolean = false,
+    val initialRestoreCompleted: Boolean = false,
+    val isRestoring: Boolean = false,
     val queueOldestPendingAt: Long?,
     val isHealthy: Boolean
 )

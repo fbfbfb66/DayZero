@@ -15,6 +15,9 @@ interface DailyRecordDao {
     @Query("SELECT * FROM daily_records WHERE id = :id AND deletedAt IS NULL")
     suspend fun getRecordById(id: String): DailyRecordEntity?
 
+    @Query("SELECT * FROM daily_records WHERE clientId = :clientId LIMIT 1")
+    suspend fun getRecordByClientIdIncludingDeleted(clientId: String): DailyRecordEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertRecord(record: DailyRecordEntity)
 
@@ -32,6 +35,9 @@ interface DailyRecordDao {
     
     @Query("SELECT COUNT(*) FROM daily_records WHERE deletedAt IS NULL")
     suspend fun getRecordCount(): Int
+
+    @Query("SELECT COUNT(*) FROM daily_records")
+    suspend fun countBusinessRecordsIncludingDeleted(): Int
 
     @Query("SELECT * FROM daily_records WHERE date = :date AND status = :status AND deletedAt IS NULL LIMIT 1")
     suspend fun getRecordByDateAndStatus(date: String, status: String): DailyRecordEntity?
@@ -73,6 +79,25 @@ interface DailyRecordDao {
         syncStatus: String,
         lastSyncedAt: Long,
         remoteId: String = recordId
+    )
+
+    @Query(
+        """
+        UPDATE daily_records
+        SET deletedAt = :deletedAt,
+            updatedAt = :updatedAt,
+            syncStatus = 'SYNCED',
+            lastSyncedAt = :lastSyncedAt,
+            remoteId = COALESCE(remoteId, :remoteId)
+        WHERE clientId = :clientId
+        """
+    )
+    suspend fun markDeletedFromRemote(
+        clientId: String,
+        deletedAt: Long,
+        updatedAt: Long,
+        lastSyncedAt: Long,
+        remoteId: String = clientId
     )
 
     @Query("DELETE FROM daily_records")

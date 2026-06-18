@@ -28,6 +28,7 @@ import com.example.ui.theme.TextSecondary
 fun SyncStatusPanel(
     state: SyncStatusUiState,
     onManualSync: () -> Unit,
+    onManualRestoreCheck: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     if (!state.visible) return
@@ -51,19 +52,29 @@ fun SyncStatusPanel(
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium
                 )
-                if (state.showManualSync) {
-                    TextButton(
-                        onClick = onManualSync,
-                        enabled = !state.isRefreshing
-                    ) {
-                        if (state.isRefreshing) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                strokeWidth = 2.dp,
-                                color = TextSecondary
-                            )
-                        } else {
-                            Text("立即同步", color = TextPrimary)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (state.showManualRestore) {
+                        TextButton(
+                            onClick = onManualRestoreCheck,
+                            enabled = !state.isRefreshing
+                        ) {
+                            Text("检查云端记录", color = TextPrimary)
+                        }
+                    }
+                    if (state.showManualSync) {
+                        TextButton(
+                            onClick = onManualSync,
+                            enabled = !state.isRefreshing
+                        ) {
+                            if (state.isRefreshing) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                    color = TextSecondary
+                                )
+                            } else {
+                                Text("立即同步", color = TextPrimary)
+                            }
                         }
                     }
                 }

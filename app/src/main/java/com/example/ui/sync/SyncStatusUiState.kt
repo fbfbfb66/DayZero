@@ -22,6 +22,7 @@ data class SyncStatusUiState(
     val lastSyncedText: String? = null,
     val pendingText: String? = null,
     val showManualSync: Boolean = false,
+    val showManualRestore: Boolean = false,
     val showWarning: Boolean = false,
     val showDanger: Boolean = false,
     val requiresDangerousOperationWarning: Boolean = false,
@@ -45,6 +46,21 @@ object SyncStatusUiStateMapper {
                 lastSyncedText = "最近同步：从未同步",
                 pendingText = pendingText,
                 showManualSync = false,
+                showManualRestore = false,
+                requiresDangerousOperationWarning = dangerousOperationWarning
+            )
+        }
+
+        if (snapshot.isRestoring) {
+            return SyncStatusUiState(
+                visible = showOnMainSurface,
+                level = SyncStatusLevel.Syncing,
+                title = "正在恢复云端记录",
+                message = "可以继续聊天和记录，恢复会在后台完成",
+                lastSyncedText = lastSyncedText,
+                pendingText = pendingText,
+                showManualSync = true,
+                showManualRestore = false,
                 requiresDangerousOperationWarning = dangerousOperationWarning
             )
         }
@@ -58,6 +74,21 @@ object SyncStatusUiStateMapper {
                 lastSyncedText = lastSyncedText,
                 pendingText = pendingText,
                 showManualSync = true,
+                showManualRestore = false,
+                requiresDangerousOperationWarning = dangerousOperationWarning
+            )
+        }
+
+        if (snapshot.initialRestoreAvailable) {
+            return SyncStatusUiState(
+                visible = showOnMainSurface,
+                level = SyncStatusLevel.Pending,
+                title = "可以检查云端记录",
+                message = "如果云端有备份，会先恢复到本地记录",
+                lastSyncedText = "最近恢复：${formatRelativeTime(snapshot.lastPullSuccessAt)}",
+                pendingText = pendingText,
+                showManualSync = true,
+                showManualRestore = true,
                 requiresDangerousOperationWarning = dangerousOperationWarning
             )
         }
@@ -71,6 +102,7 @@ object SyncStatusUiStateMapper {
                 lastSyncedText = lastSyncedText,
                 pendingText = pendingText,
                 showManualSync = true,
+                showManualRestore = snapshot.hasRemoteIdentity,
                 showWarning = true,
                 showDanger = true,
                 requiresDangerousOperationWarning = dangerousOperationWarning
@@ -86,6 +118,7 @@ object SyncStatusUiStateMapper {
                 lastSyncedText = lastSyncedText,
                 pendingText = pendingText,
                 showManualSync = true,
+                showManualRestore = snapshot.hasRemoteIdentity,
                 showWarning = true,
                 requiresDangerousOperationWarning = dangerousOperationWarning
             )
@@ -100,6 +133,7 @@ object SyncStatusUiStateMapper {
                 lastSyncedText = lastSyncedText,
                 pendingText = pendingText,
                 showManualSync = true,
+                showManualRestore = snapshot.hasRemoteIdentity,
                 requiresDangerousOperationWarning = dangerousOperationWarning
             )
         }
@@ -113,6 +147,7 @@ object SyncStatusUiStateMapper {
                 lastSyncedText = lastSyncedText,
                 pendingText = pendingText,
                 showManualSync = true,
+                showManualRestore = snapshot.hasRemoteIdentity,
                 requiresDangerousOperationWarning = dangerousOperationWarning
             )
         }
@@ -125,6 +160,7 @@ object SyncStatusUiStateMapper {
             lastSyncedText = lastSyncedText,
             pendingText = pendingText,
             showManualSync = true,
+            showManualRestore = snapshot.hasRemoteIdentity,
             showWarning = !snapshot.isHealthy,
             requiresDangerousOperationWarning = dangerousOperationWarning
         )

@@ -14,10 +14,18 @@ import com.example.data.sync.LocalFirstSyncCoordinator
 import com.example.data.sync.RemoteSyncGateway
 import com.example.data.sync.RemoteSyncResult
 import com.example.data.sync.InProcessSyncScheduler
+import com.example.data.sync.PullCoordinator
+import com.example.data.sync.PullStateStore
+import com.example.data.sync.RemotePullGateway
+import com.example.data.sync.RemotePullResult
 import com.example.data.sync.SyncCoordinator
 import com.example.data.sync.SyncHealthReporter
 import com.example.data.sync.SyncPayload
 import com.example.data.sync.SyncTriggerReason
+import com.example.data.sync.remote.DailyRecordRemoteDto
+import com.example.data.sync.remote.FoodEntryRemoteDto
+import com.example.data.sync.remote.MealRemoteDto
+import com.example.data.sync.remote.WeightRecordRemoteDto
 import com.example.domain.identity.AppIdentity
 import com.example.domain.identity.CurrentIdentityProvider
 import com.example.domain.model.DailyRecord
@@ -49,6 +57,10 @@ class DayZeroSyncBackfillTest {
     fun setUp() {
         context = ApplicationProvider.getApplicationContext()
         context.getSharedPreferences("dayzero_backfill", Context.MODE_PRIVATE)
+            .edit()
+            .clear()
+            .commit()
+        context.getSharedPreferences("dayzero_pull", Context.MODE_PRIVATE)
             .edit()
             .clear()
             .commit()
@@ -281,6 +293,73 @@ class DayZeroSyncBackfillTest {
         assertEquals(1, database.syncQueueDao().countByStatus(DayZeroSyncConstants.STATUS_FAILED_FATAL))
     }
 
+    @Test
+    fun initialRestoreWritesRemoteRecordsWithoutCreatingPushQueue() = runTest {
+        val pullCoordinator = createPullCoordinator(
+            gateway = FakePullGateway(
+                dailyRecords = listOf(remoteDailyRecord("remote-record-1")),
+                meals = listOf(remoteMeal("remote-meal-1", "remote-record-1")),
+                foods = listOf(remoteFood("remote-food-1", "remote-meal-1", "remote-record-1")),
+                weights = listOf(remoteWeight("remote-weight-1", "remote-record-1"))
+            )
+        )
+
+        val stats = pullCoordinator.runInitialRestoreIfLocalEmpty()
+
+        assertEquals(1, stats.appliedCount)
+        assertEquals(0, database.syncQueueDao().getPendingCount())
+        val restored = database.dailyRecordDao().getRecordByClientIdIncludingDeleted("remote-record-1")
+        require(restored != null)
+        assertEquals(DayZeroSyncConstants.STATUS_SYNCED, restored.syncStatus)
+        assertEquals(71.2f, restored.weightKg)
+        assertEquals(1, mapper.toDomain(restored).meals.size)
+        assertEquals(1, mapper.toDomain(restored).meals.first().foods.size)
+    }
+
+    @Test
+    fun pullDoesNotOverwriteDirtyLocalRecord() = runTest {
+        val dirty = mapper.toEntity(sampleConfirmedRecord().copy(id = "remote-record-1"), LOCAL_OWNER_ID)
+            .copy(syncStatus = DayZeroSyncConstants.STATUS_PENDING, lastSyncedAt = null)
+        database.dailyRecordDao().upsertRecord(dirty)
+        val pullCoordinator = createPullCoordinator(
+            gateway = FakePullGateway(
+                dailyRecords = listOf(remoteDailyRecord("remote-record-1", updatedAt = dirty.updatedAt + 60_000L))
+            )
+        )
+
+        val stats = pullCoordinator.runOnce(com.example.data.sync.PullMode.INCREMENTAL)
+
+        assertEquals(1, stats.conflictCount)
+        val after = database.dailyRecordDao().getRecordByClientIdIncludingDeleted("remote-record-1")
+        require(after != null)
+        assertEquals(DayZeroSyncConstants.STATUS_PENDING, after.syncStatus)
+    }
+
+    @Test
+    fun pullAppliesRemoteSoftDeleteToSyncedLocalRecord() = runTest {
+        val local = mapper.toEntity(sampleConfirmedRecord().copy(id = "remote-record-1"), LOCAL_OWNER_ID)
+            .copy(
+                syncStatus = DayZeroSyncConstants.STATUS_SYNCED,
+                lastSyncedAt = 1_000L,
+                updatedAt = 1_000L
+            )
+        database.dailyRecordDao().upsertRecord(local)
+        val pullCoordinator = createPullCoordinator(
+            gateway = FakePullGateway(
+                dailyRecords = listOf(remoteDailyRecord("remote-record-1", updatedAt = 2_000L, deletedAt = 2_000L))
+            )
+        )
+
+        val stats = pullCoordinator.runOnce(com.example.data.sync.PullMode.INCREMENTAL)
+
+        assertEquals(1, stats.appliedCount)
+        assertEquals(null, database.dailyRecordDao().getRecordById("remote-record-1"))
+        val deleted = database.dailyRecordDao().getRecordByClientIdIncludingDeleted("remote-record-1")
+        require(deleted != null)
+        assertEquals(2_000L, deleted.deletedAt)
+        assertEquals(DayZeroSyncConstants.STATUS_SYNCED, deleted.syncStatus)
+    }
+
     private fun createBackfillCoordinator(
         canRemoteSync: Boolean,
         stateStore: BackfillStateStore = BackfillStateStore(context)
@@ -290,6 +369,15 @@ class DayZeroSyncBackfillTest {
             syncQueueDao = database.syncQueueDao(),
             identityProvider = StaticIdentityProvider(canRemoteSync = canRemoteSync),
             stateStore = stateStore
+        )
+    }
+
+    private fun createPullCoordinator(gateway: RemotePullGateway): PullCoordinator {
+        return PullCoordinator(
+            database = database,
+            remotePullGateway = gateway,
+            identityProvider = StaticIdentityProvider(canRemoteSync = true),
+            stateStore = PullStateStore(context)
         )
     }
 
@@ -326,6 +414,73 @@ class DayZeroSyncBackfillTest {
             createdAt = now,
             updatedAt = now,
             ownerLocalId = LOCAL_OWNER_ID
+        )
+    }
+
+    private fun remoteDailyRecord(
+        clientId: String,
+        updatedAt: Long = 2_000L,
+        deletedAt: Long? = null
+    ): DailyRecordRemoteDto {
+        return DailyRecordRemoteDto(
+            userId = "remote-user-id",
+            clientId = clientId,
+            recordDate = "2026-06-19",
+            status = RecordStatus.Confirmed.name,
+            totalCalories = 320,
+            weightKg = null,
+            aiSummary = null,
+            createdAt = 1_000L,
+            updatedAt = updatedAt,
+            deletedAt = deletedAt,
+            schemaVersion = 1
+        )
+    }
+
+    private fun remoteMeal(clientId: String, recordClientId: String): MealRemoteDto {
+        return MealRemoteDto(
+            userId = "remote-user-id",
+            clientId = clientId,
+            dailyRecordClientId = recordClientId,
+            mealType = MealType.Lunch.name,
+            hasPhoto = false,
+            subtotalCalories = 320,
+            createdAt = 1_100L,
+            updatedAt = 2_100L,
+            deletedAt = null,
+            schemaVersion = 1
+        )
+    }
+
+    private fun remoteFood(clientId: String, mealClientId: String, recordClientId: String): FoodEntryRemoteDto {
+        return FoodEntryRemoteDto(
+            userId = "remote-user-id",
+            clientId = clientId,
+            mealClientId = mealClientId,
+            dailyRecordClientId = recordClientId,
+            name = "egg rice roll",
+            quantity = "1 serving",
+            estimatedCalories = 320,
+            confidence = "high",
+            createdAt = 1_200L,
+            updatedAt = 2_200L,
+            deletedAt = null,
+            schemaVersion = 1
+        )
+    }
+
+    private fun remoteWeight(clientId: String, recordClientId: String): WeightRecordRemoteDto {
+        return WeightRecordRemoteDto(
+            userId = "remote-user-id",
+            clientId = clientId,
+            dailyRecordClientId = recordClientId,
+            measuredDate = "2026-06-19",
+            weightKg = 71.2f,
+            source = "confirm_card",
+            createdAt = 1_300L,
+            updatedAt = 2_300L,
+            deletedAt = null,
+            schemaVersion = 1
         )
     }
 
@@ -369,6 +524,56 @@ class DayZeroSyncBackfillTest {
         override suspend fun runOnce() {
             runCount += 1
             delay(50L)
+        }
+    }
+
+    private class FakePullGateway(
+        private val dailyRecords: List<DailyRecordRemoteDto> = emptyList(),
+        private val meals: List<MealRemoteDto> = emptyList(),
+        private val foods: List<FoodEntryRemoteDto> = emptyList(),
+        private val weights: List<WeightRecordRemoteDto> = emptyList()
+    ) : RemotePullGateway {
+        override suspend fun canPull(identity: AppIdentity): Boolean = identity.canRemoteSync
+
+        override suspend fun pullDailyRecords(
+            sinceUpdatedAt: Long?,
+            limit: Int
+        ): RemotePullResult<DailyRecordRemoteDto> {
+            return RemotePullResult.Success(dailyRecords.filterSince(sinceUpdatedAt).take(limit), dailyRecords.size > limit)
+        }
+
+        override suspend fun pullMeals(
+            sinceUpdatedAt: Long?,
+            limit: Int
+        ): RemotePullResult<MealRemoteDto> {
+            return RemotePullResult.Success(meals.filterSince(sinceUpdatedAt).take(limit), meals.size > limit)
+        }
+
+        override suspend fun pullFoodEntries(
+            sinceUpdatedAt: Long?,
+            limit: Int
+        ): RemotePullResult<FoodEntryRemoteDto> {
+            return RemotePullResult.Success(foods.filterSince(sinceUpdatedAt).take(limit), foods.size > limit)
+        }
+
+        override suspend fun pullWeightRecords(
+            sinceUpdatedAt: Long?,
+            limit: Int
+        ): RemotePullResult<WeightRecordRemoteDto> {
+            return RemotePullResult.Success(weights.filterSince(sinceUpdatedAt).take(limit), weights.size > limit)
+        }
+
+        private fun <T> List<T>.filterSince(sinceUpdatedAt: Long?): List<T> {
+            if (sinceUpdatedAt == null) return this
+            return filter {
+                when (it) {
+                    is DailyRecordRemoteDto -> it.updatedAt > sinceUpdatedAt
+                    is MealRemoteDto -> it.updatedAt > sinceUpdatedAt
+                    is FoodEntryRemoteDto -> it.updatedAt > sinceUpdatedAt
+                    is WeightRecordRemoteDto -> it.updatedAt > sinceUpdatedAt
+                    else -> false
+                }
+            }
         }
     }
 

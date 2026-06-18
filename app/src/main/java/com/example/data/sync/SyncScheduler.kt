@@ -20,12 +20,16 @@ interface SyncScheduler {
     fun requestSync(reason: SyncTriggerReason): Job?
     fun requestBackfill(reason: SyncTriggerReason): Job?
     fun requestSyncAndBackfill(reason: SyncTriggerReason): Job?
+    fun requestPull(reason: SyncTriggerReason): Job?
+    fun requestInitialRestore(reason: SyncTriggerReason): Job?
+    fun requestSyncAndPull(reason: SyncTriggerReason): Job?
 }
 
 class InProcessSyncScheduler(
     private val scope: CoroutineScope,
     private val syncCoordinator: SyncCoordinator?,
     private val backfillCoordinator: BackfillCoordinator?,
+    private val pullCoordinator: PullCoordinator? = null,
     private val syncHealthReporter: SyncHealthReporter?,
     private val debounceMs: Long = DEFAULT_DEBOUNCE_MS
 ) : SyncScheduler {
@@ -41,10 +45,27 @@ class InProcessSyncScheduler(
     }
 
     override fun requestSyncAndBackfill(reason: SyncTriggerReason): Job? {
-        return request(reason = reason, runBackfill = true, runSync = true)
+        return request(reason = reason, runBackfill = true, runSync = true, pullMode = null)
     }
 
-    private fun request(reason: SyncTriggerReason, runBackfill: Boolean, runSync: Boolean): Job? {
+    override fun requestPull(reason: SyncTriggerReason): Job? {
+        return request(reason = reason, runBackfill = false, runSync = false, pullMode = PullMode.INCREMENTAL)
+    }
+
+    override fun requestInitialRestore(reason: SyncTriggerReason): Job? {
+        return request(reason = reason, runBackfill = false, runSync = false, pullMode = PullMode.INITIAL_RESTORE)
+    }
+
+    override fun requestSyncAndPull(reason: SyncTriggerReason): Job? {
+        return request(reason = reason, runBackfill = false, runSync = true, pullMode = PullMode.MANUAL_RESTORE_CHECK)
+    }
+
+    private fun request(
+        reason: SyncTriggerReason,
+        runBackfill: Boolean,
+        runSync: Boolean,
+        pullMode: PullMode? = null
+    ): Job? {
         synchronized(lock) {
             activeJob?.takeIf { it.isActive }?.let { job ->
                 Log.d("DayZeroSync", "scheduler skipped already running reason=$reason")
@@ -53,7 +74,7 @@ class InProcessSyncScheduler(
 
             val job = scope.launch {
                 try {
-                    Log.d("DayZeroSync", "scheduler request reason=$reason backfill=$runBackfill sync=$runSync")
+                    Log.d("DayZeroSync", "scheduler request reason=$reason backfill=$runBackfill sync=$runSync pull=$pullMode")
                     if (reason != SyncTriggerReason.MANUAL && debounceMs > 0L) {
                         delay(debounceMs)
                     }
@@ -72,6 +93,12 @@ class InProcessSyncScheduler(
                     }
                     if (runSync) {
                         syncCoordinator?.runOnce()
+                    }
+                    when (pullMode) {
+                        PullMode.INITIAL_RESTORE -> pullCoordinator?.runInitialRestoreIfLocalEmpty()
+                        PullMode.INCREMENTAL -> pullCoordinator?.runIncrementalPull()
+                        PullMode.MANUAL_RESTORE_CHECK -> pullCoordinator?.runOnce(PullMode.MANUAL_RESTORE_CHECK)
+                        null -> Unit
                     }
                     syncHealthReporter?.logSnapshot()
                 } catch (error: Exception) {

@@ -96,6 +96,8 @@ The Android client may use only the configured publishable/anon key. A `service_
 
 `updated_at` is updated by the Android gateway on each remote write attempt that reaches Supabase.
 
+Remote pull depends on `updated_at` being sortable and present on every synced table. Incremental pull uses `updated_at > cursor` and orders by `updated_at.asc`.
+
 Deletes are soft deletes:
 
 - Set `deleted_at` to a timestamp.
@@ -118,6 +120,18 @@ For each table, verify:
 - Select/insert/update/delete policies use `user_id = auth.uid()`.
 - The table is exposed to the Data API if the app needs PostgREST access.
 - The `authenticated` role can select/insert/update/delete these RLS-protected tables through the Data API.
+- `client_id` is not null and is stable across retries.
+- `schema_version` exists and defaults to `1`.
+- `updated_at` can be filtered and sorted through PostgREST.
+- `deleted_at` is returned by select queries.
+
+For pull relation reconstruction, verify:
+
+- `meals.daily_record_client_id` exists and references the local client id of `daily_records`.
+- `food_entries.meal_client_id` exists and references the local client id of `meals`.
+- `food_entries.daily_record_client_id` exists and references the local client id of `daily_records`.
+- `weight_records.daily_record_client_id` exists when the weight was created from a daily confirmation.
+- Remote pull does not depend on remote auto-increment ids.
 
 ## Idempotency Verification
 
@@ -143,7 +157,6 @@ To verify isolation:
 
 The current stage does not implement:
 
-- Remote pull into Room.
 - Multi-device conflict merging.
 - Realtime.
 - Chat transcript sync.

@@ -197,7 +197,8 @@ fun TrendsScreen(viewModel: DayZeroViewModel) {
             
             SyncStatusPanel(
                 state = syncStatusUiState,
-                onManualSync = viewModel::runManualSync
+                onManualSync = viewModel::runManualSync,
+                onManualRestoreCheck = viewModel::runManualRestoreCheck
             )
 
             Spacer(modifier = Modifier.height(32.dp))

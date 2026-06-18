@@ -18,7 +18,11 @@ import com.example.data.sync.BackfillStateStore
 import com.example.data.sync.InProcessSyncScheduler
 import com.example.data.sync.LocalFirstSyncCoordinator
 import com.example.data.sync.NoopRemoteSyncGateway
+import com.example.data.sync.NoopRemotePullGateway
+import com.example.data.sync.PullCoordinator
+import com.example.data.sync.PullStateStore
 import com.example.data.sync.SupabaseRemoteSyncGateway
+import com.example.data.sync.SupabaseRemotePullGateway
 import com.example.data.sync.SyncCoordinator
 import com.example.data.sync.SyncHealthReporter
 import com.example.data.sync.SyncScheduler
@@ -67,6 +71,7 @@ class DayZeroViewModel(
     private val latencyLogger: AiLatencyTraceLogger,
     private val syncCoordinator: SyncCoordinator? = null,
     private val backfillCoordinator: BackfillCoordinator? = null,
+    private val pullCoordinator: PullCoordinator? = null,
     private val syncHealthReporter: SyncHealthReporter? = null,
     syncStatusRepository: SyncStatusRepository? = null,
     syncScheduler: SyncScheduler? = null
@@ -75,6 +80,7 @@ class DayZeroViewModel(
         scope = viewModelScope,
         syncCoordinator = syncCoordinator,
         backfillCoordinator = backfillCoordinator,
+        pullCoordinator = pullCoordinator,
         syncHealthReporter = syncHealthReporter
     )
     private val effectiveSyncStatusRepository: SyncStatusRepository? = syncStatusRepository ?: SyncStatusRepository(
@@ -98,6 +104,7 @@ class DayZeroViewModel(
         observeChatMessages()
         refreshSyncHealth("app_start")
         triggerInitialBackfill("app_start", delayMs = 1_500L)
+        triggerInitialRestore("app_start", delayMs = 2_500L)
         triggerBackgroundSync("app_start")
     }
 
@@ -580,6 +587,23 @@ class DayZeroViewModel(
         }
     }
 
+    fun runManualRestoreCheck() {
+        val repository = effectiveSyncStatusRepository ?: return
+        viewModelScope.launch {
+            _syncStatusUiState.update { it.copy(isRefreshing = true, actionText = null) }
+            val snapshot = repository.runManualRestoreCheck()
+            if (snapshot != null) {
+                _syncStatusUiState.value = SyncStatusUiStateMapper.from(snapshot)
+                    .copy(isRefreshing = false, actionText = "已检查云端记录")
+                repository.logSnapshot()
+            } else {
+                _syncStatusUiState.update {
+                    it.copy(isRefreshing = false, actionText = "云端记录暂不可用")
+                }
+            }
+        }
+    }
+
     private fun handleFoodRecordConfirm(
         traceId: String,
         interactionId: String,
@@ -802,6 +826,20 @@ class DayZeroViewModel(
         }
     }
 
+    private fun triggerInitialRestore(reason: String, delayMs: Long = 0L) {
+        viewModelScope.launch {
+            try {
+                if (delayMs > 0L) delay(delayMs)
+                Log.d("DayZeroPull", "initial restore trigger reason=$reason")
+                val job = effectiveSyncScheduler.requestInitialRestore(syncTriggerReason(reason))
+                job?.join()
+                refreshSyncHealthState(reason = "pull_$reason")
+            } catch (e: Exception) {
+                Log.e("DayZeroPull", "initial restore trigger error reason=$reason", e)
+            }
+        }
+    }
+
     private suspend fun refreshSyncHealthState(reason: String) {
         val snapshot = effectiveSyncStatusRepository?.snapshot()
         if (snapshot == null) {
@@ -866,6 +904,14 @@ class DayZeroViewModel(
                 } else {
                     NoopRemoteSyncGateway()
                 }
+                val remotePullGateway = if (SupabaseConfig.isConfigured() && supabaseIdentityProvider != null) {
+                    SupabaseRemotePullGateway(
+                        okHttpClient = NetworkModule.syncOkHttpClient,
+                        sessionProvider = supabaseIdentityProvider
+                    )
+                } else {
+                    NoopRemotePullGateway()
+                }
                 val syncCoordinator = LocalFirstSyncCoordinator(
                     syncQueueDao = database.syncQueueDao(),
                     identityProvider = identityProvider,
@@ -873,16 +919,24 @@ class DayZeroViewModel(
                     dailyRecordDao = database.dailyRecordDao()
                 )
                 val backfillStateStore = BackfillStateStore(application)
+                val pullStateStore = PullStateStore(application)
                 val backfillCoordinator = BackfillCoordinator(
                     dailyRecordDao = database.dailyRecordDao(),
                     syncQueueDao = database.syncQueueDao(),
                     identityProvider = identityProvider,
                     stateStore = backfillStateStore
                 )
+                val pullCoordinator = PullCoordinator(
+                    database = database,
+                    remotePullGateway = remotePullGateway,
+                    identityProvider = identityProvider,
+                    stateStore = pullStateStore
+                )
                 val syncHealthReporter = SyncHealthReporter(
                     syncQueueDao = database.syncQueueDao(),
                     identityProvider = identityProvider,
                     backfillStateStore = backfillStateStore,
+                    pullStateStore = pullStateStore,
                     dailyRecordDao = database.dailyRecordDao(),
                     remoteSyncEnabledProvider = { SupabaseConfig.isConfigured() }
                 )
@@ -919,6 +973,7 @@ class DayZeroViewModel(
                     latencyLogger = latencyLogger,
                     syncCoordinator = syncCoordinator,
                     backfillCoordinator = backfillCoordinator,
+                    pullCoordinator = pullCoordinator,
                     syncHealthReporter = syncHealthReporter
                 ) as T
             }

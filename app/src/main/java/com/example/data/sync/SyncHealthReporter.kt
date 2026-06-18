@@ -9,12 +9,14 @@ class SyncHealthReporter(
     private val syncQueueDao: SyncQueueDao,
     private val identityProvider: CurrentIdentityProvider,
     private val backfillStateStore: BackfillStateStore,
+    private val pullStateStore: PullStateStore? = null,
     private val dailyRecordDao: DailyRecordDao,
     private val remoteSyncEnabledProvider: () -> Boolean
 ) {
     suspend fun snapshot(): SyncHealthSnapshot {
         val identity = identityProvider.currentIdentity()
         val backfillState = backfillStateStore.snapshot()
+        val pullState = pullStateStore?.snapshot()
         val pendingCount = syncQueueDao.countByStatus(DayZeroSyncConstants.STATUS_PENDING)
         val retryableFailureCount = syncQueueDao.countByStatus(DayZeroSyncConstants.STATUS_FAILED_RETRYABLE)
         val fatalFailureCount = syncQueueDao.countByStatus(DayZeroSyncConstants.STATUS_FAILED_FATAL)
@@ -24,6 +26,10 @@ class SyncHealthReporter(
         val lastBackfillSuccess = backfillState.lastSuccessAt ?: 0L
         val backfillPendingEstimatedCount = dailyRecordDao.countConfirmedRecordsUpdatedAfter(lastBackfillSuccess)
         val lastSyncSuccessAt = syncQueueDao.getLastSuccessfulSyncAt()
+        val businessRecordCount = dailyRecordDao.countBusinessRecordsIncludingDeleted()
+        val pulledCount = pullState?.let {
+            it.pulledDailyRecordCount + it.pulledMealCount + it.pulledFoodEntryCount + it.pulledWeightRecordCount
+        } ?: 0
 
         return SyncHealthSnapshot(
             remoteSyncEnabled = remoteSyncEnabled,
@@ -42,6 +48,16 @@ class SyncHealthReporter(
             backfillStatus = backfillState.status,
             backfillLastSuccessAt = backfillState.lastSuccessAt,
             backfillPendingEstimatedCount = backfillPendingEstimatedCount,
+            pullStatus = pullState?.status ?: PullStatus.NOT_STARTED,
+            lastPullAttemptAt = pullState?.lastAttemptAt,
+            lastPullSuccessAt = pullState?.lastSuccessAt,
+            lastPullFailureAt = pullState?.lastFailureAt,
+            pullError = pullState?.lastError,
+            pulledCount = pulledCount,
+            pullConflictCount = pullState?.conflictCount ?: 0,
+            initialRestoreAvailable = remoteSyncEnabled && hasRemoteIdentity && businessRecordCount == 0,
+            initialRestoreCompleted = pullState?.status == PullStatus.COMPLETED && businessRecordCount > 0,
+            isRestoring = pullState?.status == PullStatus.RUNNING,
             queueOldestPendingAt = syncQueueDao.getOldestPendingAt(),
             isHealthy = isHealthy(
                 remoteSyncEnabled = remoteSyncEnabled,
@@ -63,6 +79,7 @@ class SyncHealthReporter(
                 "authProvider=${health.authProvider} pending=${health.pendingCount} processing=${health.processingCount} " +
                 "done=${health.doneCount} retryable=${health.retryableFailureCount} fatal=${health.fatalFailureCount} " +
                 "waitingForAuth=${health.waitingForAuthCount} backfillStatus=${health.backfillStatus.value} " +
+                "pullStatus=${health.pullStatus.value} pulled=${health.pulledCount} pullConflict=${health.pullConflictCount} " +
                 "backfillPendingEstimated=${health.backfillPendingEstimatedCount} isHealthy=${health.isHealthy}"
         )
     }

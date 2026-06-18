@@ -5,6 +5,7 @@
 - **Local-First Sync Architecture (Phase 5) implemented**. Established local-first sync foundation for daily records, meals, food entries, and weight records using Room as the local source of truth.
 - **Identity Layer & Anonymous Auth**: Added `CurrentIdentityProvider` and `CompositeIdentityProvider`. Implemented `SupabaseAnonymousIdentityProvider` which logs in anonymously and holds a `SupabaseAuthSession` so data can be synced to Supabase without requiring user manual login.
 - **Supabase Remote Sync Gateway**: Added `SupabaseRemoteSyncGateway` which maps queued `SyncPayload` items and pushes them to Supabase via REST/PostgREST. Gracefully falls back to `NoopRemoteSyncGateway` if Supabase config is missing.
+- **Remote Pull Implemented**: Added `PullCoordinator`, `PullStateStore`, `RemotePullGateway`, and `SupabaseRemotePullGateway` to fetch updates from Supabase into the local Room database, completing the two-way sync loop.
 - **Offline Retry Optimization Completed**: Implemented `RetryPolicy` with exponential backoff and `SyncScheduler` to manage pending sync operations efficiently and reliably.
 - **Supabase Schema Verification**: Added `docs/SUPABASE_SCHEMA_VERIFICATION.md` as the definitive checklist for the remote sync schema, RLS policies, and idempotency requirements.
 - **UI Integration for Sync Status Completed**: Added `SyncStatusRepository` and UI components (`ui/sync/`) to observe and display the `SyncHealthSnapshot`. Integrated sync status indicators into `AiRecordScreen` and `TrendsScreen`. Also updated `SupabaseRemoteSyncGateway` to handle remote deletions.
@@ -63,4 +64,4 @@
 
 - AI architecture reference is `docs/AI_ASSISTANT_TURN_V2_ARCHITECTURE.md`.
 - Data sync architecture reference is `docs/DATA_SYNC_ARCHITECTURE.md`.
-- Next step is **New Feature Development** (e.g., enhancing AI capabilities with long-term memory retrieval, robust error handling, or social features), now that the Phase 5 local-first sync architecture is feature-complete.
+- Next step is **Multi-Device Conflict Resolution** or **New Feature Development** (e.g., enhancing AI capabilities with long-term memory retrieval, robust error handling, or social features), now that the Phase 5 local-first sync architecture is feature-complete.

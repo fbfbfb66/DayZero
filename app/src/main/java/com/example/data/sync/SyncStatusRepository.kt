@@ -27,7 +27,7 @@ class SyncStatusRepository(
     suspend fun runManualSync(): SyncHealthSnapshot? {
         Log.d("DayZeroSync", "manual sync start")
         return try {
-            val job = syncScheduler?.requestSyncAndBackfill(SyncTriggerReason.MANUAL)
+            val job = syncScheduler?.requestSyncAndPull(SyncTriggerReason.MANUAL)
             if (job != null) {
                 job.join()
             } else {
@@ -39,6 +39,20 @@ class SyncStatusRepository(
             snapshot
         } catch (error: Exception) {
             Log.e("DayZeroSync", "manual sync error reason=${error::class.java.simpleName}", error)
+            snapshot()
+        }
+    }
+
+    suspend fun runManualRestoreCheck(): SyncHealthSnapshot? {
+        Log.d("DayZeroPull", "manual restore check start")
+        return try {
+            val job = syncScheduler?.requestPull(SyncTriggerReason.MANUAL)
+            job?.join()
+            val snapshot = snapshot()
+            Log.d("DayZeroPull", "manual restore check finish")
+            snapshot
+        } catch (error: Exception) {
+            Log.e("DayZeroPull", "manual restore check error reason=${error::class.java.simpleName}", error)
             snapshot()
         }
     }

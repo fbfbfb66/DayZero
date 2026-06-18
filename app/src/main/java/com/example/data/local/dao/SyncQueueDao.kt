@@ -134,6 +134,21 @@ interface SyncQueueDao {
         localUpdatedAt: Long
     ): Int
 
+    @Query(
+        """
+        SELECT COUNT(*) FROM sync_queue
+        WHERE ownerLocalId IN (:ownerLocalId, 'local_uninitialized')
+          AND entityType = :entityType
+          AND entityLocalId = :entityLocalId
+          AND status IN ('PENDING', 'PROCESSING', 'FAILED_RETRYABLE', 'WAITING_FOR_AUTH')
+        """
+    )
+    suspend fun countActiveTasksForEntity(
+        ownerLocalId: String,
+        entityType: String,
+        entityLocalId: String
+    ): Int
+
     @Query("SELECT COUNT(*) FROM sync_queue WHERE status = :status")
     suspend fun countByStatus(status: String): Int
 
