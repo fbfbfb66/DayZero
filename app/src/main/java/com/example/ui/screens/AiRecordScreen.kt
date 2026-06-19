@@ -1,4 +1,4 @@
-﻿package com.example.ui.screens
+package com.example.ui.screens
 
 import android.widget.Toast
 import androidx.compose.ui.platform.LocalContext
@@ -168,8 +168,7 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
         LazyColumn(
             state = listState,
             modifier = Modifier
-                .fillMaxSize()
-                .imeNestedScroll(),
+                .fillMaxSize(),
             contentPadding = PaddingValues(start = 16.dp, top = 110.dp, end = 16.dp, bottom = 120.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -427,11 +426,16 @@ fun AiRecordScreen(viewModel: DayZeroViewModel) {
 
             var isFocused by remember { mutableStateOf(false) }
             val imeTargetBottom = WindowInsets.imeAnimationTarget.getBottom(LocalDensity.current)
-            val isSeparated = isFocused || (imeTargetBottom > 0)
+            val isSeparated = isFocused || (imeTargetBottom > 0) || inputText.isNotEmpty()
 
             val focusManager = LocalFocusManager.current
             LaunchedEffect(imeTargetBottom) {
                 if (imeTargetBottom == 0 && isFocused) {
+                    focusManager.clearFocus()
+                }
+            }
+            LaunchedEffect(listState.isScrollInProgress) {
+                if (listState.isScrollInProgress) {
                     focusManager.clearFocus()
                 }
             }
