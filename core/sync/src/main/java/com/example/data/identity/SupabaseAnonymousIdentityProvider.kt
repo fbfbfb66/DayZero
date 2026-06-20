@@ -102,7 +102,7 @@ class SupabaseAnonymousIdentityProvider(
     override fun currentSessionStatus(): SupabaseAuthSessionStatus = lastStatus
 
     private suspend fun signInAnonymously(localOwnerId: String): SupabaseAuthSession? = withContext(Dispatchers.IO) {
-        Log.d("DayZeroAuth", "identity anonymous signup started")
+        Log.d("DayZeroAuthDiag", "anonymous sign in start")
         try {
             val body = JSONObject()
                 .put("data", JSONObject().put("local_owner_id", localOwnerId))
