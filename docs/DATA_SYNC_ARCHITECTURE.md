@@ -29,7 +29,9 @@ AI conversation phase 4 adds a local date-mismatch guard for `show_confirm_card(
 
 Phase 6A added the remote schema and client data contract for chat sync. The remote tables are `ai_conversations` and `ai_chat_messages`, with local UUIDs as remote primary keys, owner-scoped RLS, soft-delete tombstones, and database-controlled `server_updated_at` cursors.
 
-Phase 6B adds local chat enqueue, Chat Push, and historical Chat Backfill. Real-device verification of Chat Push has been successfully completed: new conversations and unique assistant final messages successfully push; placeholder and streaming delta messages are not uploaded; card JSONB is stored natively without double-encoding; card updates update the same message ID without duplication; and backfill execution is idempotent. Chat push runs automatically via SyncScheduler. Chat Pull, multi-device merge, chat deletion UI, and account binding remain unimplemented.
+Phase 6B adds local chat enqueue, Chat Push, and historical Chat Backfill. Real-device verification of Chat Push has been successfully completed: new conversations and unique assistant final messages successfully push; placeholder and streaming delta messages are not uploaded; card JSONB is stored natively without double-encoding; card updates update the same message ID without duplication; and backfill execution is idempotent. Chat push runs automatically via SyncScheduler. 
+
+Phase 6C-1 implements the pure network transport for Chat Pull using `(server_updated_at, id)` composite pagination. It reads real remote data accurately but does not yet write to Room or merge with the database. Chat Pull integration, multi-device merge, chat deletion UI, and account binding remain unimplemented.
 
 The AI runtime is not changed in this stage. `assistant-turn-v2-stream` remains the primary AI entry, `assistant-turn-v2` remains fallback, and Kimi prompts/protocols are unchanged. AI returns replies and actions only; the client performs deterministic database writes after user confirmation.
 

@@ -30,9 +30,20 @@ data class ChatSyncMessageSnapshot(
 )
 
 data class ChatSyncServerCursor(
-    val serverUpdatedAtMillis: Long,
+    val serverUpdatedAt: String,
     val id: String
 )
 
 const val CHAT_SYNC_SCHEMA_VERSION = 1
 
+data class ChatRemoteConversationPage(
+    val items: List<ChatSyncConversationSnapshot>,
+    val nextCursor: ChatSyncServerCursor?,
+    val hasMore: Boolean
+)
+
+data class ChatRemoteMessagePage(
+    val items: List<ChatSyncMessageSnapshot>,
+    val nextCursor: ChatSyncServerCursor?,
+    val hasMore: Boolean
+)

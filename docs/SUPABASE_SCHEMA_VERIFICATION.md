@@ -332,8 +332,19 @@ Phase 6B Chat Push and Backfill have been fully verified on a real device. The f
 - **Verified**: Post-restart sync queue execution is idempotent. Repeating backfill does not create duplicate rows; the remote database tables contain exactly 3 conversations and 16 messages and remain stable.
 - **Verified**: Chat push is executed automatically in the background by `SyncScheduler`.
 - **Verified**: Remote API security restrictions are enforced; any client-side attempt to mutate `user_id` or perform SQL `DELETE` operations is rejected with `HTTP 403 Forbidden`.
-- **Note**: Chat Pull is still not implemented.
+- **Note**: Chat Pull integration into the production lifecycle is still not implemented.
 
+## Phase 6C-1 Chat Pull Transport Verification
+
+Phase 6C-1 read access and pagination mechanisms have been verified against the Supabase deployment. The following checklist was completed:
+- **Verified**: Configured `SupabaseChatRemotePullGateway` correctly reads `ai_conversations` and `ai_chat_messages` using the anonymous authenticated session.
+- **Verified**: Only rows belonging to the current user are retrieved, confirming RLS policies work during read operations.
+- **Verified**: Composite cursor `(server_updated_at, id)` generates correct PostgREST `or` filters resulting in stable multi-page iteration with no duplicates.
+- **Verified**: Microsecond precision for `server_updated_at` is preserved correctly by strictly using ISO-8601 UTC strings instead of epoch milliseconds, preventing truncation. Verifications handled edge cases like sub-millisecond differences (e.g. `.123001` vs `.123456`) successfully.
+- **Verified**: `deleted_at` timestamps correctly parse into tombstones without row exclusion at the network level.
+- **Verified**: Raw JSONB extraction successfully extracts the `assistant_cards` field exactly as it exists in Supabase without field truncation or Moshi coercion errors.
+- **Verified**: 401/403 HTTP errors properly trigger exactly one controlled `forceRefreshSession` and retry. Temporary and permanent identity errors correctly map to `RetryableFailure` and `FatalFailure`.
+- **Note**: No local database modifications were made. The results are contained purely within remote data models.
 ## Partial Pull Verification
 
 When validating pull reliability, check these failure modes:

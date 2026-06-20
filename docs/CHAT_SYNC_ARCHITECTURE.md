@@ -128,4 +128,13 @@ Message `role`, `created_at`, and `conversation_id` are immutable after creation
 
 Phase 6B implements Chat Push and Chat Backfill only. It does not implement Chat Pull, multi-device merge, chat deletion UI, remote hard delete, account binding, or anonymous identity recovery after uninstall.
 
-The next phase is Phase 6C: Chat Pull plus Merge.
+## Phase 6C-1 Chat Pull Transport
+
+Phase 6C-1 implements the pure network transport for Chat Pull without integrating it into the production application lifecycle.
+- **Pull Gateway**: `ChatRemotePullGateway` and `SupabaseChatRemotePullGateway` correctly map `ChatRemoteConversationPage` and `ChatRemoteMessagePage` data models directly from Supabase via OkHttp, strictly isolating DTO concerns. Explicit select fields are used instead of `select=*`.
+- **Exact Cursor Precision**: The composite server cursor `(server_updated_at, id)` uses a precise ISO-8601 UTC String instead of epoch milliseconds to completely prevent PostgreSQL microsecond precision truncation. This has been verified via mocked PostgREST tests to preserve sub-millisecond differences (e.g. `.123001` vs `.123456`) and correctly paginate without duplicate records or skipping.
+- **Parsing Tolerance**: `assistant_cards` JSONB content is natively retained via raw JSON string extraction without Moshi mapping, preserving all current and future nested fields.
+- **Identity Refresh Lifecycle**: Chat Pull accurately integrates with the Supabase identity lifecycle. For 401/403 HTTP errors, the gateway attempts exactly one controlled `forceRefreshSession` before mapping to an identity or schema fatal failure. Temporary refresh errors (e.g., network timeouts) are treated as `RetryableFailure`, and permanent refresh rejection directly maps to `FatalFailure`.
+- **Zero Local Mutations**: This phase reads strictly from the server. It still does not write to Room, does not implement conflict merge logic, does not push the formal `PullStateStore` cursor, and does not run inside the production `PullCoordinator`. 
+
+The next phase remains Phase 6C-2: Conversation Merge.

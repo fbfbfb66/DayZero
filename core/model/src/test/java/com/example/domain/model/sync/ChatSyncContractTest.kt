@@ -24,11 +24,11 @@ class ChatSyncContractTest {
     @Test
     fun serverCursorCarriesStableSecondaryId() {
         val cursor = ChatSyncServerCursor(
-            serverUpdatedAtMillis = 1_782_000_000_123L,
+            serverUpdatedAt = "2026-06-21T10:00:00.123456Z",
             id = "22222222-2222-2222-2222-222222222222"
         )
 
-        assertEquals(1_782_000_000_123L, cursor.serverUpdatedAtMillis)
+        assertEquals("2026-06-21T10:00:00.123456Z", cursor.serverUpdatedAt)
         assertEquals("22222222-2222-2222-2222-222222222222", cursor.id)
     }
 }

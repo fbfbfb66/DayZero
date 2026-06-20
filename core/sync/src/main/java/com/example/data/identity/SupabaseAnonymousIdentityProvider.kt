@@ -99,6 +99,35 @@ class SupabaseAnonymousIdentityProvider(
         }
     }
 
+    override suspend fun forceRefreshSession(): SupabaseAuthSession? {
+        if (!isConfigured) {
+            lastStatus = SupabaseAuthSessionStatus.NoStoredSession
+            return null
+        }
+
+        return sessionMutex.withLock {
+            if (isCloudIdentityBlocked()) {
+                lastStatus = SupabaseAuthSessionStatus.RefreshPermanentlyRejected(
+                    loadBlockedReason() ?: "cloud_identity_blocked"
+                )
+                return@withLock null
+            }
+
+            val stored = loadSession()
+            if (stored != null) {
+                val refreshToken = stored.refreshToken
+                if (refreshToken.isNullOrBlank()) {
+                    markPermanentFailure("missing_refresh_token")
+                    return@withLock null
+                }
+                refreshSession(stored, refreshToken)
+            } else {
+                lastStatus = SupabaseAuthSessionStatus.NoStoredSession
+                null
+            }
+        }
+    }
+
     override fun currentSessionStatus(): SupabaseAuthSessionStatus = lastStatus
 
     private suspend fun signInAnonymously(localOwnerId: String): SupabaseAuthSession? = withContext(Dispatchers.IO) {

@@ -657,6 +657,9 @@ class DayZeroSyncBackfillTest {
                 expiresAtEpochSeconds = Long.MAX_VALUE
             )
         }
+        override suspend fun forceRefreshSession(): SupabaseAuthSession? {
+            return currentSessionOrNull()
+        }
     }
 
     private class CapturingInterceptor : Interceptor {

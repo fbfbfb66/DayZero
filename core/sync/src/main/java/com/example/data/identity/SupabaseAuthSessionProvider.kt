@@ -2,6 +2,7 @@ package com.example.data.identity
 
 interface SupabaseAuthSessionProvider {
     suspend fun currentSessionOrNull(): SupabaseAuthSession?
+    suspend fun forceRefreshSession(): SupabaseAuthSession?
 
     fun currentSessionStatus(): SupabaseAuthSessionStatus = SupabaseAuthSessionStatus.NoStoredSession
 }

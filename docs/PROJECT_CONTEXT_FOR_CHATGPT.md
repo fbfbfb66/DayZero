@@ -141,6 +141,16 @@ Note: Several legacy interfaces/classes still exist in migrated modules for comp
 - Unsynced chat state: `reply_delta`, `StreamingState`, `isAnalyzing`, typewriter progress, input drafts, active route/conversation UI state, keyboard/Compose state, and transient network errors.
 - Chat Pull and multi-device merge remain unimplemented. Formal login remains unimplemented. Uninstall/system clear-data still loses anonymous identity recovery.
 
+### Phase 6C-1 Chat Remote Pull Transport
+
+- Gateway implemented: `ChatRemotePullGateway` and `SupabaseChatRemotePullGateway` are configured to fetch `ai_conversations` and `ai_chat_messages` directly via REST.
+- Stable pagination: Implemented using a strictly ascending composite cursor `(server_updated_at, id)` mapped to PostgREST `or` filter (`server_updated_at > cursor.time OR (server_updated_at = cursor.time AND id > cursor.id)`). `server_updated_at` uses a precise ISO-8601 UTC string (not epoch milliseconds) to preserve microsecond precision and prevent truncation.
+- Parsing precision: `assistant_cards` JSONB is extracted as raw string content via `JSONObject` to prevent field loss.
+- Error Handling: Integrates accurately with the Supabase identity lifecycle. On 401/403, triggers exactly one session refresh and retry before mapping to `FatalFailure`. Timeouts and transient HTTP errors (e.g. 5xx, 429) result in `RetryableFailure`. Permanent refresh rejection maps to `FatalFailure`.
+- No side effects: Data is only queried into `ChatRemoteConversationPage` and `ChatRemoteMessagePage` data models. This phase does **not** write to Room, does **not** persist formal cursor progress, and is **not** integrated into the `PullCoordinator` lifecycle.
+- Testing: Local Unit tests implemented. Supabase verification confirmed reading correct schemas, tombstone recognition, proper pagination without duplicates, and raw JSONB preserving all schema variations.
+- Next phase: Phase 6C-2 (Conversation Merge).
+
 ### AI History & Conversation Foundation (Phases 1, 2, 3 & 4 Technical Details)
 
 To support multiple chat histories, the database schema, domain layer, and view models have been updated to isolate chat sessions.
