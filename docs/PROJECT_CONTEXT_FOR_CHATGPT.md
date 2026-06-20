@@ -2,6 +2,21 @@
 
 ## Current status
 
+- **Major Architecture Refactor Complete (Multi-module + Hilt)**. The project has been split from a single large `:app` module into a maintainable layered module graph: `:app`, `:core:model`, `:core:domain`, `:core:database`, `:core:network`, `:core:data`, `:core:sync`, `:core:ui`, `:feature:ai-record`, `:feature:calendar`, and `:feature:trends`.
+- **Hilt Dependency Injection Enabled**. `DayZeroApplication` is annotated with `@HiltAndroidApp`, `MainActivity` is an `@AndroidEntryPoint`, and `DayZeroViewModel` is now an `@HiltViewModel`. Manual dependency construction in the old `DayZeroViewModel.Factory` has been removed and replaced with constructor injection plus `DayZeroHiltModule`.
+- **Module Ownership Boundaries**:
+  - `:app` owns application startup, activity, navigation, and Hilt wiring.
+  - `:core:model` owns pure Kotlin domain/UI state models.
+  - `:core:domain` owns repository interfaces, intent/domain helpers, summaries, and use cases.
+  - `:core:database` owns Room database, DAO, entity, and local mappers.
+  - `:core:network` owns Retrofit/OkHttp/Supabase API, DTO, remote mappers, and streaming client.
+  - `:core:data` owns repository implementations and telemetry.
+  - `:core:sync` owns identity, sync queue/coordinators/gateways/health reporting.
+  - `:core:ui` owns shared Compose theme, AI card components, feedback overlay, and sync UI.
+  - `:feature:*` modules own screen-level Compose UI for AI Record, Calendar, and Trends.
+- **ViewModel Scope Reduced**. `DayZeroViewModel` remains the shared app state holder for now, but dependencies are injected and clear/confirm flows have started moving into domain use cases. `ClearLocalDataUseCase` handles local cleanup policy and `ConfirmFoodRecordUseCase` handles `show_confirm_card(food_record)` persistence.
+- **AI Record UI Decoupled**. `AiRecordScreen` no longer receives `DayZeroViewModel` directly. It receives `AppState`, `SyncStatusUiState`, and an `AiRecordActionHandler`. AI business card dispatch has been moved into `AssistantCardRenderer`, so new card types should be added there instead of expanding the main screen body.
+- **Build Verification After Refactor**: `./gradlew :app:assembleDebug :app:testDebugUnitTest` and `./gradlew test` pass after the module split and Hilt migration.
 - **Local-First Sync Architecture (Phase 5) implemented**. Established local-first sync foundation for daily records, meals, food entries, and weight records using Room as the local source of truth.
 - **Identity Layer & Anonymous Auth**: Added `CurrentIdentityProvider` and `CompositeIdentityProvider`. Implemented `SupabaseAnonymousIdentityProvider` which logs in anonymously and holds a `SupabaseAuthSession` so data can be synced to Supabase without requiring user manual login.
 - **Supabase Remote Sync Gateway**: Added `SupabaseRemoteSyncGateway` which maps queued `SyncPayload` items and pushes them to Supabase via REST/PostgREST. Gracefully falls back to `NoopRemoteSyncGateway` if Supabase config is missing.
@@ -41,6 +56,8 @@
   - `AiCompanionReplyRepository`
   - `AiSummaryRepository`
 
+Note: Several legacy interfaces/classes still exist in migrated modules for compatibility and tests, but the production AI record path must continue to use `assistant-turn-v2-stream` with `assistant-turn-v2` only as the explicit fallback.
+
 ## Logging
 
 - `DayZeroAiV2: send message`
@@ -67,4 +84,5 @@
 
 - AI architecture reference is `docs/AI_ASSISTANT_TURN_V2_ARCHITECTURE.md`.
 - Data sync architecture reference is `docs/DATA_SYNC_ARCHITECTURE.md`.
-- Next step is **Multi-Device Conflict Resolution** or **New Feature Development** (e.g., enhancing AI capabilities with long-term memory retrieval, robust error handling, or social features), now that the Phase 5 local-first sync architecture is feature-complete.
+- Current code architecture is now multi-module and Hilt-based. Future changes should respect module boundaries: UI/feature modules must not depend directly on Room DAO, Retrofit services, Supabase gateways, or sync coordinators; domain/use cases must not depend on Compose, Android UI, Room entities, or remote DTOs.
+- Next step is to continue narrowing `DayZeroViewModel` into feature-specific state holders (`AiRecordViewModel`, Calendar/Trends state holders) and to add focused unit/UI tests around the extracted use cases and card renderer.

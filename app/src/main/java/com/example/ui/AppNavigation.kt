@@ -20,6 +20,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,7 +38,10 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.DayZeroViewModel
 import com.example.UiEvent
+import com.example.domain.model.ai.AiChatMessage
+import com.example.domain.model.ai.assistant.PayloadSummary
 import com.example.ui.components.feedback.SuccessConfirmOverlay
+import com.example.ui.screens.AiRecordActionHandler
 import com.example.ui.screens.AiRecordScreen
 import com.example.ui.screens.CalendarScreen
 import com.example.ui.screens.TrendsScreen
@@ -61,7 +65,58 @@ val items = listOf(
 @Composable
 fun MainApp() {
     val navController = rememberNavController()
-    val viewModel: DayZeroViewModel = viewModel(factory = DayZeroViewModel.Factory)
+    val viewModel: DayZeroViewModel = viewModel()
+    val uiState by viewModel.uiState.collectAsState()
+    val syncStatusUiState by viewModel.syncStatusUiState.collectAsState()
+    val aiRecordActionHandler = remember(viewModel) {
+        object : AiRecordActionHandler {
+            override fun sendAiMessage(text: String) {
+                viewModel.sendAiMessage(text)
+            }
+
+            override fun sendInteractionResult(
+                interactionId: String,
+                actionType: String,
+                optionId: String,
+                optionLabel: String,
+                field: String?,
+                originalText: String?,
+                confirmType: String?,
+                payloadSummary: PayloadSummary?
+            ) {
+                viewModel.sendInteractionResult(
+                    interactionId = interactionId,
+                    actionType = actionType,
+                    optionId = optionId,
+                    optionLabel = optionLabel,
+                    field = field,
+                    originalText = originalText,
+                    confirmType = confirmType,
+                    payloadSummary = payloadSummary
+                )
+            }
+
+            override fun clearChatMessages() {
+                viewModel.clearChatMessages()
+            }
+
+            override fun clearLocalRecords() {
+                viewModel.clearLocalRecords()
+            }
+
+            override fun clearAllData() {
+                viewModel.clearAllData()
+            }
+
+            override fun clearCloudBackupForDebug() {
+                viewModel.clearCloudBackupForDebug()
+            }
+
+            override fun markAssistantMessageRendered(message: AiChatMessage) {
+                viewModel.markAssistantMessageRendered(message)
+            }
+        }
+    }
     
     var showSuccessOverlay by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
@@ -135,7 +190,7 @@ fun MainApp() {
                 popExitTransition = { androidx.compose.animation.fadeOut(animationSpec = androidx.compose.animation.core.tween(300)) + androidx.compose.animation.slideOutVertically(targetOffsetY = { 50 }, animationSpec = androidx.compose.animation.core.tween(300)) }
             ) {
                 composable(Screen.Calendar.route) {
-                    CalendarScreen(viewModel, onNavigateToAi = {
+                    CalendarScreen(uiState = uiState, onNavigateToAi = {
                         navController.navigate(Screen.AiRecord.route) {
                             popUpTo(navController.graph.findStartDestination().id) { saveState = true }
                             launchSingleTop = true
@@ -144,10 +199,19 @@ fun MainApp() {
                     })
                 }
                 composable(Screen.AiRecord.route) {
-                    AiRecordScreen(viewModel)
+                    AiRecordScreen(
+                        uiState = uiState,
+                        syncStatusUiState = syncStatusUiState,
+                        actionHandler = aiRecordActionHandler
+                    )
                 }
                 composable(Screen.Trends.route) {
-                    TrendsScreen(viewModel)
+                    TrendsScreen(
+                        uiState = uiState,
+                        syncStatusUiState = syncStatusUiState,
+                        onManualSync = viewModel::runManualSync,
+                        onManualRestoreCheck = viewModel::runManualRestoreCheck
+                    )
                 }
             }
         }

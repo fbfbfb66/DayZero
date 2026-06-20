@@ -10,6 +10,7 @@
 /.idea/assetWizardSettings.xml
 .DS_Store
 /build
+**/build/
 /captures
 .externalNativeBuild
 .cxx
@@ -20,5 +21,4 @@ dayzero_ai_latency_traces_device.jsonl
 dayzero_database
 dayzero_database-shm
 dayzero_database-wal
-
 

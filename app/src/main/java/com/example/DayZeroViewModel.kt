@@ -2,27 +2,10 @@ package com.example
 
 import android.util.Log
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import androidx.lifecycle.viewmodel.CreationExtras
-import com.example.data.identity.CompositeIdentityProvider
-import com.example.data.identity.LocalIdentityProvider
-import com.example.data.identity.SupabaseAnonymousIdentityProvider
-import com.example.data.local.database.DayZeroDatabase
-import com.example.data.remote.NetworkModule
-import com.example.data.remote.PromptCacheKeyProvider
-import com.example.data.remote.SupabaseConfig
-import com.example.data.remote.stream.AssistantTurnStreamClient
 import com.example.data.sync.BackfillCoordinator
-import com.example.data.sync.BackfillStateStore
 import com.example.data.sync.InProcessSyncScheduler
-import com.example.data.sync.LocalFirstSyncCoordinator
-import com.example.data.sync.NoopRemoteSyncGateway
-import com.example.data.sync.NoopRemotePullGateway
 import com.example.data.sync.PullCoordinator
-import com.example.data.sync.PullStateStore
-import com.example.data.sync.SupabaseRemoteSyncGateway
-import com.example.data.sync.SupabaseRemotePullGateway
 import com.example.data.sync.SyncCoordinator
 import com.example.data.sync.SyncHealthReporter
 import com.example.data.sync.SyncScheduler
@@ -30,11 +13,6 @@ import com.example.data.sync.SyncStatusRepository
 import com.example.data.sync.SyncTriggerReason
 import com.example.data.sync.SupabaseCloudBackupCleaner
 import com.example.data.telemetry.AiLatencyTraceLogger
-import com.example.data.repository.FakeAiAssistantRepository
-import com.example.data.repository.FakeAiDraftRepository
-import com.example.data.repository.RemoteAiAssistantRepository
-import com.example.data.repository.RemoteAiDraftRepository
-import com.example.data.repository.RoomRecordRepository
 import com.example.domain.model.AppState
 import com.example.domain.model.RecordStatus
 import com.example.domain.model.ai.AiChatMessage
@@ -45,6 +23,9 @@ import com.example.domain.model.ai.assistant.ProtocolException
 import com.example.domain.repository.AiAssistantRepository
 import com.example.domain.repository.AiDraftRepository
 import com.example.domain.repository.RecordRepository
+import com.example.domain.usecase.ClearLocalDataAction
+import com.example.domain.usecase.ClearLocalDataUseCase
+import com.example.domain.usecase.ConfirmFoodRecordUseCase
 import com.example.ui.sync.SyncStatusUiState
 import com.example.ui.sync.SyncStatusUiStateMapper
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -59,33 +40,36 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.LocalDate
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 
 sealed class UiEvent {
     object RecordConfirmed : UiEvent()
     data class Error(val message: String) : UiEvent()
 }
 
-class DayZeroViewModel(
+@HiltViewModel
+class DayZeroViewModel @Inject constructor(
     private val recordRepository: RecordRepository,
     private val aiDraftRepository: AiDraftRepository,
     private val aiAssistantRepository: AiAssistantRepository,
     private val latencyLogger: AiLatencyTraceLogger,
+    private val clearLocalDataUseCase: ClearLocalDataUseCase,
+    private val confirmFoodRecordUseCase: ConfirmFoodRecordUseCase,
     private val syncCoordinator: SyncCoordinator? = null,
     private val backfillCoordinator: BackfillCoordinator? = null,
     private val pullCoordinator: PullCoordinator? = null,
     private val syncHealthReporter: SyncHealthReporter? = null,
-    syncStatusRepository: SyncStatusRepository? = null,
-    syncScheduler: SyncScheduler? = null,
     private val cloudBackupCleaner: SupabaseCloudBackupCleaner? = null
 ) : ViewModel() {
-    private val effectiveSyncScheduler: SyncScheduler = syncScheduler ?: InProcessSyncScheduler(
+    private val effectiveSyncScheduler: SyncScheduler = InProcessSyncScheduler(
         scope = viewModelScope,
         syncCoordinator = syncCoordinator,
         backfillCoordinator = backfillCoordinator,
         pullCoordinator = pullCoordinator,
         syncHealthReporter = syncHealthReporter
     )
-    private val effectiveSyncStatusRepository: SyncStatusRepository? = syncStatusRepository ?: SyncStatusRepository(
+    private val effectiveSyncStatusRepository: SyncStatusRepository? = SyncStatusRepository(
         syncCoordinator = syncCoordinator,
         backfillCoordinator = backfillCoordinator,
         syncHealthReporter = syncHealthReporter,
@@ -545,8 +529,7 @@ class DayZeroViewModel(
 
     fun clearAllData() {
         viewModelScope.launch {
-            recordRepository.clearAllRecords()
-            aiDraftRepository.clearChatMessages()
+            clearLocalDataUseCase(ClearLocalDataAction.AllLocal)
             _uiState.update {
                 it.copy(
                     records = emptyList(),
@@ -560,7 +543,7 @@ class DayZeroViewModel(
 
     fun clearChatMessages() {
         viewModelScope.launch {
-            aiDraftRepository.clearChatMessages()
+            clearLocalDataUseCase(ClearLocalDataAction.ChatOnly)
             _uiState.update {
                 it.copy(
                     chatMessages = emptyList(),
@@ -573,7 +556,7 @@ class DayZeroViewModel(
 
     fun clearLocalRecords() {
         viewModelScope.launch {
-            recordRepository.clearAllRecords()
+            clearLocalDataUseCase(ClearLocalDataAction.LocalRecordsOnly)
             _uiState.update { it.copy(records = emptyList()) }
             refreshSyncHealthState("clear_local_records")
         }
@@ -607,7 +590,7 @@ class DayZeroViewModel(
         }
         viewModelScope.launch {
             Log.w("DayZeroSync", "debug clear local business records start")
-            recordRepository.clearAllRecords()
+            clearLocalDataUseCase(ClearLocalDataAction.LocalRecordsOnly)
             _uiState.update { it.copy(records = emptyList()) }
             refreshSyncHealthState("debug_clear_local_business_records")
             Log.w("DayZeroSync", "debug clear local business records success")
@@ -687,70 +670,13 @@ class DayZeroViewModel(
             viewModelScope.launch {
                 try {
                     val currentDate = _uiState.value.currentDate
-                    latencyLogger.mark(traceId, "room_today_record_read_start")
-                    val todayRecord = recordRepository.getRecordByDateAndStatus(currentDate, RecordStatus.Confirmed)
-                        ?: com.example.domain.model.DailyRecord(date = currentDate, status = RecordStatus.Confirmed, meals = emptyList())
-                    latencyLogger.mark(traceId, "room_today_record_read_complete", mapOf("hasTodayRecord" to (todayRecord.id.isNotBlank())))
-
                     latencyLogger.mark(traceId, "food_record_payload_map_start")
-                    val updatedMeals = todayRecord.meals.toMutableList()
-                    
-                    val mealsToProcess = payloadSummary?.meals ?: if (payloadSummary?.mealType != null && payloadSummary.items != null) {
-                        listOf(
-                            com.example.domain.model.ai.assistant.ConfirmCardMeal(
-                                mealType = payloadSummary.mealType,
-                                mealLabel = payloadSummary.mealType,
-                                subtotalCalories = payloadSummary.items.sumOf { it.calories },
-                                items = payloadSummary.items
-                            )
-                        )
-                    } else {
-                        emptyList()
-                    }
-
-                    mealsToProcess.forEach { cardMeal ->
-                        val mealTypeStr = cardMeal.mealType
-                        val mealType = try {
-                            when (mealTypeStr.lowercase()) {
-                                "breakfast", "早餐" -> com.example.domain.model.MealType.Breakfast
-                                "lunch", "午餐" -> com.example.domain.model.MealType.Lunch
-                                "dinner", "晚餐" -> com.example.domain.model.MealType.Dinner
-                                "snack", "加餐" -> com.example.domain.model.MealType.Snack
-                                else -> com.example.domain.model.MealType.Snack
-                            }
-                        } catch (e: Exception) {
-                            com.example.domain.model.MealType.Snack
-                        }
-
-                        val newFoods = cardMeal.items.map { item ->
-                            com.example.domain.model.FoodEntry(
-                                name = item.name,
-                                quantity = item.amountText ?: "1份",
-                                estimatedCalories = item.calories,
-                                confidence = item.calorieConfidence
-                            )
-                        }
-
-                        val existingMealIndex = updatedMeals.indexOfFirst { it.mealType == mealType }
-                        if (existingMealIndex != -1) {
-                            val existingMeal = updatedMeals[existingMealIndex]
-                            updatedMeals[existingMealIndex] = existingMeal.copy(foods = existingMeal.foods + newFoods)
-                        } else {
-                            updatedMeals.add(com.example.domain.model.MealEntry(mealType = mealType, foods = newFoods))
-                        }
-                    }
+                    val updatedRecord = confirmFoodRecordUseCase(currentDate, payloadSummary)
                     latencyLogger.mark(
                         traceId,
                         "food_record_payload_map_complete",
-                        mapOf("mealsCount" to mealsToProcess.size)
+                        mapOf("mealsCount" to updatedRecord.meals.size)
                     )
-
-                    val updatedRecord = todayRecord.copy(
-                        meals = updatedMeals,
-                        weightKg = payloadSummary?.weightKg?.toFloat() ?: todayRecord.weightKg
-                    )
-                    latencyLogger.mark(traceId, "room_daily_record_upsert_start")
-                    recordRepository.upsertRecord(updatedRecord)
                     triggerBackgroundSync("food_confirm_enqueue")
                     latencyLogger.mark(
                         traceId,
@@ -928,122 +854,4 @@ class DayZeroViewModel(
         }
     }
 
-    companion object {
-        private const val USE_REMOTE_AI = true
-
-        val Factory: ViewModelProvider.Factory = object : ViewModelProvider.Factory {
-            @Suppress("UNCHECKED_CAST")
-            override fun <T : ViewModel> create(
-                modelClass: Class<T>,
-                extras: CreationExtras
-            ): T {
-                val application = checkNotNull(extras[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY])
-                val database = DayZeroDatabase.getDatabase(application)
-                val latencyLogger = AiLatencyTraceLogger(application)
-                val localIdentityProvider = LocalIdentityProvider(application)
-                val supabaseIdentityProvider = if (SupabaseConfig.isConfigured()) {
-                    SupabaseAnonymousIdentityProvider(
-                        context = application,
-                        localIdentityProvider = localIdentityProvider,
-                        okHttpClient = NetworkModule.syncOkHttpClient
-                    )
-                } else {
-                    null
-                }
-                val identityProvider = CompositeIdentityProvider(
-                    localIdentityProvider = localIdentityProvider,
-                    remoteIdentityProvider = supabaseIdentityProvider
-                )
-                val remoteSyncGateway = if (SupabaseConfig.isConfigured() && supabaseIdentityProvider != null) {
-                    SupabaseRemoteSyncGateway(
-                        okHttpClient = NetworkModule.syncOkHttpClient,
-                        sessionProvider = supabaseIdentityProvider
-                    )
-                } else {
-                    NoopRemoteSyncGateway()
-                }
-                val remotePullGateway = if (SupabaseConfig.isConfigured() && supabaseIdentityProvider != null) {
-                    SupabaseRemotePullGateway(
-                        okHttpClient = NetworkModule.syncOkHttpClient,
-                        sessionProvider = supabaseIdentityProvider
-                    )
-                } else {
-                    NoopRemotePullGateway()
-                }
-                val cloudBackupCleaner = if (SupabaseConfig.isConfigured() && supabaseIdentityProvider != null) {
-                    SupabaseCloudBackupCleaner(
-                        okHttpClient = NetworkModule.syncOkHttpClient,
-                        sessionProvider = supabaseIdentityProvider
-                    )
-                } else {
-                    null
-                }
-                val syncCoordinator = LocalFirstSyncCoordinator(
-                    syncQueueDao = database.syncQueueDao(),
-                    identityProvider = identityProvider,
-                    remoteSyncGateway = remoteSyncGateway,
-                    dailyRecordDao = database.dailyRecordDao()
-                )
-                val backfillStateStore = BackfillStateStore(application)
-                val pullStateStore = PullStateStore(application)
-                val backfillCoordinator = BackfillCoordinator(
-                    dailyRecordDao = database.dailyRecordDao(),
-                    syncQueueDao = database.syncQueueDao(),
-                    identityProvider = identityProvider,
-                    stateStore = backfillStateStore
-                )
-                val pullCoordinator = PullCoordinator(
-                    database = database,
-                    remotePullGateway = remotePullGateway,
-                    identityProvider = identityProvider,
-                    stateStore = pullStateStore
-                )
-                val syncHealthReporter = SyncHealthReporter(
-                    syncQueueDao = database.syncQueueDao(),
-                    identityProvider = identityProvider,
-                    backfillStateStore = backfillStateStore,
-                    pullStateStore = pullStateStore,
-                    dailyRecordDao = database.dailyRecordDao(),
-                    remoteSyncEnabledProvider = { SupabaseConfig.isConfigured() }
-                )
-                val aiDraftRepository = if (USE_REMOTE_AI) {
-                    RemoteAiDraftRepository(NetworkModule.aiDraftApiService, database.aiChatMessageDao())
-                } else {
-                    FakeAiDraftRepository()
-                }
-
-                val aiAssistantRepository = if (USE_REMOTE_AI) {
-                    val promptCacheKeyProvider = PromptCacheKeyProvider(application)
-                    val streamClient = AssistantTurnStreamClient(
-                        okHttpClient = NetworkModule.streamingOkHttpClient,
-                        moshi = NetworkModule.moshi
-                    )
-                    RemoteAiAssistantRepository(
-                        apiService = NetworkModule.aiDraftApiService,
-                        latencyLogger = latencyLogger,
-                        streamClient = streamClient,
-                        promptCacheKeyProvider = { promptCacheKeyProvider.getPromptCacheKey() }
-                    )
-                } else {
-                    FakeAiAssistantRepository()
-                }
-
-                return DayZeroViewModel(
-                    recordRepository = RoomRecordRepository(
-                        dao = database.dailyRecordDao(),
-                        syncQueueDao = database.syncQueueDao(),
-                        identityProvider = identityProvider
-                    ),
-                    aiDraftRepository = aiDraftRepository,
-                    aiAssistantRepository = aiAssistantRepository,
-                    latencyLogger = latencyLogger,
-                    syncCoordinator = syncCoordinator,
-                    backfillCoordinator = backfillCoordinator,
-                    pullCoordinator = pullCoordinator,
-                    syncHealthReporter = syncHealthReporter,
-                    cloudBackupCleaner = cloudBackupCleaner
-                ) as T
-            }
-        }
-    }
 }

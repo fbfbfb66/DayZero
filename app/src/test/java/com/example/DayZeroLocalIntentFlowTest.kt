@@ -13,6 +13,8 @@ import com.example.domain.model.ai.assistant.AiAssistantTurn
 import com.example.domain.model.ai.assistant.AiIntent
 import com.example.domain.repository.AiAssistantRepository
 import com.example.domain.repository.RecordRepository
+import com.example.domain.usecase.ClearLocalDataUseCase
+import com.example.domain.usecase.ConfirmFoodRecordUseCase
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -86,7 +88,9 @@ class DayZeroLocalIntentFlowTest {
                     error("network down")
                 }
             },
-            latencyLogger = createLatencyLogger()
+            latencyLogger = createLatencyLogger(),
+            clearLocalDataUseCase = ClearLocalDataUseCase(recordRepository, aiDraftRepository),
+            confirmFoodRecordUseCase = ConfirmFoodRecordUseCase(recordRepository)
         )
 
         viewModel.sendAiMessage("Weight input: 94kg today")
@@ -118,7 +122,9 @@ class DayZeroLocalIntentFlowTest {
                     )
                 }
             },
-            latencyLogger = createLatencyLogger()
+            latencyLogger = createLatencyLogger(),
+            clearLocalDataUseCase = ClearLocalDataUseCase(recordRepository, aiDraftRepository),
+            confirmFoodRecordUseCase = ConfirmFoodRecordUseCase(recordRepository)
         )
     }
 

@@ -4,6 +4,7 @@ plugins {
   alias(libs.plugins.google.devtools.ksp)
   alias(libs.plugins.roborazzi)
   alias(libs.plugins.secrets)
+  alias(libs.plugins.hilt)
 }
 
 android {
@@ -65,6 +66,16 @@ dependencies {
   coreLibraryDesugaring(libs.desugar.jdk.libs)
   implementation(platform(libs.androidx.compose.bom))
   implementation(platform(libs.firebase.bom))
+  implementation(project(":core:model"))
+  implementation(project(":core:domain"))
+  implementation(project(":core:database"))
+  implementation(project(":core:network"))
+  implementation(project(":core:sync"))
+  implementation(project(":core:data"))
+  implementation(project(":core:ui"))
+  implementation(project(":feature:ai-record"))
+  implementation(project(":feature:calendar"))
+  implementation(project(":feature:trends"))
   // implementation(libs.accompanist.permissions)
   implementation(libs.androidx.activity.compose)
   // implementation(libs.androidx.camera.camera2)
@@ -95,6 +106,7 @@ dependencies {
   implementation(libs.okhttp)
   // implementation(libs.play.services.location)
   implementation(libs.retrofit)
+  implementation(libs.hilt.android)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)
@@ -113,4 +125,5 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.tooling)
   "ksp"(libs.androidx.room.compiler)
   "ksp"(libs.moshi.kotlin.codegen)
+  "ksp"(libs.hilt.android.compiler)
 }
