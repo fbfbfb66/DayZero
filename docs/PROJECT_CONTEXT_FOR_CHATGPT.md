@@ -254,3 +254,84 @@ This configuration caused `ComponentActivity` to register as a launcher activity
   ```
   And then reinstall the app normally.
 
+## Current Issue (Phase 4E): AI Reply Streaming Broken
+
+The developer is currently trying to fix an issue where AI replies are not streaming. Below are the detailed requirements and diagnostic steps to be followed:
+
+### Problem Description
+请排查并修复 DayZero 当前 AI 回复不再流式显示、而是最终整段一次性出现的问题。
+
+### 背景
+项目当前设计仍然是：
+* 主路径：`assistant-turn-v2-stream`
+* fallback：`assistant-turn-v2`
+* stream 应持续产生 `reply_delta`
+* 最终事件才携带完整 reply、actions 和 cards
+* cards 只能在 final 后显示
+
+最近完成了 AI 历史多会话改造：
+* AI 详情页现在按 `conversationId` 观察 Room 消息；
+* `AiRecordViewModel` 负责会话详情消息；
+* `DayZeroViewModel` 继续负责 AI stream、fallback、卡片和最终持久化；
+* 首页第一条消息创建后，通过 `startAssistantTurnForExistingUserMessage(...)` 启动 AI；
+* 详情页后续发送走显式 `conversationId` 的发送入口。
+
+当前用户观察到：AI 回复不再逐步出现，而是在请求完成后整段一次性显示。不要直接假设是服务端 fallback。必须先用日志和真实代码确认。
+
+### 一、先复现并区分两条发送路径
+分别测试：
+1. 从 AI 首页输入第一条消息，创建新会话后的第一轮回复；
+2. 进入已有会话后再发送一条普通消息。
+确认：两种情况是否都不流式；是否只有首页第一轮不流式；是否等待约 15 秒后才整段出现；回复中带卡片和不带卡片时是否一致。
+
+### 二、增加明确的诊断日志
+为一次请求生成或使用稳定的 request/placeholder 标识，记录：stream request started, stream response connected, first delta received, delta received count, stream final received, stream failed, fallback started, fallback reason, fallback completed, final message persisted.
+日志必须包含：`conversationId`, placeholder/message id, 发送入口, 是否 fallback 及具体原因, first delta 与 final 的时间差。
+
+### 三、检查真实链路
+重点检查但不限于：
+* `RemoteAiAssistantRepository` / streaming client
+* `DayZeroViewModel.sendAiMessage(...)` & `startAssistantTurnForExistingUserMessage(...)`
+* stream delta 回调 & placeholder 的创建和更新
+* `DayZeroViewModel.completeAssistantMessage(...)`
+* fallback 触发条件
+* `AiRecordViewModel` 的详情消息 Flow & `AiConversationScreen`
+* 当前聊天气泡实际读取的 text 数据来源
+
+请回答：
+1. `reply_delta` 是否真的从网络层到达客户端？
+2. delta 到达后更新了哪个状态或对象？
+3. 新的详情页是否正在观察这个状态？
+4. delta 是否只更新了旧的全局 UI 状态，而详情页只观察 Room？
+5. Room 中 placeholder 是否在 final 前有文本变化？
+6. 首页第一轮和后续消息是否使用同一个 streaming 实现？
+7. 是否因为某个异常无条件进入非流式 fallback？
+
+### 四、根据证据修复
+**情况 A：stream 正常收到 delta，但详情页没有显示**
+不要修改 Edge Function，不要改成每个 token 都写 Room。优先实现清晰的、按会话隔离的临时流式状态（如 `StreamingReplyState(conversationId, messageId, accumulatedText)`）。
+要求：详情页把持久化消息和临时 streaming text 合并显示；只覆盖当前 placeholder；切换会话不串流；final 到达后只持久化一次完整结果并清除临时状态；不因 Compose 重复追加；不复制第二套卡片渲染。
+
+**情况 B：首页第一轮绕过了 stream**
+让 `startAssistantTurnForExistingUserMessage(...)` 复用正常详情发送的 streaming 核心逻辑。
+
+**情况 C：实际触发 fallback**
+必须先给出准确 fallback 原因（超时、SSE解析失败、HTTP异常等）。只修真实原因。禁止单纯调大 timeout、禁止 fallback、伪装流式、修改 AI Prompt/Edge Function。
+
+### 五、流式 UI 行为
+修复后应满足：第一段 delta 到达后立即显示；文本自然增长；最终文本不闪烁不回退；final 到达后卡片才显示；fallback 允许最终整段显示但必须打日志说明。
+
+### 六、多会话安全
+必须测试：切换会话不串流；final 必须写回发起时的 conversationId；fallback 也必须写回对应 conversationId。
+
+### 七、保护范围
+禁止修改：Supabase schema、聊天云同步、Room schema、Edge Function、`show_confirm_card`、日期守卫、食物体重写库逻辑、历史会话结构、现有卡片 Renderer。
+
+### 八、测试要求
+增加测试覆盖：fake stream 连续发送 delta 时 UI 逐步增长；final 到达前能看到部分文本；final 只持久化一次；cards 只在 final 后出现；切换会话不串流；fallback 不产生重复回复等。
+
+### 九、验证命令
+`./gradlew :app:assembleDebug`, `./gradlew :app:testDebugUnitTest`, `./gradlew :feature:ai-record:testDebugUnitTest`, `./gradlew test`。
+
+### 十、完成汇报
+需提供：真实根因、首页和后续消息是否同因、是否触发 fallback 及原因、delta 原来更新到了哪里、新 UI 为什么没显示、修改文件、流式数据流、多会话安全保证、新增测试和构建结果。确认未修改禁止修改的内容。
