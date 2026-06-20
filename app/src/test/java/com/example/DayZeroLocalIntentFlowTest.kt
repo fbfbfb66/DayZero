@@ -15,6 +15,7 @@ import com.example.domain.repository.AiAssistantRepository
 import com.example.domain.repository.RecordRepository
 import com.example.domain.usecase.ClearLocalDataUseCase
 import com.example.domain.usecase.ConfirmFoodRecordUseCase
+import com.example.domain.usecase.CreateConversationWithFirstMessageUseCase
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -90,7 +91,8 @@ class DayZeroLocalIntentFlowTest {
             },
             latencyLogger = createLatencyLogger(),
             clearLocalDataUseCase = ClearLocalDataUseCase(recordRepository, aiDraftRepository),
-            confirmFoodRecordUseCase = ConfirmFoodRecordUseCase(recordRepository)
+            confirmFoodRecordUseCase = ConfirmFoodRecordUseCase(recordRepository),
+            createConversationWithFirstMessageUseCase = CreateConversationWithFirstMessageUseCase(aiDraftRepository)
         )
 
         viewModel.sendAiMessage("Weight input: 94kg today")
@@ -124,7 +126,8 @@ class DayZeroLocalIntentFlowTest {
             },
             latencyLogger = createLatencyLogger(),
             clearLocalDataUseCase = ClearLocalDataUseCase(recordRepository, aiDraftRepository),
-            confirmFoodRecordUseCase = ConfirmFoodRecordUseCase(recordRepository)
+            confirmFoodRecordUseCase = ConfirmFoodRecordUseCase(recordRepository),
+            createConversationWithFirstMessageUseCase = CreateConversationWithFirstMessageUseCase(aiDraftRepository)
         )
     }
 

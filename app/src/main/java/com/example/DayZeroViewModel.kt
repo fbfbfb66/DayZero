@@ -26,6 +26,7 @@ import com.example.domain.repository.RecordRepository
 import com.example.domain.usecase.ClearLocalDataAction
 import com.example.domain.usecase.ClearLocalDataUseCase
 import com.example.domain.usecase.ConfirmFoodRecordUseCase
+import com.example.domain.usecase.CreateConversationWithFirstMessageUseCase
 import com.example.ui.sync.SyncStatusUiState
 import com.example.ui.sync.SyncStatusUiStateMapper
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -56,6 +57,7 @@ class DayZeroViewModel @Inject constructor(
     private val latencyLogger: AiLatencyTraceLogger,
     private val clearLocalDataUseCase: ClearLocalDataUseCase,
     private val confirmFoodRecordUseCase: ConfirmFoodRecordUseCase,
+    private val createConversationWithFirstMessageUseCase: CreateConversationWithFirstMessageUseCase,
     private val syncCoordinator: SyncCoordinator? = null,
     private val backfillCoordinator: BackfillCoordinator? = null,
     private val pullCoordinator: PullCoordinator? = null,
@@ -115,35 +117,35 @@ class DayZeroViewModel @Inject constructor(
         if (trimmed.isBlank()) return
 
         val traceId = latencyLogger.start(turnType = "user_message", userText = trimmed)
-        val userMessage = AiChatMessage(role = ChatRole.User, text = trimmed)
         Log.d("DayZeroAiV2", "send message: '$trimmed'")
 
         _uiState.update {
             it.copy(
                 isAnalyzing = true,
-                conversationState = AiRecordConversationState.Idle,
-                chatMessages = it.chatMessages + userMessage
+                conversationState = AiRecordConversationState.Idle
             )
         }
         latencyLogger.mark(
             traceId,
             "ui_optimistic_state_updated",
-            mapOf("messageId" to userMessage.id, "chatMessagesCount" to _uiState.value.chatMessages.size)
+            mapOf("chatMessagesCount" to _uiState.value.chatMessages.size)
         )
 
         viewModelScope.launch {
             try {
                 latencyLogger.mark(traceId, "room_user_message_insert_start")
-                aiDraftRepository.insertChatMessage(userMessage)
+                val targetConversationId = createConversationWithFirstMessageUseCase(trimmed)
+                    ?: error("Blank first message cannot create conversation")
+                _uiState.update { it.copy(activeConversationId = targetConversationId) }
                 latencyLogger.mark(traceId, "room_user_message_insert_complete")
-                requestAssistantTurnV2(trimmed, traceId)
+                requestAssistantTurnV2(trimmed, traceId, targetConversationId)
             } catch (e: Exception) {
                 handleAssistantTurnV2Error(e, traceId)
             }
         }
     }
 
-    private suspend fun requestAssistantTurnV2(text: String, traceId: String) {
+    private suspend fun requestAssistantTurnV2(text: String, traceId: String, targetConversationId: String) {
         Log.d("DayZeroAiV2", "assistant-turn-v2 start")
 
         latencyLogger.mark(traceId, "assistant_request_build_start")
@@ -157,7 +159,7 @@ class DayZeroViewModel @Inject constructor(
             userText = text,
             todayRecord = todayRecord,
             pendingDraft = null,
-            recentMessages = _uiState.value.chatMessages.takeLast(10),
+            recentMessages = aiDraftRepository.getRecentChatMessages(targetConversationId, 10),
             turnType = "user_message"
         )
         latencyLogger.mark(
@@ -169,6 +171,7 @@ class DayZeroViewModel @Inject constructor(
         completeAssistantTurnWithStreamingFallback(
             request = request,
             traceId = traceId,
+            targetConversationId = targetConversationId,
             fallbackReply = "好的，已为你处理。"
         )
         return
@@ -184,13 +187,14 @@ class DayZeroViewModel @Inject constructor(
             val reply = turn.replyText.trim()
 
             val assistantMessage = AiChatMessage(
+                conversationId = targetConversationId,
                 role = ChatRole.Assistant,
                 text = if (reply.isBlank()) "好的，已为你处理：" else reply,
                 assistantCards = turn.cards
             )
             latencyLogger.bindAssistantMessage(traceId, assistantMessage.id, conversationTypeForCards(turn.cards))
             latencyLogger.mark(traceId, "room_assistant_message_insert_start")
-            aiDraftRepository.insertChatMessage(assistantMessage)
+            aiDraftRepository.insertChatMessage(targetConversationId, assistantMessage)
             latencyLogger.mark(traceId, "room_assistant_message_insert_complete")
 
             _uiState.update {
@@ -257,6 +261,9 @@ class DayZeroViewModel @Inject constructor(
 
         viewModelScope.launch {
             try {
+                val targetConversationId = aiDraftRepository.findMessageByAssistantCardId(interactionId)?.conversationId
+                    ?: _uiState.value.activeConversationId
+                    ?: error("Cannot resolve conversation for interaction $interactionId")
                 latencyLogger.mark(traceId, "room_card_resolve_start")
                 markCardAsResolved(interactionId)
                 latencyLogger.mark(traceId, "room_card_resolve_complete")
@@ -271,7 +278,7 @@ class DayZeroViewModel @Inject constructor(
                     userText = "已选择：$optionLabel",
                     todayRecord = todayRecord,
                     pendingDraft = null,
-                    recentMessages = _uiState.value.chatMessages.takeLast(10),
+                    recentMessages = aiDraftRepository.getRecentChatMessages(targetConversationId, 10),
                     turnType = "interaction_result",
                     interactionResult = com.example.domain.model.ai.assistant.InteractionResult(
                         interactionId = interactionId,
@@ -293,6 +300,7 @@ class DayZeroViewModel @Inject constructor(
                 completeAssistantTurnWithStreamingFallback(
                     request = request,
                     traceId = traceId,
+                    targetConversationId = targetConversationId,
                     fallbackReply = "这是我为你生成的记录。"
                 )
                 return@launch
@@ -307,13 +315,14 @@ class DayZeroViewModel @Inject constructor(
                 val reply = turn.replyText.trim()
                 
                 val assistantMessage = AiChatMessage(
+                    conversationId = targetConversationId,
                     role = ChatRole.Assistant,
                     text = if (reply.isBlank()) "这是我为你生成的记录：" else reply,
                     assistantCards = turn.cards
                 )
                 latencyLogger.bindAssistantMessage(traceId, assistantMessage.id, conversationTypeForCards(turn.cards))
                 latencyLogger.mark(traceId, "room_assistant_message_insert_start")
-                aiDraftRepository.insertChatMessage(assistantMessage)
+                aiDraftRepository.insertChatMessage(targetConversationId, assistantMessage)
                 latencyLogger.mark(traceId, "room_assistant_message_insert_complete")
 
                 _uiState.update {
@@ -334,9 +343,14 @@ class DayZeroViewModel @Inject constructor(
     private suspend fun completeAssistantTurnWithStreamingFallback(
         request: AiAssistantRequest,
         traceId: String,
+        targetConversationId: String,
         fallbackReply: String
     ) {
-        val assistantMessage = AiChatMessage(role = ChatRole.Assistant, text = "")
+        val assistantMessage = AiChatMessage(
+            conversationId = targetConversationId,
+            role = ChatRole.Assistant,
+            text = ""
+        )
         val targetText = StringBuilder()
         val displayLock = Any()
         var latestMessage = assistantMessage
@@ -346,7 +360,7 @@ class DayZeroViewModel @Inject constructor(
         var typedEventCount = 0
 
         latencyLogger.mark(traceId, "room_streaming_assistant_placeholder_insert_start")
-        aiDraftRepository.insertChatMessage(assistantMessage)
+        aiDraftRepository.insertChatMessage(targetConversationId, assistantMessage)
         latencyLogger.mark(traceId, "room_streaming_assistant_placeholder_insert_complete")
 
         _uiState.update { state ->
@@ -533,6 +547,7 @@ class DayZeroViewModel @Inject constructor(
             _uiState.update {
                 it.copy(
                     records = emptyList(),
+                    activeConversationId = null,
                     chatMessages = emptyList(),
                     isAnalyzing = false,
                     conversationState = AiRecordConversationState.Idle
@@ -546,6 +561,7 @@ class DayZeroViewModel @Inject constructor(
             clearLocalDataUseCase(ClearLocalDataAction.ChatOnly)
             _uiState.update {
                 it.copy(
+                    activeConversationId = null,
                     chatMessages = emptyList(),
                     isAnalyzing = false,
                     conversationState = AiRecordConversationState.Idle
@@ -655,6 +671,8 @@ class DayZeroViewModel @Inject constructor(
         if (optionId == "cancel") {
             Log.d("DayZeroAiV2", "confirm food card clicked cancel")
             viewModelScope.launch {
+                val targetConversationId = conversationIdForInteraction(interactionId)
+                _uiState.update { it.copy(activeConversationId = targetConversationId) }
                 latencyLogger.mark(traceId, "room_confirm_card_state_update_start")
                 updateCardState(interactionId, "cancelled")
                 latencyLogger.mark(traceId, "room_confirm_card_state_update_complete")
@@ -669,6 +687,8 @@ class DayZeroViewModel @Inject constructor(
 
             viewModelScope.launch {
                 try {
+                    val targetConversationId = conversationIdForInteraction(interactionId)
+                    _uiState.update { it.copy(activeConversationId = targetConversationId) }
                     val currentDate = _uiState.value.currentDate
                     latencyLogger.mark(traceId, "food_record_payload_map_start")
                     val updatedRecord = confirmFoodRecordUseCase(currentDate, payloadSummary)
@@ -703,14 +723,19 @@ class DayZeroViewModel @Inject constructor(
         }
     }
 
+    private suspend fun conversationIdForInteraction(interactionId: String): String {
+        return aiDraftRepository.findMessageByAssistantCardId(interactionId)?.conversationId
+            ?: _uiState.value.activeConversationId
+            ?: error("Cannot resolve conversation for interaction $interactionId")
+    }
+
     private suspend fun updateCardState(
         interactionId: String,
         newState: String,
         updatedWeightKg: Double? = null,
         updatedMeals: List<com.example.domain.model.ai.assistant.ConfirmCardMeal>? = null
     ) {
-        val messages = _uiState.value.chatMessages
-        val targetMessage = messages.find { msg -> msg.assistantCards.any { it.id == interactionId } }
+        val targetMessage = aiDraftRepository.findMessageByAssistantCardId(interactionId)
         if (targetMessage != null) {
             val updatedCards = targetMessage.assistantCards.map { card ->
                 if (card.id == interactionId && card is com.example.domain.model.ai.assistant.ShowConfirmCardPayload) {
@@ -730,8 +755,7 @@ class DayZeroViewModel @Inject constructor(
     }
 
     private suspend fun markCardAsResolved(interactionId: String) {
-        val messages = _uiState.value.chatMessages
-        val targetMessage = messages.find { msg -> msg.assistantCards.any { it.id == interactionId } }
+        val targetMessage = aiDraftRepository.findMessageByAssistantCardId(interactionId)
         if (targetMessage != null) {
             val updatedCards = targetMessage.assistantCards.map { card ->
                 if (card.id == interactionId) {
@@ -760,13 +784,16 @@ class DayZeroViewModel @Inject constructor(
         traceId: String? = null,
         conversationType: String = "client_message"
     ) {
+        val conversationId = _uiState.value.activeConversationId
+            ?: error("Cannot add client message without an active conversation")
         val message = AiChatMessage(
+            conversationId = conversationId,
             role = ChatRole.Assistant,
             text = text
         )
         latencyLogger.bindAssistantMessage(traceId, message.id, conversationType)
         latencyLogger.mark(traceId, "room_client_message_insert_start")
-        aiDraftRepository.insertChatMessage(message)
+        aiDraftRepository.insertChatMessage(conversationId, message)
         latencyLogger.mark(traceId, "room_client_message_insert_complete")
     }
 

@@ -15,6 +15,8 @@ This stage establishes the local-first sync foundation for:
 
 Chat transcripts are not synced in this stage. Local AI conversations now exist only as a Room data foundation: `conversations` owns `ai_chat_messages` through a non-null `conversationId`, with UUIDs and millisecond timestamps chosen so future Supabase tables can map them directly. No chat/conversation Supabase tables, Edge Functions, Push/Pull/Backfill code, or sync queue operations have been added yet.
 
+AI conversation phase 2 adds local domain logic only: first-message conversation creation is atomic, messages and AI replies are isolated by `conversationId`, and client AI context reads only the target conversation's recent messages. This does not change remote sync scope; chat transcripts and conversations still have no Supabase sync path.
+
 The AI runtime is not changed in this stage. `assistant-turn-v2-stream` remains the primary AI entry, `assistant-turn-v2` remains fallback, and Kimi prompts/protocols are unchanged. AI returns replies and actions only; the client performs deterministic database writes after user confirmation.
 
 This stage does not add a user-visible login system. It does not add phone, email, or WeChat login pages, and it does not require Supabase Auth before local records work.

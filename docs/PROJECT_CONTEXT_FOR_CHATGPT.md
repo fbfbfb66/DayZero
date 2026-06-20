@@ -40,6 +40,13 @@
 - **Chat cloud sync is not implemented yet**. No Supabase table, Edge Function, Push/Pull/Backfill path, or sync queue behavior was added for conversations or chat messages.
 - `show_confirm_card`, its prompt/action/payload contract, action normalization/parsing, multi-meal record writes, optional weight writes, Draft Card edit/confirm/cancel flow, `assistant-turn-v2-stream`, and `assistant-turn-v2` fallback remain unchanged by the conversation data foundation.
 - Next AI history phase: build conversation Repository/ViewModel/page state logic on top of the local Conversation data, then add UI while preserving the existing DayZero visual language.
+- **AI history conversation domain logic (Phase 2) complete**. New conversations and first user messages are created atomically through `CreateConversationWithFirstMessageUseCase` and the local chat repository. User messages, stream placeholders, final AI replies, fallback replies, card messages, card state updates, and local confirm/cancel feedback now carry an explicit `conversationId`.
+- **AI context is conversation-scoped**. Client requests still keep the existing recent-message clipping size of 10, but now read those messages from the target `conversationId` instead of the compatibility all-message stream. No server prompt or API protocol was changed.
+- **Async replies are pinned to the send-time conversation**. Each send/interaction captures an immutable target conversation id before network work starts, so stream completion and fallback update the original placeholder in that conversation even if later state points elsewhere.
+- **Interaction results resolve their original conversation from persisted card messages**. The ViewModel looks up the message containing the clicked card id, then builds context and writes replies using that message's `conversationId`; it does not rely only on the current active conversation.
+- **Feature-level AI conversation state added**. `AiRecordViewModel` in `:feature:ai-record` exposes history state, selected conversation detail state, create-first-message state, `SavedStateHandle` conversation restoration, and one-shot creation events for the next UI phase. It is not wired into visible UI yet.
+- **Current concurrency policy**: the existing visible AI page remains a single global generation surface and still disables sending while `isAnalyzing` is true. The data path is conversation-safe for overlapping requests, but multi-conversation simultaneous generation UI is not introduced in this phase.
+- Still not implemented: historical AI home UI, chat detail navigation, bottom-bar changes, date mismatch prompt card, and chat/conversation cloud sync.
 
 ## Current Phase Features (Phase 4D-1 Complete)
 
@@ -93,9 +100,9 @@ Note: Several legacy interfaces/classes still exist in migrated modules for comp
 - Future AI home, history list, and chat detail UI must keep DayZero's current visual language, rounded corners, spacing, typography, motion, and fresh style. Reuse existing components and theme; do not drop in generic Material sample pages or introduce a mismatched design system.
 - Next step is to continue narrowing `DayZeroViewModel` into feature-specific state holders (`AiRecordViewModel`, Calendar/Trends state holders) and to add focused unit/UI tests around the extracted use cases and card renderer.
 
-## AI History & Conversation Foundation (Phase 1 Technical Details)
+### AI History & Conversation Foundation (Phase 1 & Phase 2 Technical Details)
 
-To support multiple chat histories, a new local database schema and repository layer have been established in Room (Schema Version 10).
+To support multiple chat histories, the database schema, domain layer, and view models have been updated to isolate chat sessions.
 
 ### 1. Data Models & Database Entities
 - **[Conversation](file:///D:/Goings/APPProjects/DayZero/core/model/src/main/java/com/example/domain/model/ai/Conversation.kt)** (in `:core:model`):
@@ -134,15 +141,36 @@ Implemented in **[DayZeroDatabase](file:///D:/Goings/APPProjects/DayZero/core/da
 - **[ConversationRepository](file:///D:/Goings/APPProjects/DayZero/core/domain/src/main/java/com/example/domain/repository/ConversationRepository.kt)** & **[RoomConversationRepository](file:///D:/Goings/APPProjects/DayZero/core/data/src/main/java/com/example/data/repository/RoomConversationRepository.kt)**:
   Domain repository interface and Room-backed implementation for managing conversations.
 - **[AiDraftRepository](file:///D:/Goings/APPProjects/DayZero/core/domain/src/main/java/com/example/domain/repository/AiDraftRepository.kt)**:
-  Expanded to support:
-  - `fun observeChatMessages(conversationId: String): Flow<List<AiChatMessage>>`
-  - In `RemoteAiDraftRepository`, insertion and update functions automatically resolve `conversationId` by finding the latest active conversation session, creating a new session dynamically if none exists, and updating the corresponding conversation's preview, title, and activity timestamps upon new messages.
+  Expanded to support conversation-scoped operations:
+  - `fun observeChatMessages(conversationId: String): Flow<List<AiChatMessage>>`: Observes messages belonging to a specific conversation.
+  - `suspend fun createConversationWithFirstMessage(text: String, now: Long): String?`: Atomically inserts a new conversation and its first user message in a single database transaction.
+  - `suspend fun getRecentChatMessages(conversationId: String, limit: Int): List<AiChatMessage>`: Fetches the recent messages for conversation context extraction.
+  - `suspend fun findMessageByAssistantCardId(cardId: String): AiChatMessage?`: Looks up the chat message containing the card ID to route interactions correctly.
+  - `suspend fun insertChatMessage(conversationId: String, message: AiChatMessage)`: Inserts a message in the designated conversation and updates its preview summary.
+- **[RemoteAiDraftRepository](file:///D:/Goings/APPProjects/DayZero/core/data/src/main/java/com/example/data/repository/RemoteAiDraftRepository.kt)**:
+  Now accepts the full `database` instance to support safe, multi-table transactions (`database.withTransaction {}`). Both `createConversationWithFirstMessage` and `clearChatMessages` are executed transactionally.
 
-### 4. Testing & Verification
-- Unit and migration tests are implemented in **[DayZeroConversationMigrationTest](file:///D:/Goings/APPProjects/DayZero/app/src/test/java/com/example/DayZeroConversationMigrationTest.kt)** (using Robolectric and in-memory database builders). These verify:
-  - Empty migrations generate no empty conversations.
-  - Legacy chat streams are correctly split into natural-day conversations with preserved message ordering.
-  - Interactive card JSON payloads remain intact.
-  - Re-opening database doesn't cause duplicate migrations.
-  - DAO operations perform correct sorting, summary updating, and soft deletion.
+### 4. Use Cases & ViewModels
+- **[CreateConversationWithFirstMessageUseCase](file:///D:/Goings/APPProjects/DayZero/core/domain/src/main/java/com/example/domain/usecase/CreateConversationWithFirstMessageUseCase.kt)** (in `:core:domain`):
+  Validates user input text and delegates new conversation creation to the repository layer.
+- **[AiRecordViewModel](file:///D:/Goings/APPProjects/DayZero/feature/ai-record/src/main/java/com/example/ui/screens/AiRecordViewModel.kt)** (in `:feature:ai-record`):
+  Exposes reactive state objects:
+  - `AiConversationHistoryState`: Holds active conversations list, sorted by `lastActivityAt DESC`.
+  - `AiConversationDetailState`: Holds current conversation details and message list.
+  - State restoration: Uses `SavedStateHandle` to preserve and restore `conversationId` across process death.
+  - Creation events: Exposes `events: SharedFlow<AiRecordConversationEvent>` to signal successful conversation initiation to the UI layer.
+- **[DayZeroViewModel](file:///D:/Goings/APPProjects/DayZero/app/src/main/java/com/example/DayZeroViewModel.kt)**:
+  - Tracks `activeConversationId` in `AppState` and includes it in all outgoing client messages.
+  - Pinning for Asynchronous Streams: During network call initiation, the target conversation ID is captured to ensure streaming/fallback updates write back to the original placeholder even if the user switches active conversations mid-stream.
+  - Interaction Routing: Option clicks and confirm/cancel actions retrieve the original conversation ID via `findMessageByAssistantCardId(interactionId)` to guarantee that database records are updated in the correct conversation thread.
 
+### 5. Testing & Verification
+- **[DayZeroConversationMigrationTest](file:///D:/Goings/APPProjects/DayZero/app/src/test/java/com/example/DayZeroConversationMigrationTest.kt)** (Phase 1):
+  Verifies Room database migration 9->10, Natural Day grouping, UUID stability, and legacy detail preservation.
+- **[DayZeroConversationPhase2Test](file:///D:/Goings/APPProjects/DayZero/app/src/test/java/com/example/DayZeroConversationPhase2Test.kt)** (Phase 2):
+  Verifies:
+  - Transactional atomicity of new conversation creation.
+  - Isolation of contextual recent messages by `conversationId`.
+  - Continuation updates to conversation previews and last activity timestamps.
+  - Asynchronous reply flows and card interaction events pinning back to their original conversations.
+  - Feature-level `AiRecordViewModel` state emission, observation, and saved state restoration.

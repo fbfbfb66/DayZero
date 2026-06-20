@@ -24,6 +24,9 @@ interface ConversationDao {
     @Query("SELECT * FROM conversations WHERE deletedAt IS NULL ORDER BY lastActivityAt DESC, createdAt DESC LIMIT 1")
     suspend fun getLatestActiveConversation(): ConversationEntity?
 
+    @Query("SELECT COUNT(*) FROM conversations")
+    suspend fun getConversationCountIncludingDeleted(): Int
+
     @Query(
         """
         UPDATE conversations

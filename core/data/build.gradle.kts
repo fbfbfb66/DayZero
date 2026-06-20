@@ -25,6 +25,7 @@ dependencies {
   implementation(project(":core:network"))
   implementation(project(":core:sync"))
   implementation(libs.androidx.core.ktx)
+  implementation(libs.androidx.room.ktx)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   implementation(libs.moshi.kotlin)

@@ -20,8 +20,14 @@ interface AiChatMessageDao {
     @Query("SELECT * FROM ai_chat_messages WHERE conversationId = :conversationId ORDER BY createdAt ASC, id ASC")
     suspend fun getMessagesByConversationId(conversationId: String): List<AiChatMessageEntity>
 
+    @Query("SELECT * FROM ai_chat_messages WHERE conversationId = :conversationId ORDER BY createdAt DESC, id DESC LIMIT :limit")
+    suspend fun getRecentMessagesByConversationId(conversationId: String, limit: Int): List<AiChatMessageEntity>
+
     @Query("SELECT * FROM ai_chat_messages WHERE id = :id LIMIT 1")
     suspend fun getMessageById(id: String): AiChatMessageEntity?
+
+    @Query("SELECT * FROM ai_chat_messages WHERE assistantCardsJson IS NOT NULL ORDER BY createdAt DESC, id DESC")
+    suspend fun getMessagesWithCards(): List<AiChatMessageEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMessage(message: AiChatMessageEntity)

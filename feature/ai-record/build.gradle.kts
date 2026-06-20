@@ -1,6 +1,8 @@
 plugins {
   alias(libs.plugins.android.library)
   alias(libs.plugins.kotlin.compose)
+  alias(libs.plugins.google.devtools.ksp)
+  alias(libs.plugins.hilt)
 }
 
 android {
@@ -27,6 +29,7 @@ dependencies {
   coreLibraryDesugaring(libs.desugar.jdk.libs)
   implementation(platform(libs.androidx.compose.bom))
   implementation(project(":core:model"))
+  implementation(project(":core:domain"))
   implementation(project(":core:ui"))
   implementation(libs.androidx.compose.material.icons.core)
   implementation(libs.androidx.compose.material.icons.extended)
@@ -34,4 +37,7 @@ dependencies {
   implementation(libs.androidx.compose.ui)
   implementation(libs.androidx.compose.ui.graphics)
   implementation(libs.androidx.lifecycle.runtime.compose)
+  implementation(libs.androidx.lifecycle.viewmodel.compose)
+  implementation(libs.hilt.android)
+  "ksp"(libs.hilt.android.compiler)
 }

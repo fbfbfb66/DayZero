@@ -11,10 +11,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 
 class FakeAiDraftRepository : AiDraftRepository {
     private val _messages = MutableStateFlow<List<AiChatMessage>>(emptyList())
+    private val _conversations = mutableSetOf<String>()
 
     override suspend fun generateDraft(request: AiDraftRequest): CheckinDraft {
         delay(1500)
@@ -86,11 +88,40 @@ class FakeAiDraftRepository : AiDraftRepository {
     override fun observeChatMessages(): Flow<List<AiChatMessage>> = _messages.asStateFlow()
 
     override fun observeChatMessages(conversationId: String): Flow<List<AiChatMessage>> {
-        return _messages.asStateFlow()
+        return _messages.map { messages -> messages.filter { it.conversationId == conversationId } }
+    }
+
+    override suspend fun createConversationWithFirstMessage(text: String, now: Long): String? {
+        val trimmed = text.trim()
+        if (trimmed.isBlank()) return null
+        val conversationId = java.util.UUID.randomUUID().toString()
+        _conversations += conversationId
+        _messages.update {
+            it + AiChatMessage(
+                conversationId = conversationId,
+                role = com.example.domain.model.ai.ChatRole.User,
+                text = trimmed,
+                createdAt = now
+            )
+        }
+        return conversationId
+    }
+
+    override suspend fun getRecentChatMessages(conversationId: String, limit: Int): List<AiChatMessage> {
+        return _messages.value.filter { it.conversationId == conversationId }.takeLast(limit)
+    }
+
+    override suspend fun findMessageByAssistantCardId(cardId: String): AiChatMessage? {
+        return _messages.value.find { message -> message.assistantCards.any { it.id == cardId } }
     }
 
     override suspend fun insertChatMessage(message: AiChatMessage) {
         _messages.update { it + message }
+    }
+
+    override suspend fun insertChatMessage(conversationId: String, message: AiChatMessage) {
+        _conversations += conversationId
+        _messages.update { it + message.copy(conversationId = conversationId) }
     }
 
     override suspend fun updateChatMessage(message: AiChatMessage) {

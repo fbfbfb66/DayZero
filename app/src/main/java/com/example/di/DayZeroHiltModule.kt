@@ -37,6 +37,7 @@ import com.example.domain.repository.ConversationRepository
 import com.example.domain.repository.RecordRepository
 import com.example.domain.usecase.ClearLocalDataUseCase
 import com.example.domain.usecase.ConfirmFoodRecordUseCase
+import com.example.domain.usecase.CreateConversationWithFirstMessageUseCase
 import com.squareup.moshi.Moshi
 import dagger.Module
 import dagger.Provides
@@ -201,13 +202,19 @@ object DayZeroHiltModule {
     }
 
     @Provides
+    fun provideCreateConversationWithFirstMessageUseCase(
+        aiDraftRepository: AiDraftRepository
+    ): CreateConversationWithFirstMessageUseCase {
+        return CreateConversationWithFirstMessageUseCase(aiDraftRepository = aiDraftRepository)
+    }
+
+    @Provides
     @Singleton
     fun provideAiDraftRepository(
         apiService: AiDraftApiService,
-        chatDao: AiChatMessageDao,
-        conversationDao: ConversationDao
+        database: DayZeroDatabase
     ): AiDraftRepository {
-        return RemoteAiDraftRepository(apiService = apiService, chatDao = chatDao, conversationDao = conversationDao)
+        return RemoteAiDraftRepository(apiService = apiService, database = database)
     }
 
     @Provides
