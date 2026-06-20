@@ -31,6 +31,7 @@
 - **UI Integration for Sync Status Completed**: Added `SyncStatusRepository` and UI components (`ui/sync/`) to observe and display the `SyncHealthSnapshot`. Integrated sync status indicators into `AiRecordScreen` and `TrendsScreen`. Also updated `SupabaseRemoteSyncGateway` to handle remote deletions.
 - **Backfill & Sync Health Completed**: Fully implemented `BackfillCoordinator`, `BackfillStateStore`, and `SyncHealthReporter`. The system can now automatically discover unsynced historical records (`DailyRecordDao.getUnsyncedRecords`) and enqueue them, ensuring complete local-to-remote data consistency. Comprehensive testing added via `DayZeroSyncBackfillTest`.
 - **Phase 6A Chat Sync Contract Complete**. Added remote schema migration and client DTO/contracts for future AI conversation sync. Remote table names are `ai_conversations` and `ai_chat_messages`. They use local UUIDs as remote primary keys, `user_id default auth.uid()`, strict owner-scoped RLS, soft-delete tombstones, composite message ownership FK, and database-controlled `server_updated_at` cursors. This phase does not implement Chat Push, Chat Pull, Chat Backfill, scheduler changes, UI changes, or a merge engine.
+- **Phase 6B Chat Push + Backfill Implemented**. AI conversations and final chat messages now enqueue into the existing `sync_queue` with `UPSERT_AI_CONVERSATION` and `UPSERT_AI_CHAT_MESSAGE`. Room remains the immediate local source of truth. `SupabaseRemoteSyncGateway` pushes `ai_conversations` and `ai_chat_messages` through the existing anonymous Supabase session provider. `ChatBackfillCoordinator` scans existing local conversations first and messages second using `(createdAt, id)` pagination and skips empty assistant placeholders. Chat Pull, multi-device merge, chat deletion UI, account binding, and anonymous identity recovery after uninstall are still not implemented.
 - **Phase 4D-1 Complete**: Real database writing for `show_confirm_card` (`food_record`) has been fully implemented on the client side, now supporting multiple meals (`meals[]`) and optional weight recording (`weightKg`).
 - **Draft Card State Persistence Fix**: Resolved a critical bug where manually edited weight/meals on the draft card were reset in the UI once the card status transitioned to "confirmed". Now, the local UI state in `FoodDraftConfirmCard.kt` is keyed on `card.id` instead of `card.state` to prevent resets, and `updateCardState(...)` in `DayZeroViewModel.kt` persists the final user edits directly into the Room database chat history.
 - **Weight Pre-population**: Configured the server-side normalization wrapper `normalizeActions()` to read `todayRecord` from the database and pre-populate `action.payload.weightKg` with the existing weight record in the database if the AI does not output a new weight.
@@ -40,7 +41,7 @@
 - Room chat persistence is fully enabled. User messages, AI replies, and cards are fully persistent. 
 - **AI history conversation data foundation (Phase 1) complete**. Local Room now has a `conversations` table and every `ai_chat_messages` row belongs to a non-null `conversationId`. The database migration from version 9 to 10 safely groups the old single chat stream by device-local natural day, creates one legacy conversation per day with a stable UUID, and copies existing messages without changing message text, card payload JSON, card state, or ordering.
 - **AI history UI (Phase 3) is implemented locally**. The AI tab now opens an AI home screen with a large first-message input and a Room-backed history list. Conversation detail is a second-level route that renders only the selected `conversationId` messages and hides the app bottom navigation bar.
-- **Chat cloud runtime sync is not implemented yet**. Phase 6A added Supabase schema and client-side data contracts only. No Edge Function, Push/Pull/Backfill path, WorkManager scheduling, production sync queue behavior, deletion sync, UI behavior, or multi-device merge engine was added for conversations or chat messages.
+- **Chat cloud runtime sync is partially implemented**. Phase 6B adds Push and Backfill only. No Chat Pull, deletion sync/UI, WorkManager-specific chat scheduler, UI behavior change, or multi-device merge engine has been added for conversations or chat messages.
 - `show_confirm_card`, its prompt/action/payload contract, action normalization/parsing, multi-meal record writes, optional weight writes, Draft Card edit/confirm/cancel flow, `assistant-turn-v2-stream`, and `assistant-turn-v2` fallback remain unchanged by the conversation data foundation.
 - **AI history local feature (Phase 4) complete**. Date mismatch guarding is now implemented for new `show_confirm_card(food_record)` cards. When a conversation's fixed `conversationDate` differs from the device-local date at card handling time, the client persists and renders a local system guard card before exposing the original record card.
 - **Streaming Context Alignment (Phase 4 Streaming) complete**. Addressed an issue where AI replies did not stream incrementally on the new multi-conversation AI history UI. The transient streaming state is now mapped by `conversationId` and combined purely in memory within the `observeChatMessages` flow in the `AiDraftRepository`, bypassing Room for real-time `reply_delta` display. This ensures the conversational UI instantly updates with partial tokens per session, safely clearing state and merging with the database upon stream completion or fallback.
@@ -53,7 +54,7 @@
 - **Bottom navigation behavior**: AI home, Calendar, and Trends remain top-level pages with the app bottom navigation bar. Conversation detail is a second-level route and does not compose the bottom navigation bar, freeing the bottom space for the chat input. The detail input owns `imePadding()` plus `navigationBarsPadding()` so it follows the keyboard and system gesture area.
 - **First-message flow**: home submit calls `CreateConversationWithFirstMessageUseCase` through `AiRecordViewModel`, navigates to detail on the one-shot creation event, then starts the existing assistant turn for the already-persisted first user message. This prevents duplicate first-message persistence.
 - **Current concurrency policy**: the visible UI remains a single global generation surface. While `isAnalyzing` is true, the home input and detail input are disabled. Users may return to AI home while generation continues; replies are still persisted to the send-time conversation and are visible when reopening it. Multi-conversation simultaneous generation UI is not introduced.
-- Still not implemented: chat/conversation cloud sync, history search, delete, rename, pinning, and AI-generated titles.
+- Still not implemented: Chat Pull, multi-device chat merge, history search, delete, rename, pinning, and AI-generated titles.
 - **Launcher Double Icon Issue Resolved**. Fixed an issue where building/running the debug app installed duplicate launcher icons on the device. The root cause was that `feature/ai-record/src/debug/AndroidManifest.xml` incorrectly declared `androidx.activity.ComponentActivity` with `MAIN` and `LAUNCHER` intent-filters. This has been removed, preserving the registration of the activity for local Compose test rules while preventing duplicate launcher icons.
 
 ## Current Phase Features (Phase 4D-1 Complete)
@@ -96,7 +97,9 @@ Note: Several legacy interfaces/classes still exist in migrated modules for comp
 - Phase 6A chat tables: `ai_conversations`, `ai_chat_messages`
 - Chat server cursor: `server_updated_at` plus `id` as stable secondary cursor
 - Chat card JSON: full `assistantCardsJson` is stored in `ai_chat_messages.assistant_cards` as `jsonb`; null and `[]` are distinct
-- Phase 6A deployment status: applied to Supabase project `sybenxmxnwwtlvkeojtj` via MCP on 2026-06-21. Static schema/RLS/grant/index/trigger verification was read back from the project. Full two-user RLS integration probes were not executed.
+- Phase 6A deployment status: applied to Supabase project `sybenxmxnwwtlvkeojtj` via MCP on 2026-06-21. Static schema/RLS/grant/index/trigger verification was read back from the project.
+- Phase 6B RLS probe status: two real anonymous authenticated sessions verified A-owned conversation insert/read/update, B isolation from A rows, B message attach rejection with HTTP 403, and unauthenticated rejection with HTTP 401. The separate `user_id` mutation probe and hard DELETE probe were also verified with a local powershell script using the anon key: cross-user updates and hard deletes returned HTTP 403, and management readbacks by User A confirmed the data remained safely owned by User A. The probe row was tombstoned.
+- Phase 6B Push verification status: Real-device verification of Chat Push has been successfully completed. Verified that new conversations and final messages are successfully pushed. No placeholders or `reply_delta` messages are uploaded to Supabase. Card payload is saved as native JSONB without double-encoding. Card status updates reuse the same message ID without duplicate row generation. After app restart and repeated backfill sync execution, remote table rows remain stable (conversations = 3, messages = 16) with no duplicates. Chat push is triggered automatically in the background by the existing SyncScheduler. Chat Pull is still not implemented.
 - Primary Edge Function: `assistant-turn-v2-stream` (Version 11, timeout=15s)
 - Fallback Edge Function: `assistant-turn-v2` (Version 18)
 - Retired Edge Function: `ai-assistant-turn` should stay deleted/unused
@@ -110,7 +113,7 @@ Note: Several legacy interfaces/classes still exist in migrated modules for comp
 - Data sync architecture reference is `docs/DATA_SYNC_ARCHITECTURE.md`.
 - Current code architecture is now multi-module and Hilt-based. Future changes should respect module boundaries: UI/feature modules must not depend directly on Room DAO, Retrofit services, Supabase gateways, or sync coordinators; domain/use cases must not depend on Compose, Android UI, Room entities, or remote DTOs.
 - Future AI history refinements must keep DayZero's current visual language, rounded corners, spacing, typography, motion, and fresh style. Reuse existing components and theme; do not drop in generic Material sample pages or introduce a mismatched design system.
-- Next sync step is Phase 6B: Chat Push plus Backfill. General architecture work can continue narrowing `DayZeroViewModel` into feature-specific state holders.
+- Next sync step is Phase 6C: Chat Pull plus Merge. General architecture work can continue narrowing `DayZeroViewModel` into feature-specific state holders.
 
 ### Phase 6A Chat Sync Contract
 
@@ -119,13 +122,24 @@ Note: Several legacy interfaces/classes still exist in migrated modules for comp
 - Design doc: `docs/CHAT_SYNC_ARCHITECTURE.md`.
 - Client contract models: `ChatSyncConversationSnapshot`, `ChatSyncMessageSnapshot`, and `ChatSyncServerCursor` in `:core:model`.
 - Network DTOs: `RemoteConversationDto`, `RemoteAiChatMessageDto`, and `RemoteChatSyncMapper` in `:core:network`.
-- Inert sync constants: `ChatSyncQueueContract` in `:core:sync`; these constants are not wired into `SyncPayloadParser`, `LocalFirstSyncCoordinator`, `BackfillCoordinator`, `PullCoordinator`, or `SyncScheduler`.
+- Queue constants: `ChatSyncQueueContract` in `:core:sync`; Phase 6B wires conversation/message upsert operations into `SyncPayloadParser`, `LocalFirstSyncCoordinator`, and scheduler-driven Chat Backfill. Pull remains intentionally unwired.
 - RLS rule: rows are visible/mutable only when `auth.uid() = user_id`.
 - Message ownership rule: `ai_chat_messages(conversation_id, user_id)` references `ai_conversations(id, user_id)`, preventing orphan and cross-owner message attachment.
 - Server cursor rule: future chat Pull must page by `(server_updated_at, id)`, not by client/business `updated_at` alone.
 - Synced state: conversation fixed date/title/preview/timestamps/tombstone, final user messages, final assistant messages, full assistant card JSON, card edits, confirmed/cancelled state, and date guard pending/approved/cancelled state.
 - Unsynced state: `reply_delta`, `StreamingState`, `isAnalyzing`, typewriter progress, input drafts, selected route, `activeConversationId`, keyboard/Compose temporary state, and transient network errors.
 - Formal login is still not implemented. Uninstall or system clear-data still loses the anonymous Supabase identity and cannot recover old anonymous-owned remote data.
+
+### Phase 6B Chat Push + Backfill
+
+- Queue operations: `UPSERT_AI_CONVERSATION` (`entityType = ai_conversation`) and `UPSERT_AI_CHAT_MESSAGE` (`entityType = ai_chat_message`).
+- Enqueue timing: conversation insert/summary/activity/tombstone changes; user final messages immediately; assistant final messages only after `completeAssistantMessage(...)` persists final text/cards; card edit/confirm/cancel and date guard approve/cancel update and re-enqueue the same message id.
+- Queue behavior: pending/retry/waiting items coalesce by owner, entity type, entity id, and operation. If an old snapshot is already processing, later local changes leave a new pending item.
+- Parent order: `UPSERT_AI_CONVERSATION` is ordered before `UPSERT_AI_CHAT_MESSAGE`; message HTTP 409 can re-enqueue its parent conversation and remains retryable.
+- Backfill: `ChatBackfillCoordinator` scans conversations before messages with stable `(createdAt, id)` pagination, persists progress in `ChatBackfillStateStore`, and skips empty assistant placeholders.
+- Synced chat state: fixed conversation date, title, preview, timestamps, tombstones, final user/assistant messages, full assistant card JSON, edited/confirmed/cancelled cards, and date guard state.
+- Unsynced chat state: `reply_delta`, `StreamingState`, `isAnalyzing`, typewriter progress, input drafts, active route/conversation UI state, keyboard/Compose state, and transient network errors.
+- Chat Pull and multi-device merge remain unimplemented. Formal login remains unimplemented. Uninstall/system clear-data still loses anonymous identity recovery.
 
 ### AI History & Conversation Foundation (Phases 1, 2, 3 & 4 Technical Details)
 
@@ -277,84 +291,14 @@ This configuration caused `ComponentActivity` to register as a launcher activity
   ```
   And then reinstall the app normally.
 
-## Current Issue (Phase 4E): AI Reply Streaming Broken
+## Resolved Issues
 
-The developer is currently trying to fix an issue where AI replies are not streaming. Below are the detailed requirements and diagnostic steps to be followed:
-
-### Problem Description
-请排查并修复 DayZero 当前 AI 回复不再流式显示、而是最终整段一次性出现的问题。
-
-### 背景
-项目当前设计仍然是：
-* 主路径：`assistant-turn-v2-stream`
-* fallback：`assistant-turn-v2`
-* stream 应持续产生 `reply_delta`
-* 最终事件才携带完整 reply、actions 和 cards
-* cards 只能在 final 后显示
-
-最近完成了 AI 历史多会话改造：
-* AI 详情页现在按 `conversationId` 观察 Room 消息；
-* `AiRecordViewModel` 负责会话详情消息；
-* `DayZeroViewModel` 继续负责 AI stream、fallback、卡片和最终持久化；
-* 首页第一条消息创建后，通过 `startAssistantTurnForExistingUserMessage(...)` 启动 AI；
-* 详情页后续发送走显式 `conversationId` 的发送入口。
-
-当前用户观察到：AI 回复不再逐步出现，而是在请求完成后整段一次性显示。不要直接假设是服务端 fallback。必须先用日志和真实代码确认。
-
-### 一、先复现并区分两条发送路径
-分别测试：
-1. 从 AI 首页输入第一条消息，创建新会话后的第一轮回复；
-2. 进入已有会话后再发送一条普通消息。
-确认：两种情况是否都不流式；是否只有首页第一轮不流式；是否等待约 15 秒后才整段出现；回复中带卡片和不带卡片时是否一致。
-
-### 二、增加明确的诊断日志
-为一次请求生成或使用稳定的 request/placeholder 标识，记录：stream request started, stream response connected, first delta received, delta received count, stream final received, stream failed, fallback started, fallback reason, fallback completed, final message persisted.
-日志必须包含：`conversationId`, placeholder/message id, 发送入口, 是否 fallback 及具体原因, first delta 与 final 的时间差。
-
-### 三、检查真实链路
-重点检查但不限于：
-* `RemoteAiAssistantRepository` / streaming client
-* `DayZeroViewModel.sendAiMessage(...)` & `startAssistantTurnForExistingUserMessage(...)`
-* stream delta 回调 & placeholder 的创建和更新
-* `DayZeroViewModel.completeAssistantMessage(...)`
-* fallback 触发条件
-* `AiRecordViewModel` 的详情消息 Flow & `AiConversationScreen`
-* 当前聊天气泡实际读取的 text 数据来源
-
-请回答：
-1. `reply_delta` 是否真的从网络层到达客户端？
-2. delta 到达后更新了哪个状态或对象？
-3. 新的详情页是否正在观察这个状态？
-4. delta 是否只更新了旧的全局 UI 状态，而详情页只观察 Room？
-5. Room 中 placeholder 是否在 final 前有文本变化？
-6. 首页第一轮和后续消息是否使用同一个 streaming 实现？
-7. 是否因为某个异常无条件进入非流式 fallback？
-
-### 四、根据证据修复
-**情况 A：stream 正常收到 delta，但详情页没有显示**
-不要修改 Edge Function，不要改成每个 token 都写 Room。优先实现清晰的、按会话隔离的临时流式状态（如 `StreamingReplyState(conversationId, messageId, accumulatedText)`）。
-要求：详情页把持久化消息和临时 streaming text 合并显示；只覆盖当前 placeholder；切换会话不串流；final 到达后只持久化一次完整结果并清除临时状态；不因 Compose 重复追加；不复制第二套卡片渲染。
-
-**情况 B：首页第一轮绕过了 stream**
-让 `startAssistantTurnForExistingUserMessage(...)` 复用正常详情发送的 streaming 核心逻辑。
-
-**情况 C：实际触发 fallback**
-必须先给出准确 fallback 原因（超时、SSE解析失败、HTTP异常等）。只修真实原因。禁止单纯调大 timeout、禁止 fallback、伪装流式、修改 AI Prompt/Edge Function。
-
-### 五、流式 UI 行为
-修复后应满足：第一段 delta 到达后立即显示；文本自然增长；最终文本不闪烁不回退；final 到达后卡片才显示；fallback 允许最终整段显示但必须打日志说明。
-
-### 六、多会话安全
-必须测试：切换会话不串流；final 必须写回发起时的 conversationId；fallback 也必须写回对应 conversationId。
-
-### 七、保护范围
-禁止修改：Supabase schema、聊天云同步、Room schema、Edge Function、`show_confirm_card`、日期守卫、食物体重写库逻辑、历史会话结构、现有卡片 Renderer。
-
-### 八、测试要求
-增加测试覆盖：fake stream 连续发送 delta 时 UI 逐步增长；final 到达前能看到部分文本；final 只持久化一次；cards 只在 final 后出现；切换会话不串流；fallback 不产生重复回复等。
-
-### 九、验证命令
-`./gradlew :app:assembleDebug`, `./gradlew :app:testDebugUnitTest`, `./gradlew :feature:ai-record:testDebugUnitTest`, `./gradlew test`。
-
-### 十、完成汇报
-需提供：真实根因、首页和后续消息是否同因、是否触发 fallback 及原因、delta 原来更新到了哪里、新 UI 为什么没显示、修改文件、流式数据流、多会话安全保证、新增测试和构建结果。确认未修改禁止修改的内容。
+### AI Reply Streaming (Phase 4E)
+- **Problem**: AI replies were not displaying incrementally (streaming), but instead appearing all at once at the end of the request.
+- **Root Cause**: The introduction of the multi-conversation UI shifted message observation to Room (filtered by `conversationId`). However, streaming tokens were only updating a global/legacy state which Room was not reflecting.
+- **Resolution**: Implemented conversation-isolated in-memory streaming state (`StreamingReplyState`). The detail screen maps this in-memory transient state along with Room-persisted messages. The database is only updated once with the final completed assistant message (including its final text and cards).
+- **Key Architectures Retained**:
+  - Streaming delta uses conversationId/messageId isolated in-memory state.
+  - Final message is persisted once to Room upon final response/completion.
+  - Bypasses writing every token to Room database.
+  - Stream display is now fully functional and stable.

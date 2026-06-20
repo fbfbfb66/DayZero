@@ -4,8 +4,12 @@ import androidx.room.withTransaction
 import com.example.data.local.database.DayZeroDatabase
 import com.example.data.local.entity.ConversationEntity
 import com.example.data.local.mapper.AiChatMessageMapper
+import com.example.data.local.dao.SyncQueueDao
+import com.example.data.identity.StaticLocalIdentityProvider
 import com.example.data.remote.api.AiDraftApiService
 import com.example.data.remote.mapper.AiDraftRemoteMapper
+import com.example.data.sync.chat.ChatSyncQueueWriter
+import com.example.domain.identity.CurrentIdentityProvider
 import com.example.domain.model.ai.AiChatMessage
 import com.example.domain.model.ai.AiDraftRequest
 import com.example.domain.model.ai.ChatRole
@@ -21,13 +25,16 @@ import java.util.UUID
 
 class RemoteAiDraftRepository(
     private val apiService: AiDraftApiService,
-    private val database: DayZeroDatabase
+    private val database: DayZeroDatabase,
+    syncQueueDao: SyncQueueDao? = null,
+    private val identityProvider: CurrentIdentityProvider = StaticLocalIdentityProvider()
 ) : AiDraftRepository {
 
     private val mapper = AiDraftRemoteMapper()
     private val chatMapper = AiChatMessageMapper()
     private val chatDao = database.aiChatMessageDao()
     private val conversationDao = database.conversationDao()
+    private val chatSyncQueueWriter = syncQueueDao?.let { ChatSyncQueueWriter(it) }
 
     override suspend fun generateDraft(request: AiDraftRequest): CheckinDraft {
         val requestDto = mapper.toRequestDto(request)
@@ -105,9 +112,13 @@ class RemoteAiDraftRepository(
             deletedAt = null
         )
 
+        val identity = identityProvider.currentIdentity()
         database.withTransaction {
             conversationDao.insertConversation(conversation)
-            chatDao.insertMessage(chatMapper.toEntity(firstMessage, conversationId))
+            val firstMessageEntity = chatMapper.toEntity(firstMessage, conversationId)
+            chatDao.insertMessage(firstMessageEntity)
+            chatSyncQueueWriter?.enqueueConversationUpsert(conversation, identity)
+            chatSyncQueueWriter?.enqueueMessageUpsert(firstMessageEntity, identity, updatedAtMillis = now)
         }
         return conversationId
     }
@@ -138,9 +149,16 @@ class RemoteAiDraftRepository(
 
     override suspend fun insertChatMessage(conversationId: String, message: AiChatMessage) {
         val messageWithConversation = message.copy(conversationId = conversationId)
+        val messageEntity = chatMapper.toEntity(messageWithConversation, conversationId)
+        val identity = identityProvider.currentIdentity()
+        val updatedAt = System.currentTimeMillis()
         database.withTransaction {
-            chatDao.insertMessage(chatMapper.toEntity(messageWithConversation, conversationId))
+            chatDao.insertMessage(messageEntity)
             refreshConversationSummaryInTransaction(conversationId, messageWithConversation)
+            conversationDao.getConversationById(conversationId)?.let { conversation ->
+                chatSyncQueueWriter?.enqueueConversationUpsert(conversation, identity)
+            }
+            chatSyncQueueWriter?.enqueueMessageUpsert(messageEntity, identity, updatedAtMillis = updatedAt)
         }
     }
 
@@ -149,9 +167,16 @@ class RemoteAiDraftRepository(
             ?: chatDao.getMessageById(message.id)?.conversationId
             ?: ensureCurrentConversation(message).id
         val messageWithConversation = message.copy(conversationId = conversationId)
+        val messageEntity = chatMapper.toEntity(messageWithConversation, conversationId)
+        val identity = identityProvider.currentIdentity()
+        val updatedAt = System.currentTimeMillis()
         database.withTransaction {
-            chatDao.updateMessage(chatMapper.toEntity(messageWithConversation, conversationId))
+            chatDao.updateMessage(messageEntity)
             refreshConversationSummaryInTransaction(conversationId, messageWithConversation)
+            conversationDao.getConversationById(conversationId)?.let { conversation ->
+                chatSyncQueueWriter?.enqueueConversationUpsert(conversation, identity)
+            }
+            chatSyncQueueWriter?.enqueueMessageUpsert(messageEntity, identity, updatedAtMillis = updatedAt)
         }
     }
 

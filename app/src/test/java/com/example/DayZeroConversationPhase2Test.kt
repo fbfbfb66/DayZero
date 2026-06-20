@@ -14,7 +14,14 @@ import com.example.data.remote.dto.IntentClassificationResultDto
 import com.example.data.remote.dto.IntentClassifierRequestDto
 import com.example.data.repository.FakeAiDraftRepository
 import com.example.data.repository.RemoteAiDraftRepository
+import com.example.data.sync.DayZeroSyncConstants
+import com.example.data.sync.chat.ChatBackfillCoordinator
+import com.example.data.sync.chat.ChatBackfillStateStore
+import com.example.data.sync.chat.ChatSyncQueueContract
+import com.example.data.sync.chat.ChatSyncQueueWriter
 import com.example.data.telemetry.AiLatencyTraceLogger
+import com.example.domain.identity.AppIdentity
+import com.example.domain.identity.CurrentIdentityProvider
 import com.example.domain.model.DailyRecord
 import com.example.domain.model.MealType
 import com.example.domain.model.RecordStatus
@@ -78,6 +85,7 @@ class DayZeroConversationPhase2Test {
         database = Room.inMemoryDatabaseBuilder(context, DayZeroDatabase::class.java)
             .allowMainThreadQueries()
             .build()
+        context.getSharedPreferences("dayzero_chat_backfill", Context.MODE_PRIVATE).edit().clear().commit()
         repository = RemoteAiDraftRepository(FakeAiDraftApiService(), database)
     }
 
@@ -109,6 +117,139 @@ class DayZeroConversationPhase2Test {
         assertEquals(1, messages.size)
         assertEquals(conversationId, messages.single().conversationId)
         assertEquals("lunch egg rice", messages.single().text)
+    }
+
+    @Test
+    fun createsConversationAndFirstMessageEnqueuesChatSyncTasks() = runTest(mainDispatcherRule.testDispatcher) {
+        val syncingRepository = syncingRepository()
+        val now = Instant.parse("2026-06-18T02:00:00Z").toEpochMilli()
+
+        val conversationId = syncingRepository.createConversationWithFirstMessage("sync lunch", now)!!
+
+        val tasks = database.syncQueueDao().getTasksByStatus(DayZeroSyncConstants.STATUS_PENDING)
+        assertEquals(2, tasks.size)
+        assertTrue(tasks.any {
+            it.entityType == ChatSyncQueueContract.ENTITY_CONVERSATION &&
+                it.entityLocalId == conversationId &&
+                it.operation == ChatSyncQueueContract.OP_UPSERT_CONVERSATION
+        })
+        assertTrue(tasks.any {
+            it.entityType == ChatSyncQueueContract.ENTITY_MESSAGE &&
+                it.operation == ChatSyncQueueContract.OP_UPSERT_MESSAGE
+        })
+    }
+
+    @Test
+    fun emptyAssistantPlaceholderDoesNotEnqueueMessage() = runTest(mainDispatcherRule.testDispatcher) {
+        val syncingRepository = syncingRepository()
+        val conversationId = syncingRepository.createConversationWithFirstMessage("sync lunch")!!
+        val pendingBefore = database.syncQueueDao().getTasksByStatus(DayZeroSyncConstants.STATUS_PENDING).size
+
+        syncingRepository.insertChatMessage(
+            conversationId,
+            AiChatMessage(
+                id = "assistant-placeholder",
+                conversationId = conversationId,
+                role = ChatRole.Assistant,
+                text = ""
+            )
+        )
+
+        val pending = database.syncQueueDao().getTasksByStatus(DayZeroSyncConstants.STATUS_PENDING)
+        assertEquals(pendingBefore, pending.size)
+        assertTrue(pending.none { it.entityLocalId == "assistant-placeholder" })
+    }
+
+    @Test
+    fun assistantFinalAndCardUpdatesCoalesceSameMessageTask() = runTest(mainDispatcherRule.testDispatcher) {
+        val syncingRepository = syncingRepository()
+        val conversationId = syncingRepository.createConversationWithFirstMessage("sync lunch")!!
+        val messageId = "assistant-final"
+        syncingRepository.insertChatMessage(
+            conversationId,
+            AiChatMessage(id = messageId, conversationId = conversationId, role = ChatRole.Assistant, text = "")
+        )
+
+        syncingRepository.updateChatMessage(
+            AiChatMessage(id = messageId, conversationId = conversationId, role = ChatRole.Assistant, text = "final")
+        )
+        syncingRepository.updateChatMessage(
+            AiChatMessage(
+                id = messageId,
+                conversationId = conversationId,
+                role = ChatRole.Assistant,
+                text = "final edited",
+                assistantCards = listOf(
+                    DebugChoiceCardPayload(
+                        id = "choice-1",
+                        title = "Pick",
+                        message = "Pick",
+                        options = listOf(DebugChoiceOption("confirm", "Confirm"))
+                    )
+                )
+            )
+        )
+
+        val messageTasks = database.syncQueueDao().getTasksByStatus(DayZeroSyncConstants.STATUS_PENDING)
+            .filter { it.entityType == ChatSyncQueueContract.ENTITY_MESSAGE && it.entityLocalId == messageId }
+        assertEquals(1, messageTasks.size)
+        assertTrue(messageTasks.single().payloadJson.contains("final edited"))
+        assertTrue(messageTasks.single().payloadJson.contains("assistantCardsJson"))
+    }
+
+    @Test
+    fun chatBackfillEnqueuesConversationsBeforeMessagesAndSkipsPlaceholders() = runTest(mainDispatcherRule.testDispatcher) {
+        val conversationId = "conversation-backfill"
+        val now = Instant.parse("2026-06-18T02:00:00Z").toEpochMilli()
+        database.conversationDao().insertConversation(
+            com.example.data.local.entity.ConversationEntity(
+                id = conversationId,
+                conversationDate = "2026-06-18",
+                title = "Backfill",
+                lastMessagePreview = "Backfill",
+                createdAt = now,
+                updatedAt = now,
+                lastActivityAt = now
+            )
+        )
+        database.aiChatMessageDao().insertMessage(
+            com.example.data.local.entity.AiChatMessageEntity(
+                id = "placeholder",
+                conversationId = conversationId,
+                role = ChatRole.Assistant.name,
+                text = "",
+                createdAt = now + 1,
+                relatedDraftId = null,
+                messageType = "Text"
+            )
+        )
+        database.aiChatMessageDao().insertMessage(
+            com.example.data.local.entity.AiChatMessageEntity(
+                id = "final-message",
+                conversationId = conversationId,
+                role = ChatRole.Assistant.name,
+                text = "final",
+                createdAt = now + 2,
+                relatedDraftId = null,
+                messageType = "Text"
+            )
+        )
+        val coordinator = ChatBackfillCoordinator(
+            conversationDao = database.conversationDao(),
+            messageDao = database.aiChatMessageDao(),
+            identityProvider = StaticChatIdentityProvider(),
+            stateStore = ChatBackfillStateStore(context),
+            queueWriter = ChatSyncQueueWriter(database.syncQueueDao())
+        )
+
+        val stats = coordinator.runOnce()
+
+        assertEquals(1, stats.enqueuedConversationCount)
+        assertEquals(1, stats.enqueuedMessageCount)
+        assertEquals(1, stats.skippedPlaceholderCount)
+        val runnable = database.syncQueueDao().getRunnableTasks(now = System.currentTimeMillis(), limit = 10)
+        assertEquals(ChatSyncQueueContract.OP_UPSERT_CONVERSATION, runnable.first().operation)
+        assertTrue(runnable.none { it.entityLocalId == "placeholder" })
     }
 
     @Test
@@ -296,6 +437,26 @@ class DayZeroConversationPhase2Test {
             conversationRepository = InMemoryConversationRepository(),
             currentDateProvider = FixedCurrentDateProvider(LocalDate.of(2026, 6, 20))
         )
+    }
+
+    private fun syncingRepository(): RemoteAiDraftRepository {
+        return RemoteAiDraftRepository(
+            apiService = FakeAiDraftApiService(),
+            database = database,
+            syncQueueDao = database.syncQueueDao(),
+            identityProvider = StaticChatIdentityProvider()
+        )
+    }
+
+    private class StaticChatIdentityProvider : CurrentIdentityProvider {
+        override suspend fun currentIdentity(): AppIdentity {
+            return AppIdentity(
+                localOwnerId = "test-owner",
+                remoteUserId = "00000000-0000-0000-0000-000000000001",
+                authProvider = "supabase_anonymous",
+                canRemoteSync = true
+            )
+        }
     }
 
     private class ControlledAssistantRepository : AiAssistantRepository {

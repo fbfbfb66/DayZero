@@ -12,6 +12,7 @@ import com.example.data.sync.SyncScheduler
 import com.example.data.sync.SyncStatusRepository
 import com.example.data.sync.SyncTriggerReason
 import com.example.data.sync.SupabaseCloudBackupCleaner
+import com.example.data.sync.chat.ChatBackfillCoordinator
 import com.example.data.telemetry.AiLatencyTraceLogger
 import com.example.domain.model.AppState
 import com.example.domain.model.RecordStatus
@@ -67,6 +68,7 @@ class DayZeroViewModel @Inject constructor(
     private val currentDateProvider: CurrentDateProvider,
     private val syncCoordinator: SyncCoordinator? = null,
     private val backfillCoordinator: BackfillCoordinator? = null,
+    private val chatBackfillCoordinator: ChatBackfillCoordinator? = null,
     private val pullCoordinator: PullCoordinator? = null,
     private val syncHealthReporter: SyncHealthReporter? = null,
     private val cloudBackupCleaner: SupabaseCloudBackupCleaner? = null
@@ -75,6 +77,7 @@ class DayZeroViewModel @Inject constructor(
         scope = viewModelScope,
         syncCoordinator = syncCoordinator,
         backfillCoordinator = backfillCoordinator,
+        chatBackfillCoordinator = chatBackfillCoordinator,
         pullCoordinator = pullCoordinator,
         syncHealthReporter = syncHealthReporter
     )

@@ -29,6 +29,21 @@ interface ConversationDao {
 
     @Query(
         """
+        SELECT * FROM conversations
+        WHERE createdAt > :afterCreatedAt
+           OR (createdAt = :afterCreatedAt AND id > :afterId)
+        ORDER BY createdAt ASC, id ASC
+        LIMIT :limit
+        """
+    )
+    suspend fun getConversationsForChatBackfill(
+        afterCreatedAt: Long,
+        afterId: String,
+        limit: Int
+    ): List<ConversationEntity>
+
+    @Query(
+        """
         UPDATE conversations
         SET title = :title,
             lastMessagePreview = :lastMessagePreview,

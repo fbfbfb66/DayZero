@@ -1,9 +1,12 @@
 package com.example.data.sync
 
 import android.util.Log
+import com.example.data.local.dao.ConversationDao
 import com.example.data.local.dao.DailyRecordDao
 import com.example.data.local.dao.SyncQueueDao
 import com.example.data.local.entity.SyncQueueEntity
+import com.example.data.sync.chat.ChatSyncQueueContract
+import com.example.data.sync.chat.ChatSyncQueueWriter
 import com.example.domain.identity.CurrentIdentityProvider
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -14,6 +17,8 @@ class LocalFirstSyncCoordinator(
     private val remoteSyncGateway: RemoteSyncGateway = NoopRemoteSyncGateway(),
     private val payloadParser: SyncPayloadParser = SyncPayloadParser(),
     private val dailyRecordDao: DailyRecordDao? = null,
+    private val conversationDao: ConversationDao? = null,
+    private val chatSyncQueueWriter: ChatSyncQueueWriter? = null,
     private val batchLimit: Int = DEFAULT_BATCH_LIMIT
 ) : SyncCoordinator {
     private val runMutex = Mutex()
@@ -123,6 +128,8 @@ class LocalFirstSyncCoordinator(
             DayZeroSyncConstants.OP_UPSERT_FOOD_ENTRY -> remoteSyncGateway.upsertFoodEntry(payload)
             DayZeroSyncConstants.OP_UPSERT_WEIGHT_RECORD -> remoteSyncGateway.upsertWeightRecord(payload)
             DayZeroSyncConstants.OP_SOFT_DELETE_RECORD -> remoteSyncGateway.softDeleteRecord(payload)
+            ChatSyncQueueContract.OP_UPSERT_CONVERSATION -> remoteSyncGateway.upsertChatConversation(payload)
+            ChatSyncQueueContract.OP_UPSERT_MESSAGE -> remoteSyncGateway.upsertChatMessage(payload)
             else -> RemoteSyncResult.FatalFailure("unsupported_operation:${payload.operation}")
         }
 
@@ -136,6 +143,7 @@ class LocalFirstSyncCoordinator(
             }
 
             is RemoteSyncResult.RetryableFailure -> {
+                maybeReenqueueParentConversation(payload, result.message)
                 markRetryable(item, result.message)
                 Log.d(DayZeroSyncConstants.LOG_PREFIX, "mark retryable failure id=${item.id} message=${result.message}")
                 SyncTaskOutcome.RETRYABLE
@@ -164,6 +172,16 @@ class LocalFirstSyncCoordinator(
                 SyncTaskOutcome.SKIPPED
             }
         }
+    }
+
+    private suspend fun maybeReenqueueParentConversation(payload: SyncPayload, message: String?) {
+        if (payload.operation != ChatSyncQueueContract.OP_UPSERT_MESSAGE) return
+        if (message?.contains("http_409") != true) return
+        val conversationId = payload.body.optString("conversationId").takeIf { it.isNotBlank() } ?: return
+        val conversation = conversationDao?.getConversationById(conversationId) ?: return
+        val identity = identityProvider.currentIdentity().copy(localOwnerId = payload.ownerLocalId)
+        chatSyncQueueWriter?.enqueueConversationUpsert(conversation, identity)
+        Log.d(DayZeroSyncConstants.LOG_PREFIX, "reenqueued parent chat conversation id=$conversationId")
     }
 
     private suspend fun markRetryable(item: SyncQueueEntity, message: String?): SyncTaskOutcome {

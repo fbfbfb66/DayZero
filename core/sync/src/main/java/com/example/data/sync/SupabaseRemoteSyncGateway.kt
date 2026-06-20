@@ -4,16 +4,21 @@ import android.util.Log
 import com.example.data.identity.SupabaseAuthSessionStatus
 import com.example.data.identity.SupabaseAuthSessionProvider
 import com.example.data.remote.SupabaseConfig
+import com.example.data.remote.mapper.RemoteChatSyncMapper
 import com.example.domain.identity.AppIdentity
+import com.example.domain.model.sync.ChatSyncConversationSnapshot
+import com.example.domain.model.sync.ChatSyncMessageSnapshot
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLEncoder
 import java.time.Instant
+import java.time.LocalDate
 import java.util.UUID
 
 class SupabaseRemoteSyncGateway(
@@ -23,6 +28,8 @@ class SupabaseRemoteSyncGateway(
     private val anonKey: String = SupabaseConfig.SUPABASE_PUBLISHABLE_KEY,
     private val isConfigured: Boolean = SupabaseConfig.isConfigured()
 ) : RemoteSyncGateway {
+    private val chatMapper = RemoteChatSyncMapper()
+
     override suspend fun canSync(identity: AppIdentity): Boolean {
         return isConfigured && identity.canRemoteSync && !identity.remoteUserId.isNullOrBlank()
     }
@@ -60,6 +67,28 @@ class SupabaseRemoteSyncGateway(
             tableName = "weight_records",
             clientId = payload.clientId(),
             body = weightRecordBody(payload)
+        )
+    }
+
+    override suspend fun upsertChatConversation(payload: SyncPayload): RemoteSyncResult {
+        val body = runCatching { chatConversationBody(payload) }
+            .getOrElse { return RemoteSyncResult.FatalFailure("payload_invalid:${it.message ?: it::class.java.simpleName}") }
+        return upsertById(
+            entityType = payload.entityType,
+            tableName = "ai_conversations",
+            clientId = payload.clientId(),
+            body = body
+        )
+    }
+
+    override suspend fun upsertChatMessage(payload: SyncPayload): RemoteSyncResult {
+        val body = runCatching { chatMessageBody(payload) }
+            .getOrElse { return RemoteSyncResult.FatalFailure("payload_invalid:${it.message ?: it::class.java.simpleName}") }
+        return upsertById(
+            entityType = payload.entityType,
+            tableName = "ai_chat_messages",
+            clientId = payload.clientId(),
+            body = body
         )
     }
 
@@ -113,6 +142,35 @@ class SupabaseRemoteSyncGateway(
         return executeRequest(
             request = Request.Builder()
                 .url("${restUrl()}$tableName?on_conflict=user_id,client_id")
+                .header("apikey", anonKey)
+                .header("Authorization", "Bearer ${session.accessToken}")
+                .header("Content-Type", "application/json")
+                .header("Prefer", "resolution=merge-duplicates,return=minimal")
+                .post(requestBody)
+                .build(),
+            entityType = entityType,
+            clientId = clientId
+        )
+    }
+
+    private suspend fun upsertById(
+        entityType: String,
+        tableName: String,
+        clientId: String,
+        body: JSONObject
+    ): RemoteSyncResult {
+        if (!isConfigured) return RemoteSyncResult.Skipped("supabase_not_configured")
+        val session = sessionProvider.currentSessionOrNull()
+            ?: return sessionUnavailableSyncResult()
+        val requestBody = body
+            .put("user_id", session.userId)
+            .toString()
+            .toRequestBody(JSON_MEDIA_TYPE)
+
+        Log.d("DayZeroRemote", "upsert start entityType=$entityType clientId=$clientId")
+        return executeRequest(
+            request = Request.Builder()
+                .url("${restUrl()}$tableName?on_conflict=id")
                 .header("apikey", anonKey)
                 .header("Authorization", "Bearer ${session.accessToken}")
                 .header("Content-Type", "application/json")
@@ -219,6 +277,37 @@ class SupabaseRemoteSyncGateway(
             .putNullable("source", payload.body.optNullableString("source") ?: "confirm_card")
     }
 
+    private fun chatConversationBody(payload: SyncPayload): JSONObject {
+        val dto = chatMapper.toRemoteConversation(payload.toConversationSnapshot())
+        return JSONObject()
+            .put("id", dto.id)
+            .put("conversation_date", dto.conversationDate)
+            .put("title", dto.title)
+            .put("last_message_preview", dto.lastMessagePreview)
+            .put("created_at", dto.createdAt)
+            .put("updated_at", dto.updatedAt)
+            .put("last_activity_at", dto.lastActivityAt)
+            .put("deleted_at", dto.deletedAt ?: JSONObject.NULL)
+            .put("schema_version", dto.schemaVersion)
+    }
+
+    private fun chatMessageBody(payload: SyncPayload): JSONObject {
+        val dto = chatMapper.toRemoteMessage(payload.toMessageSnapshot())
+        return JSONObject()
+            .put("id", dto.id)
+            .put("conversation_id", dto.conversationId)
+            .put("role", dto.role)
+            .put("message_type", dto.messageType)
+            .put("text", dto.text)
+            .put("content_json", dto.contentJson.toJsonValue())
+            .put("assistant_cards", dto.assistantCardsJson.toJsonValue())
+            .put("suggested_replies_json", dto.suggestedRepliesJson.toJsonValue())
+            .put("created_at", dto.createdAt)
+            .put("updated_at", dto.updatedAt)
+            .put("deleted_at", dto.deletedAt ?: JSONObject.NULL)
+            .put("schema_version", dto.schemaVersion)
+    }
+
     private fun baseBody(payload: SyncPayload): JSONObject {
         val clientId = payload.clientId()
         return JSONObject()
@@ -231,6 +320,37 @@ class SupabaseRemoteSyncGateway(
 
     private fun SyncPayload.clientId(): String {
         return body.optString("clientId").ifBlank { entityLocalId }
+    }
+
+    private fun SyncPayload.toConversationSnapshot(): ChatSyncConversationSnapshot {
+        return ChatSyncConversationSnapshot(
+            id = clientId(),
+            conversationDate = LocalDate.parse(body.getString("conversationDate")),
+            title = body.getString("title"),
+            lastMessagePreview = body.getString("lastMessagePreview"),
+            createdAtMillis = body.getString("createdAt").toEpochMillis(),
+            updatedAtMillis = body.getString("updatedAt").toEpochMillis(),
+            lastActivityAtMillis = body.getString("lastActivityAt").toEpochMillis(),
+            deletedAtMillis = body.optIsoMillis("deletedAt"),
+            schemaVersion = body.optInt("schemaVersion", 1)
+        )
+    }
+
+    private fun SyncPayload.toMessageSnapshot(): ChatSyncMessageSnapshot {
+        return ChatSyncMessageSnapshot(
+            id = clientId(),
+            conversationId = body.getString("conversationId"),
+            role = body.getString("role"),
+            text = body.getString("text"),
+            createdAtMillis = body.getString("createdAt").toEpochMillis(),
+            updatedAtMillis = body.getString("updatedAt").toEpochMillis(),
+            deletedAtMillis = body.optIsoMillis("deletedAt"),
+            messageType = body.optString("messageType").ifBlank { "Text" },
+            contentJson = body.optNullableString("contentJson"),
+            assistantCardsJson = body.optNullableString("assistantCardsJson"),
+            suggestedRepliesJson = body.optNullableString("suggestedRepliesJson"),
+            schemaVersion = body.optInt("schemaVersion", 1)
+        )
     }
 
     private fun JSONObject.optNullableString(name: String): String? {
@@ -249,6 +369,23 @@ class SupabaseRemoteSyncGateway(
 
     private fun JSONObject.putNullable(name: String, value: Any?): JSONObject {
         return put(name, value ?: JSONObject.NULL)
+    }
+
+    private fun JSONObject.optIsoMillis(name: String): Long? {
+        if (!has(name) || isNull(name)) return null
+        return optString(name).takeIf { it.isNotBlank() }?.toEpochMillis()
+    }
+
+    private fun String.toEpochMillis(): Long = Instant.parse(this).toEpochMilli()
+
+    private fun String?.toJsonValue(): Any {
+        val value = this?.trim().orEmpty()
+        if (value.isBlank()) return JSONObject.NULL
+        return when {
+            value.startsWith("[") -> JSONArray(value)
+            value.startsWith("{") -> JSONObject(value)
+            else -> JSONObject.NULL
+        }
     }
 
     private fun stableUuid(value: String): String {

@@ -1,6 +1,7 @@
 package com.example.data.sync
 
 import com.example.data.local.entity.SyncQueueEntity
+import com.example.data.sync.chat.ChatSyncQueueContract
 import org.json.JSONObject
 
 class SyncPayloadParser {
@@ -30,7 +31,9 @@ class SyncPayloadParser {
             DayZeroSyncConstants.OP_UPSERT_MEAL,
             DayZeroSyncConstants.OP_UPSERT_FOOD_ENTRY,
             DayZeroSyncConstants.OP_UPSERT_WEIGHT_RECORD,
-            DayZeroSyncConstants.OP_SOFT_DELETE_RECORD
+            DayZeroSyncConstants.OP_SOFT_DELETE_RECORD,
+            ChatSyncQueueContract.OP_UPSERT_CONVERSATION,
+            ChatSyncQueueContract.OP_UPSERT_MESSAGE
         )
     }
 }

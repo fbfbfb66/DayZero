@@ -27,7 +27,9 @@ AI conversation phase 3 wires the local conversation model into visible UI only:
 
 AI conversation phase 4 adds a local date-mismatch guard for `show_confirm_card(food_record)` and binds final food/meal/weight writes to the owning `conversation.conversationDate`. This changes only the local confirmation target date and existing Room record write input. The resulting `DailyRecord`, meals, food entries, and weight records continue through the existing sync queue exactly as before.
 
-Phase 6A adds only the remote schema and client data contract for future chat sync. The new remote tables are `ai_conversations` and `ai_chat_messages`, with local UUIDs as remote primary keys, owner-scoped RLS, soft-delete tombstones, and database-controlled `server_updated_at` cursors. The current app still does not enqueue, push, pull, backfill, schedule, merge, or display chat data from Supabase.
+Phase 6A added the remote schema and client data contract for chat sync. The remote tables are `ai_conversations` and `ai_chat_messages`, with local UUIDs as remote primary keys, owner-scoped RLS, soft-delete tombstones, and database-controlled `server_updated_at` cursors.
+
+Phase 6B adds local chat enqueue, Chat Push, and historical Chat Backfill. Real-device verification of Chat Push has been successfully completed: new conversations and unique assistant final messages successfully push; placeholder and streaming delta messages are not uploaded; card JSONB is stored natively without double-encoding; card updates update the same message ID without duplication; and backfill execution is idempotent. Chat push runs automatically via SyncScheduler. Chat Pull, multi-device merge, chat deletion UI, and account binding remain unimplemented.
 
 The AI runtime is not changed in this stage. `assistant-turn-v2-stream` remains the primary AI entry, `assistant-turn-v2` remains fallback, and Kimi prompts/protocols are unchanged. AI returns replies and actions only; the client performs deterministic database writes after user confirmation.
 
@@ -94,6 +96,8 @@ Remote sync is isolated behind `RemoteSyncGateway`:
 - `upsertFoodEntry(payload)`
 - `upsertWeightRecord(payload)`
 - `softDeleteRecord(payload)`
+- `upsertChatConversation(payload)`
+- `upsertChatMessage(payload)`
 
 The current implementation is `NoopRemoteSyncGateway`. It does not upload to Supabase or any other server. When `AppIdentity.canRemoteSync` is false it returns `Skipped("waiting_for_auth")`.
 
@@ -136,7 +140,7 @@ Chat sync also uses tombstones. `ai_conversations.deleted_at` and `ai_chat_messa
 
 ## Chat Sync Contract
 
-The detailed Phase 6A chat sync contract is documented in `docs/CHAT_SYNC_ARCHITECTURE.md`.
+The detailed chat sync contract is documented in `docs/CHAT_SYNC_ARCHITECTURE.md`.
 
 Key points:
 
@@ -145,7 +149,28 @@ Key points:
 - Future Pull must use `(server_updated_at, id)` as the stable cursor.
 - `assistant_cards` is `jsonb` and must preserve full `assistantCardsJson`, including unknown future fields.
 - Streaming deltas, input drafts, route state, and Compose temporary state are not part of the remote contract.
-- Chat Push, Pull, Backfill, scheduling, deletion sync, and multi-device merge remain unimplemented.
+- Phase 6B implements Chat Push and Chat Backfill through the existing sync queue.
+- Chat Pull, deletion UI/sync, and multi-device merge remain unimplemented.
+
+## Phase 6B Queue And Backfill Order
+
+Chat sync uses the existing `sync_queue` table rather than a second queue framework. The new operations are:
+
+- `UPSERT_AI_CONVERSATION` with `entityType = ai_conversation`
+- `UPSERT_AI_CHAT_MESSAGE` with `entityType = ai_chat_message`
+
+Repository write paths enqueue chat snapshots inside the same Room transaction as the local conversation/message write. Empty assistant placeholders and in-memory `reply_delta` streaming state are skipped.
+
+The scheduler runs:
+
+1. existing queue push, including business Push and Chat Push;
+2. business Backfill;
+3. Chat Backfill;
+4. existing queue push again, including Chat Push;
+5. existing business Pull;
+6. health refresh.
+
+`UPSERT_AI_CONVERSATION` is ordered before `UPSERT_AI_CHAT_MESSAGE`, so parent conversations are pushed before messages. Phase 6B does not add Chat Pull.
 
 ## Logging
 

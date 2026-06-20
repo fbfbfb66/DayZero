@@ -20,6 +20,10 @@ class NoopRemoteSyncGateway : RemoteSyncGateway {
 
     override suspend fun softDeleteRecord(payload: SyncPayload): RemoteSyncResult = noopResult()
 
+    override suspend fun upsertChatConversation(payload: SyncPayload): RemoteSyncResult = noopResult()
+
+    override suspend fun upsertChatMessage(payload: SyncPayload): RemoteSyncResult = noopResult()
+
     private fun noopResult(): RemoteSyncResult {
         val identity = currentIdentity
         return if (identity?.canRemoteSync == true) {

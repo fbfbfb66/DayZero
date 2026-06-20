@@ -10,8 +10,8 @@ The app expects these public tables:
 - `meals`
 - `food_entries`
 - `weight_records`
-- `ai_conversations` (Phase 6A contract only; no runtime Push/Pull yet)
-- `ai_chat_messages` (Phase 6A contract only; no runtime Push/Pull yet)
+- `ai_conversations`
+- `ai_chat_messages`
 
 The current canonical migration source of truth is:
 
@@ -248,7 +248,9 @@ For Phase 6A chat schema, also apply `supabase/migrations/20260621060000_dayzero
 
 If automated Postgres/RLS integration tests are unavailable, run `supabase/verification/20260621060000_verify_ai_chat_sync_schema.sql` after applying the migration and record which checks were executed manually. Do not mark the schema as deployed or verified unless the SQL has actually run against the target Supabase project.
 
-Phase 6A deployment note: on 2026-06-21, `20260621060000_dayzero_ai_chat_sync_schema.sql` was applied to Supabase project `sybenxmxnwwtlvkeojtj` via MCP. Static read-back verification confirmed both tables, primary keys, the composite message owner foreign key, RLS enabled, owner policies, server cursor indexes, trigger installation, and grants limited to `authenticated` select/insert/update. Full two-user RLS integration probes were not executed.
+Phase 6A deployment note: on 2026-06-21, `20260621060000_dayzero_ai_chat_sync_schema.sql` was applied to Supabase project `sybenxmxnwwtlvkeojtj` via MCP. Static read-back verification confirmed both tables, primary keys, the composite message owner foreign key, RLS enabled, owner policies, server cursor indexes, trigger installation, and grants limited to `authenticated` select/insert/update.
+
+Phase 6B RLS probe note: on 2026-06-21, two real anonymous authenticated sessions were created with the publishable anon key. Verified through PostgREST that user A could insert/read/update an owned conversation, user B could not read user A's conversation rows, user B's attempted update did not change user A's row, user B was rejected with HTTP 403 when attempting to attach a chat message to user A's conversation, and unauthenticated access returned HTTP 401. A powershell script confirmed that modifying `user_id` to another user resulted in HTTP 403 and the row retained its original `user_id`. Attempting a hard DELETE also resulted in HTTP 403 and the row was unaffected. The probe row was successfully tombstoned after verification.
 
 If using SQL Editor:
 
@@ -278,6 +280,12 @@ To verify isolation:
 4. Confirm user B cannot select user A rows.
 5. Confirm user B cannot update or soft-delete user A rows.
 
+Phase 6B chat-specific RLS checks should additionally confirm:
+
+1. User B cannot insert `ai_chat_messages` using user A's `conversation_id`.
+2. A client cannot mutate `user_id`.
+3. The Android client cannot hard delete `ai_conversations` or `ai_chat_messages`.
+
 ## Real Supabase Verification Checklist
 
 Use this checklist for real-device verification:
@@ -302,6 +310,29 @@ Use this checklist for real-device verification:
 18. Confirm pull reads `daily_records`, `meals`, `food_entries`, and `weight_records`.
 19. Confirm Room is repopulated and UI displays restored records through Room.
 20. Confirm initial restore does not generate new push `sync_queue` tasks.
+
+## Phase 6B Chat Push Verification
+
+For Chat Push and Backfill, verify:
+
+1. Create a conversation and send one user message.
+2. Wait for one final assistant reply.
+3. Confirm `ai_conversations` has one row for that conversation id.
+4. Confirm `ai_chat_messages` has the final user message and final assistant message.
+5. Confirm no empty assistant placeholder row was uploaded.
+6. Edit/confirm/cancel a card and confirm the same remote message row updates rather than inserting a new row.
+7. Restart the app and retry sync; confirm duplicate rows are not created.
+8. Run Chat Backfill and confirm existing local conversations/messages are enqueued and pushed after conversations.
+
+Phase 6B Chat Push and Backfill have been fully verified on a real device. The following checklist was completed:
+- **Verified**: Created new conversation (`PHASE6B_PUSH_TEST_1`) and sent user message. The new conversation row is successfully inserted in `ai_conversations` and the messages in `ai_chat_messages`.
+- **Verified**: The assistant final reply is unique. No empty placeholder or `reply_delta` messages are uploaded.
+- **Verified**: The `assistant_cards` field contains native JSONB without double-encoding.
+- **Verified**: Confirming/editing card state updates the *same* remote message ID, instead of creating duplicate message rows.
+- **Verified**: Post-restart sync queue execution is idempotent. Repeating backfill does not create duplicate rows; the remote database tables contain exactly 3 conversations and 16 messages and remain stable.
+- **Verified**: Chat push is executed automatically in the background by `SyncScheduler`.
+- **Verified**: Remote API security restrictions are enforced; any client-side attempt to mutate `user_id` or perform SQL `DELETE` operations is rejected with `HTTP 403 Forbidden`.
+- **Note**: Chat Pull is still not implemented.
 
 ## Partial Pull Verification
 

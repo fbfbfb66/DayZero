@@ -633,6 +633,8 @@ class DayZeroSyncBackfillTest {
         override suspend fun upsertFoodEntry(payload: SyncPayload): RemoteSyncResult = RemoteSyncResult.Success
         override suspend fun upsertWeightRecord(payload: SyncPayload): RemoteSyncResult = RemoteSyncResult.Success
         override suspend fun softDeleteRecord(payload: SyncPayload): RemoteSyncResult = RemoteSyncResult.Success
+        override suspend fun upsertChatConversation(payload: SyncPayload): RemoteSyncResult = RemoteSyncResult.Success
+        override suspend fun upsertChatMessage(payload: SyncPayload): RemoteSyncResult = RemoteSyncResult.Success
     }
 
     private class AlwaysRetryableGateway : RemoteSyncGateway {
@@ -642,6 +644,8 @@ class DayZeroSyncBackfillTest {
         override suspend fun upsertFoodEntry(payload: SyncPayload): RemoteSyncResult = RemoteSyncResult.RetryableFailure("network_timeout")
         override suspend fun upsertWeightRecord(payload: SyncPayload): RemoteSyncResult = RemoteSyncResult.RetryableFailure("network_timeout")
         override suspend fun softDeleteRecord(payload: SyncPayload): RemoteSyncResult = RemoteSyncResult.RetryableFailure("network_timeout")
+        override suspend fun upsertChatConversation(payload: SyncPayload): RemoteSyncResult = RemoteSyncResult.RetryableFailure("network_timeout")
+        override suspend fun upsertChatMessage(payload: SyncPayload): RemoteSyncResult = RemoteSyncResult.RetryableFailure("network_timeout")
     }
 
     private class StaticSupabaseSessionProvider : SupabaseAuthSessionProvider {

@@ -10,4 +10,6 @@ interface RemoteSyncGateway {
     suspend fun upsertFoodEntry(payload: SyncPayload): RemoteSyncResult
     suspend fun upsertWeightRecord(payload: SyncPayload): RemoteSyncResult
     suspend fun softDeleteRecord(payload: SyncPayload): RemoteSyncResult
+    suspend fun upsertChatConversation(payload: SyncPayload): RemoteSyncResult
+    suspend fun upsertChatMessage(payload: SyncPayload): RemoteSyncResult
 }

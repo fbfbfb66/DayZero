@@ -29,6 +29,9 @@ import com.example.data.sync.SupabaseRemotePullGateway
 import com.example.data.sync.SupabaseRemoteSyncGateway
 import com.example.data.sync.SyncCoordinator
 import com.example.data.sync.SyncHealthReporter
+import com.example.data.sync.chat.ChatBackfillCoordinator
+import com.example.data.sync.chat.ChatBackfillStateStore
+import com.example.data.sync.chat.ChatSyncQueueWriter
 import com.example.data.time.SystemCurrentDateProvider
 import com.example.data.telemetry.AiLatencyTraceLogger
 import com.example.domain.identity.CurrentIdentityProvider
@@ -220,17 +223,32 @@ object DayZeroHiltModule {
     @Singleton
     fun provideAiDraftRepository(
         apiService: AiDraftApiService,
-        database: DayZeroDatabase
+        database: DayZeroDatabase,
+        syncQueueDao: SyncQueueDao,
+        identityProvider: CurrentIdentityProvider
     ): AiDraftRepository {
-        return RemoteAiDraftRepository(apiService = apiService, database = database)
+        return RemoteAiDraftRepository(
+            apiService = apiService,
+            database = database,
+            syncQueueDao = syncQueueDao,
+            identityProvider = identityProvider
+        )
     }
 
     @Provides
     @Singleton
     fun provideConversationRepository(
-        conversationDao: ConversationDao
+        conversationDao: ConversationDao,
+        database: DayZeroDatabase,
+        syncQueueDao: SyncQueueDao,
+        identityProvider: CurrentIdentityProvider
     ): ConversationRepository {
-        return RoomConversationRepository(conversationDao = conversationDao)
+        return RoomConversationRepository(
+            conversationDao = conversationDao,
+            database = database,
+            syncQueueDao = syncQueueDao,
+            identityProvider = identityProvider
+        )
     }
 
     @Provides
@@ -261,13 +279,17 @@ object DayZeroHiltModule {
         syncQueueDao: SyncQueueDao,
         identityProvider: CurrentIdentityProvider,
         remoteSyncGateway: RemoteSyncGateway,
-        dailyRecordDao: DailyRecordDao
+        dailyRecordDao: DailyRecordDao,
+        conversationDao: ConversationDao,
+        chatSyncQueueWriter: ChatSyncQueueWriter
     ): SyncCoordinator {
         return LocalFirstSyncCoordinator(
             syncQueueDao = syncQueueDao,
             identityProvider = identityProvider,
             remoteSyncGateway = remoteSyncGateway,
-            dailyRecordDao = dailyRecordDao
+            dailyRecordDao = dailyRecordDao,
+            conversationDao = conversationDao,
+            chatSyncQueueWriter = chatSyncQueueWriter
         )
     }
 
@@ -285,6 +307,18 @@ object DayZeroHiltModule {
 
     @Provides
     @Singleton
+    fun provideChatBackfillStateStore(@ApplicationContext context: Context): ChatBackfillStateStore {
+        return ChatBackfillStateStore(context)
+    }
+
+    @Provides
+    @Singleton
+    fun provideChatSyncQueueWriter(syncQueueDao: SyncQueueDao): ChatSyncQueueWriter {
+        return ChatSyncQueueWriter(syncQueueDao)
+    }
+
+    @Provides
+    @Singleton
     fun provideBackfillCoordinator(
         dailyRecordDao: DailyRecordDao,
         syncQueueDao: SyncQueueDao,
@@ -296,6 +330,24 @@ object DayZeroHiltModule {
             syncQueueDao = syncQueueDao,
             identityProvider = identityProvider,
             stateStore = stateStore
+        )
+    }
+
+    @Provides
+    @Singleton
+    fun provideChatBackfillCoordinator(
+        conversationDao: ConversationDao,
+        messageDao: AiChatMessageDao,
+        identityProvider: CurrentIdentityProvider,
+        stateStore: ChatBackfillStateStore,
+        queueWriter: ChatSyncQueueWriter
+    ): ChatBackfillCoordinator {
+        return ChatBackfillCoordinator(
+            conversationDao = conversationDao,
+            messageDao = messageDao,
+            identityProvider = identityProvider,
+            stateStore = stateStore,
+            queueWriter = queueWriter
         )
     }
 

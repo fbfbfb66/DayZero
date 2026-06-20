@@ -1,6 +1,7 @@
 package com.example.data.sync
 
 import android.util.Log
+import com.example.data.sync.chat.ChatBackfillCoordinator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -29,6 +30,7 @@ class InProcessSyncScheduler(
     private val scope: CoroutineScope,
     private val syncCoordinator: SyncCoordinator?,
     private val backfillCoordinator: BackfillCoordinator?,
+    private val chatBackfillCoordinator: ChatBackfillCoordinator? = null,
     private val pullCoordinator: PullCoordinator? = null,
     private val syncHealthReporter: SyncHealthReporter?,
     private val debounceMs: Long = DEFAULT_DEBOUNCE_MS
@@ -93,6 +95,15 @@ class InProcessSyncScheduler(
                             Log.d(
                                 "DayZeroBackfill",
                                 "scheduler result reason=$reason enqueued=${it.enqueuedCount} skipped=${it.skippedAlreadyQueuedCount}"
+                            )
+                        }
+                        Log.d("DayZeroChatBackfill", "scheduler step chat backfill reason=$reason")
+                        val chatStats = chatBackfillCoordinator?.runOnce()
+                        chatStats?.let {
+                            Log.d(
+                                "DayZeroChatBackfill",
+                                "scheduler result reason=$reason conversations=${it.enqueuedConversationCount} " +
+                                    "messages=${it.enqueuedMessageCount} skippedPlaceholders=${it.skippedPlaceholderCount}"
                             )
                         }
                     }

@@ -20,11 +20,13 @@ interface SyncQueueDao {
           AND nextAttemptAt <= :now
         ORDER BY
           CASE operation
+            WHEN 'UPSERT_AI_CONVERSATION' THEN 5
             WHEN 'UPSERT_DAILY_RECORD' THEN 10
             WHEN 'UPSERT_MEAL' THEN 20
             WHEN 'UPSERT_FOOD_ENTRY' THEN 30
             WHEN 'UPSERT_WEIGHT_RECORD' THEN 40
             WHEN 'SOFT_DELETE_RECORD' THEN 50
+            WHEN 'UPSERT_AI_CHAT_MESSAGE' THEN 60
             ELSE 99
           END ASC,
           createdAt ASC
@@ -147,6 +149,34 @@ interface SyncQueueDao {
         ownerLocalId: String,
         entityType: String,
         entityLocalId: String
+    ): Int
+
+    @Query(
+        """
+        UPDATE sync_queue
+        SET payloadJson = :payloadJson,
+            operation = :operation,
+            status = 'PENDING',
+            retryCount = 0,
+            lastError = NULL,
+            lastStatusReason = :reason,
+            updatedAt = :updatedAt,
+            nextAttemptAt = 0
+        WHERE ownerLocalId IN (:ownerLocalId, 'local_uninitialized')
+          AND entityType = :entityType
+          AND entityLocalId = :entityLocalId
+          AND operation = :operation
+          AND status IN ('PENDING', 'FAILED_RETRYABLE', 'WAITING_FOR_AUTH')
+        """
+    )
+    suspend fun coalescePendingTask(
+        ownerLocalId: String,
+        entityType: String,
+        entityLocalId: String,
+        operation: String,
+        payloadJson: String,
+        updatedAt: Long = System.currentTimeMillis(),
+        reason: String? = null
     ): Int
 
     @Query("SELECT COUNT(*) FROM sync_queue WHERE status = :status")

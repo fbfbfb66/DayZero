@@ -1,6 +1,6 @@
 # DayZero Chat Sync Architecture
 
-Phase 6A establishes the remote schema and client-side data contract for future AI conversation sync. It does not turn on chat Push, Pull, Backfill, WorkManager scheduling, UI changes, or runtime merge behavior.
+Phase 6A established the remote schema and client-side data contract for AI conversation sync. Phase 6B adds local enqueue, Chat Push, and historical Chat Backfill. Chat Pull, multi-device merge, chat deletion UI, search, rename, pinning, and login/account binding are still not implemented.
 
 ## Current Runtime Behavior
 
@@ -10,6 +10,8 @@ Room remains the only runtime source for AI conversations and chat messages:
 - Local table `ai_chat_messages` owns persisted user/assistant messages.
 - Every local message has a non-null `conversationId`.
 - Streaming reply deltas remain in memory and are not part of this sync contract.
+- Local writes update Room first and enqueue chat sync in the same Room transaction where the repository owns the write path.
+- Remote chat sync runs in the background through the existing sync queue and `LocalFirstSyncCoordinator`.
 
 ## Remote Tables
 
@@ -67,6 +69,55 @@ Future chat sync must not include transient UI/runtime state: `reply_delta`, `St
 
 Only final assistant messages belong in the remote chat contract.
 
+## Phase 6B Push Queue
+
+Phase 6B wires two chat queue operations into the existing `sync_queue` table:
+
+- `UPSERT_AI_CONVERSATION` with `entityType = ai_conversation`
+- `UPSERT_AI_CHAT_MESSAGE` with `entityType = ai_chat_message`
+
+The queue coalesces pending/retry/waiting tasks by owner, entity type, entity id, and operation. If an older snapshot is already `PROCESSING`, a later local change creates a new pending item so the latest local state is still uploaded after the in-flight task finishes.
+
+Conversation changes enqueue when a conversation is inserted, its title/preview/activity/updated timestamp changes, or it receives a tombstone. Message changes enqueue for final user messages, final assistant messages, card edits, card confirm/cancel, and date guard approve/cancel because those paths update the same persisted message row.
+
+Empty assistant placeholders are skipped. `reply_delta`, `StreamingState`, input drafts, route state, typewriter progress, and transient network errors are not serialized.
+
+## Phase 6B Push Gateway
+
+`RemoteSyncGateway` now includes chat upsert methods for `ai_conversations` and `ai_chat_messages`. `SupabaseRemoteSyncGateway` uses the existing `SupabaseAuthSessionProvider`; it does not sign up users itself, does not cache access tokens, and does not log full message text, card JSON, refresh tokens, or access tokens.
+
+Chat upsert uses local UUIDs as remote primary keys and PostgREST `on_conflict=id`. Message JSON fields are sent as JSON values for the remote `jsonb` columns, not as double-encoded strings.
+
+Queue ordering makes `UPSERT_AI_CONVERSATION` run before `UPSERT_AI_CHAT_MESSAGE`. If a message push hits a retryable parent/conflict condition such as HTTP 409, the coordinator re-enqueues the local parent conversation and keeps the message retryable.
+
+## Phase 6B Backfill
+
+`ChatBackfillCoordinator` scans existing Room conversations first and messages second. It uses stable `(createdAt, id)` pagination and stores progress in `ChatBackfillStateStore`, so interrupted backfill can resume.
+
+Backfill only enqueues snapshots. It does not block UI and does not directly perform pull or merge. It skips empty assistant placeholders and records the skipped count. Re-running backfill is idempotent because the queue coalesces or skips duplicate active snapshots.
+
+Scheduler order is effectively:
+
+1. existing sync queue push, including business Push and Chat Push;
+2. business Backfill;
+3. Chat Backfill;
+4. existing sync queue push again, including Chat Push;
+5. existing business Pull.
+
+There is no Chat Pull step in Phase 6B.
+
+## Phase 6B Validation Status
+
+Phase 6B Chat Push and Backfill have been fully verified on a real device:
+- **Real-Device Push Verified**: New conversation sessions and final messages successfully push to Supabase.
+- **Unique Assistant Final**: Only the final assistant response is persisted and pushed. Temporary placeholders and `reply_delta` text/tokens are not uploaded.
+- **Native Card JSONB**: The `assistant_cards` JSONB column contains raw JSON without double-string encoding.
+- **Card Reuse of Message ID**: Card confirmations/updates safely modify the `assistant_cards` state (e.g. `state=confirmed`) on the *same* remote message ID rather than generating duplicate message rows.
+- **Idempotency & Backfill Stability**: The post-restart sync queue execution and repeated backfill sync run with perfect idempotency, keeping the remote database row counts stable (e.g., 3 conversations and 16 messages in verification tests) with no duplicates.
+- **Automatic Scheduling**: Chat push is automatically scheduled and executed in the background by the existing `SyncScheduler`.
+- **Security & RLS Enforcement**: Remote API client attempts to mutate `user_id` on existing rows or execute hard SQL `DELETE` queries are successfully rejected with `HTTP 403 Forbidden` errors.
+- **Pull Status**: Chat Pull is still not implemented.
+
 ## Conflict Rules For Future Phases
 
 Conversation mutable fields (`title`, `last_message_preview`, `last_activity_at`, `deleted_at`) use deterministic last server version wins. `deleted_at` is a tombstone and old active uploads must not casually revive it. `conversation_date` is fixed after creation.
@@ -75,7 +126,6 @@ Message `role`, `created_at`, and `conversation_id` are immutable after creation
 
 ## Phase Boundary
 
-Phase 6A does not implement Chat Push, Chat Pull, Chat Backfill, chat sync scheduling, multi-device merge, chat deletion UI, remote deletion flow, account binding, or anonymous identity recovery after uninstall.
+Phase 6B implements Chat Push and Chat Backfill only. It does not implement Chat Pull, multi-device merge, chat deletion UI, remote hard delete, account binding, or anonymous identity recovery after uninstall.
 
-The next phase is Phase 6B: Chat Push plus Backfill.
-
+The next phase is Phase 6C: Chat Pull plus Merge.
