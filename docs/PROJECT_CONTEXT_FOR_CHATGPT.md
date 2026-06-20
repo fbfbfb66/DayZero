@@ -50,6 +50,7 @@
 - **First-message flow**: home submit calls `CreateConversationWithFirstMessageUseCase` through `AiRecordViewModel`, navigates to detail on the one-shot creation event, then starts the existing assistant turn for the already-persisted first user message. This prevents duplicate first-message persistence.
 - **Current concurrency policy**: the visible UI remains a single global generation surface. While `isAnalyzing` is true, the home input and detail input are disabled. Users may return to AI home while generation continues; replies are still persisted to the send-time conversation and are visible when reopening it. Multi-conversation simultaneous generation UI is not introduced.
 - Still not implemented: chat/conversation cloud sync, history search, delete, rename, pinning, and AI-generated titles.
+- **Launcher Double Icon Issue Resolved**. Fixed an issue where building/running the debug app installed duplicate launcher icons on the device. The root cause was that `feature/ai-record/src/debug/AndroidManifest.xml` incorrectly declared `androidx.activity.ComponentActivity` with `MAIN` and `LAUNCHER` intent-filters. This has been removed, preserving the registration of the activity for local Compose test rules while preventing duplicate launcher icons.
 
 ## Current Phase Features (Phase 4D-1 Complete)
 
@@ -227,3 +228,29 @@ Implemented in **[DayZeroDatabase](file:///D:/Goings/APPProjects/DayZero/core/da
 - **Cloud sync status**:
   - Chat/conversation cloud sync is still not implemented.
   - Supabase schema, Edge Functions, record sync queue/backfill/pull, and existing food/weight sync remain unchanged.
+
+## Troubleshooting: Double Application / Launcher Icon Issue
+
+### Phenomenon
+When starting DayZero from the development environment, the device appeared to install two application packages simultaneously. On the launcher screen, two icons for the application were visible. Uninstalling either icon deleted both from the device, indicating they shared the same package/application namespace.
+
+### Root Cause
+During debug builds, Gradle merges the manifests from all dependent modules. The debug-specific manifest `feature/ai-record/src/debug/AndroidManifest.xml` (introduced to register `ComponentActivity` for local Compose test rules) incorrectly included the following intent-filter under `androidx.activity.ComponentActivity`:
+```xml
+<intent-filter>
+    <action android:name="android.intent.action.MAIN" />
+    <category android:name="android.intent.category.LAUNCHER" />
+</intent-filter>
+```
+This configuration caused `ComponentActivity` to register as a launcher activity inside the final debug APK. As a result, the Android OS created two launcher icons on the system home screen for the single application package (`com.aistudio.dayzero.djwqop`).
+
+### Fix
+- The `<intent-filter>` block has been removed from `androidx.activity.ComponentActivity` in `feature/ai-record/src/debug/AndroidManifest.xml`.
+- The activity itself remains registered to ensure Compose test rules and Robolectric/device tests function correctly without warning/failure.
+- Running the ordinary run configuration now only creates a single launcher icon for the app.
+- To clean up any stale launcher state, run:
+  ```powershell
+  adb uninstall com.aistudio.dayzero.djwqop
+  ```
+  And then reinstall the app normally.
+
