@@ -1,32 +1,17 @@
 package com.example.ui.screens
 
-import android.widget.Toast
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalFocusManager
-
+import androidx.compose.animation.animateColor
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDp
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.DeleteOutline
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.ui.text.input.KeyboardType
-import com.example.domain.model.DailyRecord
-import com.example.domain.model.RecordStatus
-import com.example.domain.model.ai.AiChatMessage
-import com.example.ui.theme.LightGreen
+import androidx.compose.animation.core.updateTransition
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -37,39 +22,28 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imeAnimationTarget
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.imeNestedScroll
-import androidx.compose.animation.animateColor
-import androidx.compose.animation.core.updateTransition
-import androidx.compose.animation.core.animateDp
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.isImeVisible
-import androidx.compose.foundation.layout.imeAnimationTarget
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.offset
-import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.unit.coerceAtLeast
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -77,7 +51,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -87,15 +60,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.coerceAtLeast
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.feature.airecord.BuildConfig
 import com.example.domain.model.AppState
+import com.example.domain.model.ai.AiChatMessage
 import com.example.domain.model.ai.ChatRole
+import com.example.domain.model.ai.Conversation
 import com.example.domain.model.ai.assistant.PayloadSummary
 import com.example.ui.theme.BorderNormal
 import com.example.ui.theme.BrandGreen
@@ -104,41 +83,34 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.TextTertiary
 import com.example.ui.theme.WarmBackground
-import com.example.ui.sync.SyncStatusUiState
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-private enum class ClearAction(
-    val dialogTitle: String,
-    val dialogMessage: String,
-    val confirmLabel: String
-) {
-    ChatOnly(
-        dialogTitle = "Clear chat?",
-        dialogMessage = "This removes local AI chat messages and cards from this device. Food and weight records stay untouched.",
-        confirmLabel = "Clear chat"
-    ),
-    LocalRecordsOnly(
-        dialogTitle = "Clear local records?",
-        dialogMessage = "This removes local food and weight records from this device. Chat messages stay untouched. Cloud backup is not deleted.",
-        confirmLabel = "Clear records"
-    ),
-    AllLocal(
-        dialogTitle = "Clear local data?",
-        dialogMessage = "This removes local chat messages, cards, food records, and weight records from this device. Cloud backup is not deleted.",
-        confirmLabel = "Clear all local"
-    ),
-    CloudBackupDebug(
-        dialogTitle = "Clear cloud backup?",
-        dialogMessage = "Debug only. This permanently deletes this anonymous user's cloud food and weight backup from Supabase. Local records stay on this device and may be uploaded again by future sync.",
-        confirmLabel = "Clear cloud backup"
-    )
+object AiRecordTestTags {
+    const val Home = "ai_home"
+    const val HomeInput = "ai_home_input"
+    const val HomeSend = "ai_home_send"
+    const val EmptyHistory = "ai_empty_history"
+    const val HistoryList = "ai_history_list"
+    const val HistoryItemPrefix = "ai_history_item_"
+    const val Conversation = "ai_conversation"
+    const val ConversationBack = "ai_conversation_back"
+    const val ConversationInput = "ai_conversation_input"
+    const val ConversationSend = "ai_conversation_send"
+    const val ConversationMessages = "ai_conversation_messages"
 }
 
 interface AiRecordActionHandler {
     fun sendAiMessage(text: String)
+
+    fun sendAiMessage(conversationId: String, text: String)
+
+    fun startAssistantTurnForExistingUserMessage(conversationId: String, text: String)
+
+    fun setActiveConversationId(conversationId: String?)
 
     fun sendInteractionResult(
         interactionId: String,
@@ -158,24 +130,117 @@ interface AiRecordActionHandler {
     fun markAssistantMessageRendered(message: AiChatMessage)
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun AiRecordScreen(
-    uiState: AppState,
-    syncStatusUiState: SyncStatusUiState,
-    actionHandler: AiRecordActionHandler
+fun AiRecordHomeScreen(
+    state: AiConversationHistoryState,
+    isAnalyzing: Boolean,
+    onInputChange: (String) -> Unit,
+    onSubmit: () -> Unit,
+    onOpenConversation: (String) -> Unit
 ) {
-    var inputText by remember { mutableStateOf("") }
-    var showClearMenu by remember { mutableStateOf(false) }
-    var pendingClearAction by remember { mutableStateOf<ClearAction?>(null) }
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(WarmBackground)
+            .testTag(AiRecordTestTags.Home)
+    ) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(start = 16.dp, top = 28.dp, end = 16.dp, bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            item {
+                Text(
+                    text = "AI Record",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+                Spacer(modifier = Modifier.height(14.dp))
+                HomePromptBox(
+                    text = state.homeInputText,
+                    enabled = !state.isCreating && !isAnalyzing,
+                    isBusy = state.isCreating || isAnalyzing,
+                    errorMessage = state.errorMessage,
+                    onTextChange = onInputChange,
+                    onSubmit = onSubmit
+                )
+                if (isAnalyzing && !state.isCreating) {
+                    Text(
+                        text = "DayZero is still replying in the open conversation.",
+                        color = TextSecondary,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(top = 8.dp, start = 4.dp)
+                    )
+                }
+            }
+
+            item {
+                Text(
+                    text = "History",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+
+            if (state.conversations.isEmpty() && !state.isLoading) {
+                item {
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag(AiRecordTestTags.EmptyHistory),
+                        shape = RoundedCornerShape(22.dp),
+                        color = Color.White,
+                        border = BorderStroke(1.dp, BorderNormal.copy(alpha = 0.5f))
+                    ) {
+                        Text(
+                            text = "Your conversations will appear here after you send a message.",
+                            color = TextSecondary,
+                            fontSize = 14.sp,
+                            modifier = Modifier.padding(18.dp)
+                        )
+                    }
+                }
+            } else {
+                items(
+                    items = state.conversations,
+                    key = { it.id }
+                ) { conversation ->
+                    ConversationHistoryRow(
+                        conversation = conversation,
+                        onClick = { onOpenConversation(conversation.id) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun AiConversationScreen(
+    conversationId: String,
+    detailState: AiConversationDetailState,
+    appState: AppState,
+    actionHandler: AiRecordActionHandler,
+    onBack: () -> Unit
+) {
+    LaunchedEffect(conversationId) {
+        actionHandler.setActiveConversationId(conversationId)
+    }
+
+    var inputText by remember(conversationId) { mutableStateOf("") }
     val listState = rememberLazyListState()
-    val hasAssistantPlaceholder = uiState.chatMessages.lastOrNull()?.let { message ->
+    val messages = detailState.messages
+    val isCurrentConversationAnalyzing = appState.isAnalyzing && appState.activeConversationId == conversationId
+    val hasAssistantPlaceholder = messages.lastOrNull()?.let { message ->
         message.role == ChatRole.Assistant && message.text.isBlank() && message.assistantCards.isEmpty()
     } == true
 
-    LaunchedEffect(uiState.chatMessages.size, uiState.isAnalyzing) {
-        if (uiState.chatMessages.isNotEmpty()) {
-            listState.animateScrollToItem(uiState.chatMessages.lastIndex)
+    LaunchedEffect(messages.size, isCurrentConversationAnalyzing) {
+        if (messages.isNotEmpty()) {
+            listState.animateScrollToItem(messages.lastIndex)
         }
     }
 
@@ -183,332 +248,416 @@ fun AiRecordScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(WarmBackground)
+            .testTag(AiRecordTestTags.Conversation)
     ) {
         LazyColumn(
             state = listState,
             modifier = Modifier
-                .fillMaxSize(),
-            contentPadding = PaddingValues(start = 16.dp, top = 110.dp, end = 16.dp, bottom = 120.dp),
+                .fillMaxSize()
+                .testTag(AiRecordTestTags.ConversationMessages),
+            contentPadding = PaddingValues(start = 16.dp, top = 92.dp, end = 16.dp, bottom = 116.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            if (uiState.chatMessages.isEmpty()) {
+            if (messages.isEmpty() && !detailState.isSending) {
                 item {
-                    AiMessage("Pure chat mode is active for Phase 1.", 0L)
+                    AiMessage("Start chatting with DayZero.", 0L)
                 }
             }
 
-            items(items = uiState.chatMessages, key = { it.id }) { message ->
-                if (message.role == ChatRole.User) {
-                    UserMessage(message.text, message.createdAt)
-                } else {
-                    LaunchedEffect(message.id, message.text, message.assistantCards.size) {
-                        if (message.text.isNotBlank() || message.assistantCards.isNotEmpty()) {
-                            actionHandler.markAssistantMessageRendered(message)
-                        }
-                    }
-                    Column {
-                        if (message.text.isNotBlank()) {
-                            AiMessage(message.text, message.createdAt)
-                        } else if (
-                            uiState.isAnalyzing &&
-                            message.id == uiState.chatMessages.lastOrNull()?.id &&
-                            message.assistantCards.isEmpty()
-                        ) {
-                            AiMessageComponent {
-                                TypingIndicator()
-                            }
-                        }
-                        message.assistantCards.forEach { card ->
-                            AssistantCardRenderer(card = card, actionHandler = actionHandler)
-                        }
-                    }
-                }
-            }
-
-            if (uiState.isAnalyzing && !hasAssistantPlaceholder) {
-                item(key = "analyzing") {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        AiMessageComponent {
-                            TypingIndicator()
-                        }
-                    }
-                }
-            }
-        }
-
-        Surface(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .fillMaxWidth(),
-            color = WarmBackground.copy(alpha = 0.96f),
-            shadowElevation = 0.dp
-        ) {
-            Box(
-                modifier = Modifier
-                    .statusBarsPadding()
-                    .height(40.dp)
-                    .padding(horizontal = 16.dp),
-                contentAlignment = Alignment.CenterStart
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "AI Record",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary
-                    )
-
-                    Box {
-                        Text(
-                            text = "Clear",
-                            fontSize = 12.sp,
-                            color = TextSecondary,
-                            modifier = Modifier
-                                .clickable { showClearMenu = true }
-                                .padding(4.dp)
-                        )
-                        DropdownMenu(
-                            expanded = showClearMenu,
-                            onDismissRequest = { showClearMenu = false }
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("Clear chat only") },
-                                onClick = {
-                                    showClearMenu = false
-                                    pendingClearAction = ClearAction.ChatOnly
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Clear local records") },
-                                onClick = {
-                                    showClearMenu = false
-                                    pendingClearAction = ClearAction.LocalRecordsOnly
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Clear chat + local records") },
-                                onClick = {
-                                    showClearMenu = false
-                                    pendingClearAction = ClearAction.AllLocal
-                                }
-                            )
-                            if (BuildConfig.DEBUG) {
-                                DropdownMenuItem(
-                                    text = { Text("Clear cloud backup (debug)") },
-                                    onClick = {
-                                        showClearMenu = false
-                                        pendingClearAction = ClearAction.CloudBackupDebug
-                                    }
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        pendingClearAction?.let { action ->
-            val dangerWarning = syncStatusUiState.requiresDangerousOperationWarning &&
-                action != ClearAction.ChatOnly
-            AlertDialog(
-                onDismissRequest = { pendingClearAction = null },
-                title = { Text(action.dialogTitle) },
-                text = {
-                    Text(
-                        if (dangerWarning) {
-                            "Some records have not finished syncing. Clearing local records now may make them unavailable for cloud restore.\n\n${action.dialogMessage}"
-                        } else {
-                            action.dialogMessage
-                        }
-                    )
-                },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            pendingClearAction = null
-                            when (action) {
-                                ClearAction.ChatOnly -> actionHandler.clearChatMessages()
-                                ClearAction.LocalRecordsOnly -> actionHandler.clearLocalRecords()
-                                ClearAction.AllLocal -> actionHandler.clearAllData()
-                                ClearAction.CloudBackupDebug -> actionHandler.clearCloudBackupForDebug()
-                            }
-                        }
-                    ) {
-                        Text(action.confirmLabel)
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { pendingClearAction = null }) {
-                        Text("Cancel")
-                    }
-                }
-            )
-        }
-
-        Column(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .imePadding()
-        ) {
-
-            var isFocused by remember { mutableStateOf(false) }
-            val imeTargetBottom = WindowInsets.imeAnimationTarget.getBottom(LocalDensity.current)
-            val isSeparated = isFocused || (imeTargetBottom > 0) || inputText.isNotEmpty()
-
-            val focusManager = LocalFocusManager.current
-            LaunchedEffect(imeTargetBottom) {
-                if (imeTargetBottom == 0 && isFocused) {
-                    focusManager.clearFocus()
-                }
-            }
-            LaunchedEffect(listState.isScrollInProgress) {
-                if (listState.isScrollInProgress) {
-                    focusManager.clearFocus()
-                }
-            }
-
-            val transition = updateTransition(targetState = isSeparated, label = "InputState")
-
-            val plusBgAlpha by transition.animateFloat(
-                transitionSpec = { spring(stiffness = Spring.StiffnessMedium, dampingRatio = 1f) },
-                label = "plusBgAlpha"
-            ) { separated -> if (separated) 1f else 0f }
-
-            val plusBorderColor by transition.animateColor(
-                transitionSpec = { spring(stiffness = Spring.StiffnessMedium, dampingRatio = 1f) },
-                label = "plusBorderColor"
-            ) { separated -> if (separated) BorderNormal.copy(alpha = 0.5f) else Color.Transparent }
-
-            val plusOffset by transition.animateDp(
-                transitionSpec = { spring(stiffness = 600f, dampingRatio = 0.6f) },
-                label = "plusOffset"
-            ) { separated -> if (separated) 0.dp else 4.dp }
-
-            val plusScale by transition.animateFloat(
-                transitionSpec = { spring(stiffness = 600f, dampingRatio = 0.6f) },
-                label = "plusScale"
-            ) { separated -> if (separated) 1f else 0.9f }
-
-            val textFieldPaddingStart by transition.animateDp(
-                transitionSpec = { spring(stiffness = 600f, dampingRatio = 0.6f) },
-                label = "textFieldPaddingStart"
-            ) { separated -> if (separated) 56.dp else 0.dp }
-
-            val innerGap by transition.animateDp(
-                transitionSpec = { spring(stiffness = 600f, dampingRatio = 0.6f) },
-                label = "innerGap"
-            ) { separated -> if (separated) 0.dp else 48.dp }
-
-            Box(
-                modifier = Modifier
-                    .padding(horizontal = 12.dp)
-                    .fillMaxWidth()
-            ) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .offset(x = plusOffset)
-                        .padding(bottom = 6.dp)
-                        .size(44.dp)
-                        .graphicsLayer {
-                            scaleX = plusScale
-                            scaleY = plusScale
-                        }
-                        .background(
-                            color = Color.White.copy(alpha = plusBgAlpha),
-                            shape = CircleShape
-                        )
-                        .border(1.dp, plusBorderColor, CircleShape)
+            items(items = messages, key = { it.id }) { message ->
+                ChatMessageRow(
+                    message = message,
+                    isAnalyzing = isCurrentConversationAnalyzing,
+                    isLastMessage = message.id == messages.lastOrNull()?.id,
+                    actionHandler = actionHandler
                 )
+            }
 
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = textFieldPaddingStart.coerceAtLeast(0.dp))
-                        .heightIn(max = 220.dp)
-                        .animateContentSize(),
-                    shape = RoundedCornerShape(26.dp),
-                    color = Color.White,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, BorderNormal.copy(alpha = 0.5f)),
-                    shadowElevation = 0.dp
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(start = innerGap.coerceAtLeast(0.dp), end = 4.dp, top = 2.dp, bottom = 2.dp),
-                        verticalAlignment = Alignment.Bottom
-                    ) {
-                        OutlinedTextField(
-                            value = inputText,
-                            onValueChange = { inputText = it },
-                            modifier = Modifier
-                                .weight(1f)
-                                .onFocusChanged { isFocused = it.isFocused },
-                            placeholder = { Text("Chat with DayZero...", color = TextSecondary) },
-                            enabled = !uiState.isAnalyzing,
-                            colors = OutlinedTextFieldDefaults.colors(
-                                unfocusedBorderColor = Color.Transparent,
-                                focusedBorderColor = Color.Transparent,
-                                unfocusedContainerColor = Color.Transparent,
-                                focusedContainerColor = Color.Transparent,
-                                disabledBorderColor = Color.Transparent,
-                                disabledContainerColor = Color.Transparent
-                            )
-                        )
-
-                        Box(
-                            modifier = Modifier
-                                .padding(end = 2.dp, bottom = 6.dp)
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .background(if (inputText.isNotBlank()) BrandGreen else BrandGreen.copy(alpha = 0.3f))
-                                .clickable(enabled = inputText.isNotBlank() && !uiState.isAnalyzing) {
-                                    actionHandler.sendAiMessage(inputText)
-                                    inputText = ""
-                                },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            if (uiState.isAnalyzing) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(20.dp),
-                                    strokeWidth = 2.dp,
-                                    color = Color.White
-                                )
-                            } else {
-                                Icon(
-                                    Icons.AutoMirrored.Filled.Send,
-                                    contentDescription = "Send",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
+            if (isCurrentConversationAnalyzing && !hasAssistantPlaceholder) {
+                item(key = "analyzing") {
+                    AiMessageComponent {
+                        TypingIndicator()
                     }
                 }
+            }
+        }
 
+        ConversationTopBar(
+            title = detailState.currentConversation?.title ?: "Conversation",
+            subtitle = detailState.currentConversation?.let { formatConversationDateLabel(it.conversationDate) },
+            onBack = onBack
+        )
+
+        ConversationInputBar(
+            modifier = Modifier.align(Alignment.BottomCenter),
+            inputText = inputText,
+            enabled = !appState.isAnalyzing,
+            isAnalyzing = isCurrentConversationAnalyzing,
+            inputTestTag = AiRecordTestTags.ConversationInput,
+            sendTestTag = AiRecordTestTags.ConversationSend,
+            onInputChange = { inputText = it },
+            onSubmit = {
+                val text = inputText
+                if (text.isNotBlank()) {
+                    actionHandler.sendAiMessage(conversationId, text)
+                    inputText = ""
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun HomePromptBox(
+    text: String,
+    enabled: Boolean,
+    isBusy: Boolean,
+    errorMessage: String?,
+    onTextChange: (String) -> Unit,
+    onSubmit: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(28.dp),
+        color = Color.White,
+        border = BorderStroke(1.dp, BorderNormal.copy(alpha = 0.5f)),
+        shadowElevation = 0.dp
+    ) {
+        Column(modifier = Modifier.padding(start = 16.dp, top = 12.dp, end = 10.dp, bottom = 10.dp)) {
+            OutlinedTextField(
+                value = text,
+                onValueChange = onTextChange,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 92.dp, max = 180.dp)
+                    .testTag(AiRecordTestTags.HomeInput),
+                placeholder = { Text("Tell DayZero what happened...", color = TextSecondary) },
+                enabled = enabled,
+                colors = OutlinedTextFieldDefaults.colors(
+                    unfocusedBorderColor = Color.Transparent,
+                    focusedBorderColor = Color.Transparent,
+                    unfocusedContainerColor = Color.Transparent,
+                    focusedContainerColor = Color.Transparent,
+                    disabledBorderColor = Color.Transparent,
+                    disabledContainerColor = Color.Transparent
+                )
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = errorMessage.orEmpty(),
+                    color = MaterialTheme.colorScheme.error,
+                    fontSize = 12.sp,
+                    modifier = Modifier.weight(1f)
+                )
                 Box(
                     modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .offset(x = plusOffset)
-                        .padding(bottom = 6.dp)
                         .size(44.dp)
-                        .graphicsLayer {
-                            scaleX = plusScale
-                            scaleY = plusScale
-                        },
+                        .clip(CircleShape)
+                        .background(if (text.isNotBlank() && enabled) BrandGreen else BrandGreen.copy(alpha = 0.3f))
+                        .clickable(enabled = text.isNotBlank() && enabled && !isBusy) { onSubmit() }
+                        .testTag(AiRecordTestTags.HomeSend),
                     contentAlignment = Alignment.Center
                 ) {
-                    IconButton(
-                        onClick = {},
-                        enabled = false
-                    ) {
-                        Icon(Icons.Filled.Add, contentDescription = "More", tint = TextSecondary.copy(alpha = 0.5f))
+                    if (isBusy) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp,
+                            color = Color.White
+                        )
+                    } else {
+                        Icon(
+                            Icons.AutoMirrored.Filled.Send,
+                            contentDescription = "Send",
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConversationHistoryRow(
+    conversation: Conversation,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .clickable(onClick = onClick)
+            .testTag(AiRecordTestTags.HistoryItemPrefix + conversation.id),
+        shape = RoundedCornerShape(20.dp),
+        color = Color.White,
+        border = BorderStroke(1.dp, BorderNormal.copy(alpha = 0.45f)),
+        shadowElevation = 0.dp
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = conversation.title.ifBlank { "Conversation" },
+                    color = TextPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 15.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    text = formatConversationTime(conversation.lastActivityAt),
+                    color = TextTertiary,
+                    fontSize = 12.sp
+                )
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = conversation.lastMessagePreview.ifBlank { "No preview" },
+                color = TextSecondary,
+                fontSize = 13.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun ConversationTopBar(
+    title: String,
+    subtitle: String?,
+    onBack: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .alignTopBar(),
+        color = WarmBackground.copy(alpha = 0.97f),
+        shadowElevation = 0.dp
+    ) {
+        Row(
+            modifier = Modifier
+                .statusBarsPadding()
+                .height(54.dp)
+                .padding(start = 8.dp, end = 16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(
+                onClick = onBack,
+                modifier = Modifier.testTag(AiRecordTestTags.ConversationBack)
+            ) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextPrimary)
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    color = TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 17.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (!subtitle.isNullOrBlank()) {
+                    Text(
+                        text = subtitle,
+                        color = TextSecondary,
+                        fontSize = 12.sp,
+                        maxLines = 1
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChatMessageRow(
+    message: AiChatMessage,
+    isAnalyzing: Boolean,
+    isLastMessage: Boolean,
+    actionHandler: AiRecordActionHandler
+) {
+    if (message.role == ChatRole.User) {
+        UserMessage(message.text, message.createdAt)
+    } else {
+        LaunchedEffect(message.id, message.text, message.assistantCards.size) {
+            if (message.text.isNotBlank() || message.assistantCards.isNotEmpty()) {
+                actionHandler.markAssistantMessageRendered(message)
+            }
+        }
+        Column {
+            if (message.text.isNotBlank()) {
+                AiMessage(message.text, message.createdAt)
+            } else if (isAnalyzing && isLastMessage && message.assistantCards.isEmpty()) {
+                AiMessageComponent {
+                    TypingIndicator()
+                }
+            }
+            message.assistantCards.forEach { card ->
+                AssistantCardRenderer(card = card, actionHandler = actionHandler)
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ConversationInputBar(
+    modifier: Modifier = Modifier,
+    inputText: String,
+    enabled: Boolean,
+    isAnalyzing: Boolean,
+    inputTestTag: String,
+    sendTestTag: String,
+    onInputChange: (String) -> Unit,
+    onSubmit: () -> Unit
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .imePadding()
+            .navigationBarsPadding()
+            .padding(bottom = 8.dp)
+    ) {
+        var isFocused by remember { mutableStateOf(false) }
+        val imeTargetBottom = WindowInsets.imeAnimationTarget.getBottom(LocalDensity.current)
+        val isSeparated = isFocused || (imeTargetBottom > 0) || inputText.isNotEmpty()
+
+        val focusManager = LocalFocusManager.current
+        LaunchedEffect(imeTargetBottom) {
+            if (imeTargetBottom == 0 && isFocused) {
+                focusManager.clearFocus()
+            }
+        }
+
+        val transition = updateTransition(targetState = isSeparated, label = "InputState")
+        val plusBgAlpha by transition.animateFloat(
+            transitionSpec = { spring(stiffness = Spring.StiffnessMedium, dampingRatio = 1f) },
+            label = "plusBgAlpha"
+        ) { separated -> if (separated) 1f else 0f }
+        val plusBorderColor by transition.animateColor(
+            transitionSpec = { spring(stiffness = Spring.StiffnessMedium, dampingRatio = 1f) },
+            label = "plusBorderColor"
+        ) { separated -> if (separated) BorderNormal.copy(alpha = 0.5f) else Color.Transparent }
+        val plusOffset by transition.animateDp(
+            transitionSpec = { spring(stiffness = 600f, dampingRatio = 0.6f) },
+            label = "plusOffset"
+        ) { separated -> if (separated) 0.dp else 4.dp }
+        val plusScale by transition.animateFloat(
+            transitionSpec = { spring(stiffness = 600f, dampingRatio = 0.6f) },
+            label = "plusScale"
+        ) { separated -> if (separated) 1f else 0.9f }
+        val textFieldPaddingStart by transition.animateDp(
+            transitionSpec = { spring(stiffness = 600f, dampingRatio = 0.6f) },
+            label = "textFieldPaddingStart"
+        ) { separated -> if (separated) 56.dp else 0.dp }
+        val innerGap by transition.animateDp(
+            transitionSpec = { spring(stiffness = 600f, dampingRatio = 0.6f) },
+            label = "innerGap"
+        ) { separated -> if (separated) 0.dp else 48.dp }
+
+        Box(
+            modifier = Modifier
+                .padding(horizontal = 12.dp)
+                .fillMaxWidth()
+        ) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .offset(x = plusOffset)
+                    .padding(bottom = 6.dp)
+                    .size(44.dp)
+                    .graphicsLayer {
+                        scaleX = plusScale
+                        scaleY = plusScale
+                    }
+                    .background(Color.White.copy(alpha = plusBgAlpha), CircleShape)
+                    .border(1.dp, plusBorderColor, CircleShape)
+            )
+
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = textFieldPaddingStart.coerceAtLeast(0.dp))
+                    .heightIn(max = 220.dp)
+                    .animateContentSize(),
+                shape = RoundedCornerShape(26.dp),
+                color = Color.White,
+                border = BorderStroke(1.dp, BorderNormal.copy(alpha = 0.5f)),
+                shadowElevation = 0.dp
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = innerGap.coerceAtLeast(0.dp), end = 4.dp, top = 2.dp, bottom = 2.dp),
+                    verticalAlignment = Alignment.Bottom
+                ) {
+                    OutlinedTextField(
+                        value = inputText,
+                        onValueChange = onInputChange,
+                        modifier = Modifier
+                            .weight(1f)
+                            .onFocusChanged { isFocused = it.isFocused }
+                            .testTag(inputTestTag),
+                        placeholder = { Text("Chat with DayZero...", color = TextSecondary) },
+                        enabled = enabled,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            unfocusedBorderColor = Color.Transparent,
+                            focusedBorderColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent,
+                            focusedContainerColor = Color.Transparent,
+                            disabledBorderColor = Color.Transparent,
+                            disabledContainerColor = Color.Transparent
+                        )
+                    )
+
+                    Box(
+                        modifier = Modifier
+                            .padding(end = 2.dp, bottom = 6.dp)
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(if (inputText.isNotBlank() && enabled) BrandGreen else BrandGreen.copy(alpha = 0.3f))
+                            .clickable(enabled = inputText.isNotBlank() && enabled) { onSubmit() }
+                            .testTag(sendTestTag),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (isAnalyzing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                                color = Color.White
+                            )
+                        } else {
+                            Icon(
+                                Icons.AutoMirrored.Filled.Send,
+                                contentDescription = "Send",
+                                tint = Color.White,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .offset(x = plusOffset)
+                    .padding(bottom = 6.dp)
+                    .size(44.dp)
+                    .graphicsLayer {
+                        scaleX = plusScale
+                        scaleY = plusScale
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                IconButton(onClick = {}, enabled = false) {
+                    Icon(Icons.Filled.Add, contentDescription = "More", tint = TextSecondary.copy(alpha = 0.5f))
                 }
             }
         }
@@ -617,237 +766,33 @@ private fun AiMessage(text: String, createdAt: Long) {
     }
 }
 
+private fun Modifier.alignTopBar(): Modifier = this
+
 private fun formatTime(timestamp: Long): String {
     val instant = Instant.ofEpochMilli(timestamp)
     val dateTime = instant.atZone(ZoneId.systemDefault()).toLocalTime()
     return dateTime.format(DateTimeFormatter.ofPattern("h:mm a", Locale.ENGLISH)).lowercase()
 }
 
-@Composable
-fun ChoiceCardMessage(message: AiChatMessage, onOptionSelected: (com.example.domain.model.ai.ChatOption) -> Unit) {
-    val choiceCard = message.choiceCard ?: return
-    
-    Column(
-        modifier = Modifier.fillMaxWidth().padding(end = 48.dp),
-        horizontalAlignment = Alignment.Start
-    ) {
-        AiMessage(message.text, message.createdAt)
-        
-        if (!choiceCard.resolved) {
-            Spacer(modifier = Modifier.height(8.dp))
-            Box(modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
-                Card(
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.White),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, BorderNormal),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(choiceCard.title, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = TextPrimary)
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            choiceCard.options.forEach { option ->
-                                Button(
-                                    onClick = { onOptionSelected(option) },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    shape = RoundedCornerShape(12.dp),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = BrandGreen
-                                    ),
-                                    contentPadding = PaddingValues(vertical = 10.dp)
-                                ) {
-                                    Text(option.label, fontSize = 14.sp, color = Color.White, fontWeight = FontWeight.Medium)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+private fun formatConversationTime(timestamp: Long): String {
+    val zone = ZoneId.systemDefault()
+    val dateTime = Instant.ofEpochMilli(timestamp).atZone(zone)
+    val today = LocalDate.now(zone)
+    val date = dateTime.toLocalDate()
+    return when {
+        date == today -> dateTime.toLocalTime().format(DateTimeFormatter.ofPattern("H:mm"))
+        date == today.minusDays(1) -> "Yesterday"
+        date.year == today.year -> date.format(DateTimeFormatter.ofPattern("MMM d", Locale.ENGLISH))
+        else -> date.format(DateTimeFormatter.ofPattern("yyyy MMM d", Locale.ENGLISH))
     }
 }
 
-@Composable
-fun ConfirmedSummaryCard(record: DailyRecord) {
-    Box(modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(24.dp),
-            colors = CardDefaults.cardColors(containerColor = LightGreen.copy(alpha = 0.7f)),
-            border = androidx.compose.foundation.BorderStroke(1.dp, BrandGreen.copy(alpha = 0.2f))
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Check, contentDescription = null, tint = BrandGreen, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Today summary", fontWeight = FontWeight.Bold, color = BrandGreen, fontSize = 14.sp)
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(record.aiSummary, color = TextPrimary, fontSize = 13.sp, lineHeight = 18.sp)
-            }
-        }
-    }
-}
-
-@Composable
-fun DraftCard(draft: DailyRecord) {
-    var weightInput by remember { mutableStateOf(draft.weightKg?.toString() ?: "") }
-
-    Box(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
-        Card(
-            modifier = Modifier.fillMaxWidth().animateContentSize(
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioLowBouncy,
-                    stiffness = Spring.StiffnessLow
-                )
-            ),
-            shape = RoundedCornerShape(32.dp),
-            colors = CardDefaults.cardColors(containerColor = CardBackground),
-            border = androidx.compose.foundation.BorderStroke(1.dp, BorderNormal),
-            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
-        ) {
-            Column(modifier = Modifier.padding(20.dp).padding(bottom = 12.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column {
-                        Text("Today's draft", color = com.example.ui.theme.TextTertiary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                        Text(
-                            draft.date.format(DateTimeFormatter.ofPattern("yyyy-MM-dd")), 
-                            style = MaterialTheme.typography.titleMedium, 
-                            fontWeight = FontWeight.Bold, 
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Serif,
-                            color = TextPrimary
-                        )
-                    }
-                    Column(horizontalAlignment = Alignment.End) {
-                        Text("Estimated calories", color = com.example.ui.theme.TextTertiary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                        Row(verticalAlignment = Alignment.Bottom) {
-                            Text("${draft.totalCalories}", color = BrandGreen, fontWeight = FontWeight.Bold, fontSize = 24.sp)
-                            Text(" kcal", color = BrandGreen, fontSize = 12.sp, modifier = Modifier.padding(bottom = 4.dp))
-                        }
-                    }
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth().background(com.example.ui.theme.SurfaceSecondary, RoundedCornerShape(12.dp)).padding(12.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("浣撻噸璁板綍 (kg)", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-                    androidx.compose.foundation.text.BasicTextField(
-                        value = weightInput,
-                        onValueChange = { weightInput = it },
-                        textStyle = androidx.compose.ui.text.TextStyle(textAlign = androidx.compose.ui.text.style.TextAlign.End, color = com.example.ui.theme.TextMedium, fontSize = 14.sp, fontWeight = FontWeight.Bold),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.width(60.dp),
-                        decorationBox = { innerTextField ->
-                            if (weightInput.isEmpty()) {
-                                Text("鐐瑰嚮濉啓", color = com.example.ui.theme.TextTertiary, fontSize = 14.sp, textAlign = androidx.compose.ui.text.style.TextAlign.End, modifier = Modifier.fillMaxWidth())
-                            }
-                            innerTextField()
-                        }
-                    )
-                }
-                Spacer(modifier = Modifier.height(16.dp))
-
-                draft.meals.forEach { meal ->
-                    if (meal.foods.isNotEmpty()) {
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 6.dp)
-                                .animateContentSize(),
-                            colors = CardDefaults.cardColors(containerColor = CardBackground),
-                            shape = RoundedCornerShape(16.dp),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, com.example.ui.theme.BorderLight),
-                            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
-                        ) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(meal.mealType.displayName, fontWeight = FontWeight.Bold, color = TextPrimary)
-                                    Text("${meal.mealCalories} kcal", color = BrandGreen, fontWeight = FontWeight.Medium)
-                                }
-                                Spacer(modifier = Modifier.height(8.dp))
-                                
-                                meal.foods.forEach { food ->
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(vertical = 4.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(food.name, color = TextPrimary)
-                                            Text("${food.quantity} 路 ${food.estimatedCalories} kcal", color = TextSecondary, fontSize = 12.sp)
-                                        }
-                                        IconButton(onClick = { /* Demo */ }, modifier = Modifier.size(24.dp)) {
-                                            Icon(Icons.Filled.Edit, contentDescription = "缂栬緫", tint = TextSecondary, modifier = Modifier.size(16.dp))
-                                        }
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        IconButton(onClick = { /* TODO Phase 4B */ }, modifier = Modifier.size(24.dp)) {
-                                            Icon(Icons.Filled.DeleteOutline, contentDescription = "鍒犻櫎", tint = Color.Red.copy(alpha = 0.6f), modifier = Modifier.size(16.dp))
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                if (draft.aiSummary.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "\"${draft.aiSummary}\"",
-                        color = com.example.ui.theme.TextTertiary,
-                        fontSize = 12.sp,
-                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
-                        modifier = Modifier.padding(horizontal = 4.dp)
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(24.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedButton(
-                        onClick = { /* Demo */ },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = BrandGreen)
-                    ) {
-                        Text("娣诲姞")
-                    }
-                    OutlinedButton(
-                        onClick = { /* Demo */ },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = BrandGreen)
-                    ) {
-                        Text("閲嶄及")
-                    }
-                }
-                
-                Spacer(modifier = Modifier.height(8.dp))
-                
-                Button(
-                    onClick = { /* TODO Phase 4B */ },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(50.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = BrandGreen),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Text("纭褰曞叆", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                }
-            }
-        }
+private fun formatConversationDateLabel(date: LocalDate): String {
+    val today = LocalDate.now()
+    return when {
+        date == today -> "Today"
+        date == today.minusDays(1) -> "Yesterday"
+        date.year == today.year -> date.format(DateTimeFormatter.ofPattern("MMM d", Locale.ENGLISH))
+        else -> date.format(DateTimeFormatter.ofPattern("yyyy MMM d", Locale.ENGLISH))
     }
 }

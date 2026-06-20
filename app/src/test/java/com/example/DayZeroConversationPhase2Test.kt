@@ -229,6 +229,22 @@ class DayZeroConversationPhase2Test {
     }
 
     @Test
+    fun existingFirstMessageAssistantStartDoesNotDuplicateUserMessage() = runTest(mainDispatcherRule.testDispatcher) {
+        val aiDraftRepository = FakeAiDraftRepository()
+        val assistantRepository = ImmediateAssistantRepository("first reply")
+        val viewModel = createDayZeroViewModel(aiDraftRepository, assistantRepository)
+        val conversationId = aiDraftRepository.createConversationWithFirstMessage("first message")!!
+
+        viewModel.startAssistantTurnForExistingUserMessage(conversationId, "first message")
+        advanceUntilIdle()
+
+        val messages = aiDraftRepository.getRecentChatMessages(conversationId, 10)
+        assertEquals(1, messages.count { it.role == ChatRole.User && it.text == "first message" })
+        assertEquals(1, messages.count { it.role == ChatRole.Assistant && it.text == "first reply" })
+        assertTrue(assistantRepository.lastRequest?.recentMessages?.all { it.conversationId == conversationId } == true)
+    }
+
+    @Test
     fun featureViewModelObservesSelectedConversationAndEmitsCreateEventOnce() = runTest(mainDispatcherRule.testDispatcher) {
         val conversationRepository = InMemoryConversationRepository()
         val aiDraftRepository = FakeAiDraftRepository()
@@ -260,6 +276,7 @@ class DayZeroConversationPhase2Test {
         advanceUntilIdle()
         val event = eventDeferred.await()
         assertTrue(event is AiRecordConversationEvent.ConversationCreated)
+        assertEquals("new", (event as AiRecordConversationEvent.ConversationCreated).firstMessageText)
     }
 
     private fun createDayZeroViewModel(

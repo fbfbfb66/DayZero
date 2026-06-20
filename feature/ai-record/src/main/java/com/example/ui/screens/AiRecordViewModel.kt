@@ -30,6 +30,7 @@ data class AiConversationHistoryState(
     val conversations: List<Conversation> = emptyList(),
     val isLoading: Boolean = true,
     val isCreating: Boolean = false,
+    val homeInputText: String = "",
     val lastCreatedConversationId: String? = null,
     val errorMessage: String? = null
 )
@@ -48,7 +49,10 @@ data class AiRecordConversationUiState(
 )
 
 sealed interface AiRecordConversationEvent {
-    data class ConversationCreated(val conversationId: String) : AiRecordConversationEvent
+    data class ConversationCreated(
+        val conversationId: String,
+        val firstMessageText: String
+    ) : AiRecordConversationEvent
 }
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -71,6 +75,7 @@ class AiRecordViewModel @Inject constructor(
     ) { history: AiConversationHistoryState, overlay: HistoryTransientState ->
         history.copy(
             isCreating = overlay.isCreating,
+            homeInputText = overlay.homeInputText,
             lastCreatedConversationId = overlay.lastCreatedConversationId,
             errorMessage = overlay.errorMessage ?: history.errorMessage
         )
@@ -104,7 +109,18 @@ class AiRecordViewModel @Inject constructor(
         detailTransient.value = DetailTransientState()
     }
 
+    fun updateHomeInput(text: String) {
+        historyTransient.update { it.copy(homeInputText = text, errorMessage = null) }
+    }
+
+    fun submitHomeInput() {
+        createConversationWithFirstMessage(historyTransient.value.homeInputText)
+    }
+
     fun createConversationWithFirstMessage(text: String) {
+        if (historyTransient.value.isCreating) return
+        historyTransient.update { it.copy(isCreating = true, errorMessage = null) }
+
         viewModelScope.launch {
             val trimmed = text.trim()
             if (trimmed.isBlank()) {
@@ -112,7 +128,6 @@ class AiRecordViewModel @Inject constructor(
                 return@launch
             }
 
-            historyTransient.update { it.copy(isCreating = true, errorMessage = null) }
             runCatching { createConversationWithFirstMessageUseCase(trimmed) }
                 .onSuccess { conversationId ->
                     if (conversationId == null) {
@@ -122,9 +137,15 @@ class AiRecordViewModel @Inject constructor(
                         selectedConversationId.value = conversationId
                         historyTransient.value = HistoryTransientState(
                             isCreating = false,
+                            homeInputText = "",
                             lastCreatedConversationId = conversationId
                         )
-                        _events.tryEmit(AiRecordConversationEvent.ConversationCreated(conversationId))
+                        _events.tryEmit(
+                            AiRecordConversationEvent.ConversationCreated(
+                                conversationId = conversationId,
+                                firstMessageText = trimmed
+                            )
+                        )
                     }
                 }
                 .onFailure { error ->
@@ -185,6 +206,7 @@ class AiRecordViewModel @Inject constructor(
 
     private data class HistoryTransientState(
         val isCreating: Boolean = false,
+        val homeInputText: String = "",
         val lastCreatedConversationId: String? = null,
         val errorMessage: String? = null
     )

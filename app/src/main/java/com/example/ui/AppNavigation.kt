@@ -1,11 +1,9 @@
 package com.example.ui
 
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.ime
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoGraph
 import androidx.compose.material.icons.filled.CalendarToday
@@ -28,21 +26,25 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalDensity
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
 import com.example.DayZeroViewModel
 import com.example.UiEvent
 import com.example.domain.model.ai.AiChatMessage
 import com.example.domain.model.ai.assistant.PayloadSummary
 import com.example.ui.components.feedback.SuccessConfirmOverlay
+import com.example.ui.screens.AiConversationScreen
 import com.example.ui.screens.AiRecordActionHandler
-import com.example.ui.screens.AiRecordScreen
+import com.example.ui.screens.AiRecordConversationEvent
+import com.example.ui.screens.AiRecordHomeScreen
+import com.example.ui.screens.AiRecordViewModel
 import com.example.ui.screens.CalendarScreen
 import com.example.ui.screens.TrendsScreen
 import com.example.ui.theme.BrandGreen
@@ -51,10 +53,15 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 
 sealed class Screen(val route: String, val title: String, val icon: ImageVector) {
-    data object Calendar : Screen("calendar", "日历", Icons.Filled.CalendarToday)
-    data object AiRecord : Screen("ai_record", "AI记录", Icons.Filled.ChatBubbleOutline)
-    data object Trends : Screen("trends", "趋势", Icons.Filled.AutoGraph)
+    data object Calendar : Screen("calendar", "Calendar", Icons.Filled.CalendarToday)
+    data object AiRecord : Screen("ai_record", "AI", Icons.Filled.ChatBubbleOutline)
+    data object Trends : Screen("trends", "Trends", Icons.Filled.AutoGraph)
 }
+
+private const val AI_CONVERSATION_ARG = "conversationId"
+private const val AI_CONVERSATION_ROUTE = "ai_conversation/{$AI_CONVERSATION_ARG}"
+
+private fun aiConversationRoute(conversationId: String): String = "ai_conversation/$conversationId"
 
 val items = listOf(
     Screen.Calendar,
@@ -66,12 +73,26 @@ val items = listOf(
 fun MainApp() {
     val navController = rememberNavController()
     val viewModel: DayZeroViewModel = viewModel()
+    val aiRecordViewModel: AiRecordViewModel = viewModel()
     val uiState by viewModel.uiState.collectAsState()
+    val aiRecordUiState by aiRecordViewModel.uiState.collectAsState()
     val syncStatusUiState by viewModel.syncStatusUiState.collectAsState()
     val aiRecordActionHandler = remember(viewModel) {
         object : AiRecordActionHandler {
             override fun sendAiMessage(text: String) {
                 viewModel.sendAiMessage(text)
+            }
+
+            override fun sendAiMessage(conversationId: String, text: String) {
+                viewModel.sendAiMessage(conversationId, text)
+            }
+
+            override fun startAssistantTurnForExistingUserMessage(conversationId: String, text: String) {
+                viewModel.startAssistantTurnForExistingUserMessage(conversationId, text)
+            }
+
+            override fun setActiveConversationId(conversationId: String?) {
+                viewModel.setActiveConversationId(conversationId)
             }
 
             override fun sendInteractionResult(
@@ -117,15 +138,14 @@ fun MainApp() {
             }
         }
     }
-    
+
     var showSuccessOverlay by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
-    val isAiRecordSelected = currentDestination?.hierarchy?.any { it.route == Screen.AiRecord.route } == true
-    val density = LocalDensity.current
-    val isKeyboardVisible = WindowInsets.ime.getBottom(density) > 0
-    val showBottomBar = !(isAiRecordSelected && isKeyboardVisible)
+    val currentRoute = currentDestination?.route
+    val isAiConversationRoute = currentRoute == AI_CONVERSATION_ROUTE
+    val showBottomBar = !isAiConversationRoute
 
     LaunchedEffect(Unit) {
         viewModel.uiEvents.collectLatest { event ->
@@ -135,8 +155,25 @@ fun MainApp() {
                     delay(1400)
                     showSuccessOverlay = false
                 }
+
                 is UiEvent.Error -> {
                     snackbarHostState.showSnackbar(event.message)
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        aiRecordViewModel.events.collectLatest { event ->
+            when (event) {
+                is AiRecordConversationEvent.ConversationCreated -> {
+                    navController.navigate(aiConversationRoute(event.conversationId)) {
+                        launchSingleTop = true
+                    }
+                    viewModel.startAssistantTurnForExistingUserMessage(
+                        conversationId = event.conversationId,
+                        text = event.firstMessageText
+                    )
                 }
             }
         }
@@ -147,11 +184,12 @@ fun MainApp() {
             snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
             bottomBar = {
                 if (showBottomBar) {
-                    NavigationBar(
-                        containerColor = WarmBackground
-                    ) {
+                    NavigationBar(containerColor = WarmBackground) {
                         items.forEach { screen ->
-                            val selected = currentDestination?.hierarchy?.any { it.route == screen.route } == true
+                            val selected = when (screen) {
+                                Screen.AiRecord -> currentRoute == Screen.AiRecord.route || isAiConversationRoute
+                                else -> currentDestination?.hierarchy?.any { it.route == screen.route } == true
+                            }
                             NavigationBarItem(
                                 icon = { Icon(screen.icon, contentDescription = screen.title) },
                                 label = { Text(screen.title) },
@@ -184,25 +222,70 @@ fun MainApp() {
                 modifier = Modifier
                     .padding(innerPadding)
                     .consumeWindowInsets(innerPadding),
-                enterTransition = { androidx.compose.animation.fadeIn(animationSpec = androidx.compose.animation.core.tween(300)) + androidx.compose.animation.slideInVertically(initialOffsetY = { 50 }, animationSpec = androidx.compose.animation.core.tween(300)) },
-                exitTransition = { androidx.compose.animation.fadeOut(animationSpec = androidx.compose.animation.core.tween(300)) },
-                popEnterTransition = { androidx.compose.animation.fadeIn(animationSpec = androidx.compose.animation.core.tween(300)) },
-                popExitTransition = { androidx.compose.animation.fadeOut(animationSpec = androidx.compose.animation.core.tween(300)) + androidx.compose.animation.slideOutVertically(targetOffsetY = { 50 }, animationSpec = androidx.compose.animation.core.tween(300)) }
+                enterTransition = {
+                    androidx.compose.animation.fadeIn(animationSpec = androidx.compose.animation.core.tween(220)) +
+                        androidx.compose.animation.slideInVertically(
+                            initialOffsetY = { 36 },
+                            animationSpec = androidx.compose.animation.core.tween(220)
+                        )
+                },
+                exitTransition = { androidx.compose.animation.fadeOut(animationSpec = androidx.compose.animation.core.tween(180)) },
+                popEnterTransition = { androidx.compose.animation.fadeIn(animationSpec = androidx.compose.animation.core.tween(180)) },
+                popExitTransition = {
+                    androidx.compose.animation.fadeOut(animationSpec = androidx.compose.animation.core.tween(180)) +
+                        androidx.compose.animation.slideOutVertically(
+                            targetOffsetY = { 36 },
+                            animationSpec = androidx.compose.animation.core.tween(180)
+                        )
+                }
             ) {
                 composable(Screen.Calendar.route) {
-                    CalendarScreen(uiState = uiState, onNavigateToAi = {
-                        navController.navigate(Screen.AiRecord.route) {
-                            popUpTo(navController.graph.findStartDestination().id) { saveState = true }
-                            launchSingleTop = true
-                            restoreState = true
+                    CalendarScreen(
+                        uiState = uiState,
+                        onNavigateToAi = {
+                            navController.navigate(Screen.AiRecord.route) {
+                                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
                         }
-                    })
+                    )
                 }
                 composable(Screen.AiRecord.route) {
-                    AiRecordScreen(
-                        uiState = uiState,
-                        syncStatusUiState = syncStatusUiState,
-                        actionHandler = aiRecordActionHandler
+                    AiRecordHomeScreen(
+                        state = aiRecordUiState.history,
+                        isAnalyzing = uiState.isAnalyzing,
+                        onInputChange = aiRecordViewModel::updateHomeInput,
+                        onSubmit = aiRecordViewModel::submitHomeInput,
+                        onOpenConversation = { conversationId ->
+                            aiRecordViewModel.openConversation(conversationId)
+                            navController.navigate(aiConversationRoute(conversationId)) {
+                                launchSingleTop = true
+                            }
+                        }
+                    )
+                }
+                composable(
+                    route = AI_CONVERSATION_ROUTE,
+                    arguments = listOf(navArgument(AI_CONVERSATION_ARG) { type = NavType.StringType })
+                ) { entry ->
+                    val conversationId = entry.arguments?.getString(AI_CONVERSATION_ARG).orEmpty()
+                    LaunchedEffect(conversationId) {
+                        if (conversationId.isNotBlank()) {
+                            aiRecordViewModel.openConversation(conversationId)
+                        }
+                    }
+                    AiConversationScreen(
+                        conversationId = conversationId,
+                        detailState = aiRecordUiState.detail,
+                        appState = uiState,
+                        actionHandler = aiRecordActionHandler,
+                        onBack = {
+                            navController.navigate(Screen.AiRecord.route) {
+                                popUpTo(Screen.AiRecord.route) { inclusive = false }
+                                launchSingleTop = true
+                            }
+                        }
                     )
                 }
                 composable(Screen.Trends.route) {

@@ -15,7 +15,7 @@
   - `:core:ui` owns shared Compose theme, AI card components, feedback overlay, and sync UI.
   - `:feature:*` modules own screen-level Compose UI for AI Record, Calendar, and Trends.
 - **ViewModel Scope Reduced**. `DayZeroViewModel` remains the shared app state holder for now, but dependencies are injected and clear/confirm flows have started moving into domain use cases. `ClearLocalDataUseCase` handles local cleanup policy and `ConfirmFoodRecordUseCase` handles `show_confirm_card(food_record)` persistence.
-- **AI Record UI Decoupled**. `AiRecordScreen` no longer receives `DayZeroViewModel` directly. It receives `AppState`, `SyncStatusUiState`, and an `AiRecordActionHandler`. AI business card dispatch has been moved into `AssistantCardRenderer`, so new card types should be added there instead of expanding the main screen body.
+- **AI Record UI Decoupled**. AI Record screens no longer receive `DayZeroViewModel` directly. They use `AiRecordViewModel` for conversation history/detail state and an `AiRecordActionHandler` bridge for existing send/card/confirm actions. AI business card dispatch stays in `AssistantCardRenderer`, so new card types should be added there instead of expanding the main screen body.
 - **Build Verification After Refactor**: `./gradlew :app:assembleDebug :app:testDebugUnitTest` and `./gradlew test` pass after the module split and Hilt migration.
 - **Local-First Sync Architecture (Phase 5) implemented**. Established local-first sync foundation for daily records, meals, food entries, and weight records using Room as the local source of truth.
 - **Identity Layer & Anonymous Auth**: Added `CurrentIdentityProvider` and `CompositeIdentityProvider`. Implemented `SupabaseAnonymousIdentityProvider` which logs in anonymously and holds a `SupabaseAuthSession` so data can be synced to Supabase without requiring user manual login.
@@ -36,17 +36,20 @@
 - `assistant-turn-v2-stream` (Version 11) is the current primary AI runtime entrypoint. `assistant-turn-v2` (Version 18) remains as a compatibility fallback.
 - Room chat persistence is fully enabled. User messages, AI replies, and cards are fully persistent. 
 - **AI history conversation data foundation (Phase 1) complete**. Local Room now has a `conversations` table and every `ai_chat_messages` row belongs to a non-null `conversationId`. The database migration from version 9 to 10 safely groups the old single chat stream by device-local natural day, creates one legacy conversation per day with a stable UUID, and copies existing messages without changing message text, card payload JSON, card state, or ordering.
-- **AI history UI is not implemented yet**. There is no history list screen, chat-detail navigation, conversation-switching ViewModel, or date prompt card in this phase.
+- **AI history UI (Phase 3) is implemented locally**. The AI tab now opens an AI home screen with a large first-message input and a Room-backed history list. Conversation detail is a second-level route that renders only the selected `conversationId` messages and hides the app bottom navigation bar.
 - **Chat cloud sync is not implemented yet**. No Supabase table, Edge Function, Push/Pull/Backfill path, or sync queue behavior was added for conversations or chat messages.
 - `show_confirm_card`, its prompt/action/payload contract, action normalization/parsing, multi-meal record writes, optional weight writes, Draft Card edit/confirm/cancel flow, `assistant-turn-v2-stream`, and `assistant-turn-v2` fallback remain unchanged by the conversation data foundation.
-- Next AI history phase: build conversation Repository/ViewModel/page state logic on top of the local Conversation data, then add UI while preserving the existing DayZero visual language.
+- Next AI history phase: add date mismatch guard/prompt behavior and any remaining conversation polish while preserving the existing DayZero visual language.
 - **AI history conversation domain logic (Phase 2) complete**. New conversations and first user messages are created atomically through `CreateConversationWithFirstMessageUseCase` and the local chat repository. User messages, stream placeholders, final AI replies, fallback replies, card messages, card state updates, and local confirm/cancel feedback now carry an explicit `conversationId`.
 - **AI context is conversation-scoped**. Client requests still keep the existing recent-message clipping size of 10, but now read those messages from the target `conversationId` instead of the compatibility all-message stream. No server prompt or API protocol was changed.
 - **Async replies are pinned to the send-time conversation**. Each send/interaction captures an immutable target conversation id before network work starts, so stream completion and fallback update the original placeholder in that conversation even if later state points elsewhere.
 - **Interaction results resolve their original conversation from persisted card messages**. The ViewModel looks up the message containing the clicked card id, then builds context and writes replies using that message's `conversationId`; it does not rely only on the current active conversation.
-- **Feature-level AI conversation state added**. `AiRecordViewModel` in `:feature:ai-record` exposes history state, selected conversation detail state, create-first-message state, `SavedStateHandle` conversation restoration, and one-shot creation events for the next UI phase. It is not wired into visible UI yet.
-- **Current concurrency policy**: the existing visible AI page remains a single global generation surface and still disables sending while `isAnalyzing` is true. The data path is conversation-safe for overlapping requests, but multi-conversation simultaneous generation UI is not introduced in this phase.
-- Still not implemented: historical AI home UI, chat detail navigation, bottom-bar changes, date mismatch prompt card, and chat/conversation cloud sync.
+- **Feature-level AI conversation state is wired into visible UI**. `AiRecordViewModel` in `:feature:ai-record` exposes history state, selected conversation detail state, create-first-message state, `SavedStateHandle` conversation restoration, home input draft state, and one-shot creation events consumed by app navigation.
+- **AI history visible UI (Phase 3) complete**. `AI_HOME` (`ai_record`) shows the large first-message input, empty/history states, and active conversations sorted by repository order. `AI_CONVERSATION/{conversationId}` shows the existing chat bubbles, streaming placeholder, existing input animation, and existing `AssistantCardRenderer` card UI for that conversation only.
+- **Bottom navigation behavior**: AI home, Calendar, and Trends remain top-level pages with the app bottom navigation bar. Conversation detail is a second-level route and does not compose the bottom navigation bar, freeing the bottom space for the chat input. The detail input owns `imePadding()` plus `navigationBarsPadding()` so it follows the keyboard and system gesture area.
+- **First-message flow**: home submit calls `CreateConversationWithFirstMessageUseCase` through `AiRecordViewModel`, navigates to detail on the one-shot creation event, then starts the existing assistant turn for the already-persisted first user message. This prevents duplicate first-message persistence.
+- **Current concurrency policy**: the visible UI remains a single global generation surface. While `isAnalyzing` is true, the home input and detail input are disabled. Users may return to AI home while generation continues; replies are still persisted to the send-time conversation and are visible when reopening it. Multi-conversation simultaneous generation UI is not introduced.
+- Still not implemented: date mismatch prompt card, chat/conversation cloud sync, history search, delete, rename, pinning, and AI-generated titles.
 
 ## Current Phase Features (Phase 4D-1 Complete)
 
@@ -97,10 +100,10 @@ Note: Several legacy interfaces/classes still exist in migrated modules for comp
 - AI architecture reference is `docs/AI_ASSISTANT_TURN_V2_ARCHITECTURE.md`.
 - Data sync architecture reference is `docs/DATA_SYNC_ARCHITECTURE.md`.
 - Current code architecture is now multi-module and Hilt-based. Future changes should respect module boundaries: UI/feature modules must not depend directly on Room DAO, Retrofit services, Supabase gateways, or sync coordinators; domain/use cases must not depend on Compose, Android UI, Room entities, or remote DTOs.
-- Future AI home, history list, and chat detail UI must keep DayZero's current visual language, rounded corners, spacing, typography, motion, and fresh style. Reuse existing components and theme; do not drop in generic Material sample pages or introduce a mismatched design system.
+- Future AI history refinements must keep DayZero's current visual language, rounded corners, spacing, typography, motion, and fresh style. Reuse existing components and theme; do not drop in generic Material sample pages or introduce a mismatched design system.
 - Next step is to continue narrowing `DayZeroViewModel` into feature-specific state holders (`AiRecordViewModel`, Calendar/Trends state holders) and to add focused unit/UI tests around the extracted use cases and card renderer.
 
-### AI History & Conversation Foundation (Phase 1 & Phase 2 Technical Details)
+### AI History & Conversation Foundation (Phases 1, 2 & 3 Technical Details)
 
 To support multiple chat histories, the database schema, domain layer, and view models have been updated to isolate chat sessions.
 
@@ -174,3 +177,23 @@ Implemented in **[DayZeroDatabase](file:///D:/Goings/APPProjects/DayZero/core/da
   - Continuation updates to conversation previews and last activity timestamps.
   - Asynchronous reply flows and card interaction events pinning back to their original conversations.
   - Feature-level `AiRecordViewModel` state emission, observation, and saved state restoration.
+  - Phase 3 regression: starting the assistant for an already-created first user message does not duplicate that user message.
+
+### 6. AI History UI Integration (Phase 3)
+- **Navigation**:
+  - `Screen.AiRecord.route` (`ai_record`) is the AI home top-level tab.
+  - `ai_conversation/{conversationId}` is the second-level conversation detail route.
+  - Calendar and Trends routes are unchanged.
+- **Home UI**:
+  - `AiRecordHomeScreen` renders the large first-message input, history title, empty state, and conversation rows.
+  - Sending from home updates `AiRecordViewModel` home draft state and calls `submitHomeInput()`. Blank text is rejected and repeated clicks while `isCreating` is true are ignored.
+  - On `ConversationCreated(conversationId, firstMessageText)`, app navigation opens detail and calls `DayZeroViewModel.startAssistantTurnForExistingUserMessage(...)`, so the first user message is not inserted twice.
+- **Detail UI**:
+  - `AiConversationScreen` receives the route `conversationId`, calls `AiRecordViewModel.openConversation(conversationId)`, and renders `AiConversationDetailState.messages`.
+  - It does not use the compatibility all-message stream for visible chat content.
+  - Existing chat bubbles, stream placeholder behavior, `AssistantCardRenderer`, card clicks, confirm/cancel, and `FoodDraftConfirmCard` remain reused.
+- **Insets and bottom bar**:
+  - App bottom navigation is only composed for top-level routes. It is not composed for `ai_conversation/{conversationId}`.
+  - The detail input keeps the existing plus/input fusion animation and uses `imePadding()` and `navigationBarsPadding()` so the input tracks the keyboard and system gesture area.
+- **Tests**:
+  - `AiRecordPhase3Test` in `:feature:ai-record` covers history observation, blank rejection, duplicate create prevention, one-shot creation event, home input clearing, detail conversation isolation/restoration, home/detail Compose rendering, card rendering through the existing renderer, and disabled send state during generation.

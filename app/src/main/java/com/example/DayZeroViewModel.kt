@@ -145,6 +145,68 @@ class DayZeroViewModel @Inject constructor(
         }
     }
 
+    fun sendAiMessage(conversationId: String, text: String) {
+        val trimmed = text.trim()
+        if (conversationId.isBlank() || trimmed.isBlank()) return
+
+        val traceId = latencyLogger.start(turnType = "user_message", userText = trimmed)
+        Log.d("DayZeroAiV2", "send message to conversation=$conversationId: '$trimmed'")
+
+        _uiState.update {
+            it.copy(
+                activeConversationId = conversationId,
+                isAnalyzing = true,
+                conversationState = AiRecordConversationState.Idle
+            )
+        }
+        latencyLogger.mark(traceId, "ui_optimistic_state_updated")
+
+        viewModelScope.launch {
+            try {
+                latencyLogger.mark(traceId, "room_user_message_insert_start")
+                aiDraftRepository.insertChatMessage(
+                    conversationId,
+                    AiChatMessage(
+                        conversationId = conversationId,
+                        role = ChatRole.User,
+                        text = trimmed
+                    )
+                )
+                latencyLogger.mark(traceId, "room_user_message_insert_complete")
+                requestAssistantTurnV2(trimmed, traceId, conversationId)
+            } catch (e: Exception) {
+                handleAssistantTurnV2Error(e, traceId)
+            }
+        }
+    }
+
+    fun startAssistantTurnForExistingUserMessage(conversationId: String, text: String) {
+        val trimmed = text.trim()
+        if (conversationId.isBlank() || trimmed.isBlank()) return
+
+        val traceId = latencyLogger.start(turnType = "user_message", userText = trimmed)
+        Log.d("DayZeroAiV2", "start assistant for existing first message conversation=$conversationId")
+        _uiState.update {
+            it.copy(
+                activeConversationId = conversationId,
+                isAnalyzing = true,
+                conversationState = AiRecordConversationState.Idle
+            )
+        }
+
+        viewModelScope.launch {
+            try {
+                requestAssistantTurnV2(trimmed, traceId, conversationId)
+            } catch (e: Exception) {
+                handleAssistantTurnV2Error(e, traceId)
+            }
+        }
+    }
+
+    fun setActiveConversationId(conversationId: String?) {
+        _uiState.update { it.copy(activeConversationId = conversationId) }
+    }
+
     private suspend fun requestAssistantTurnV2(text: String, traceId: String, targetConversationId: String) {
         Log.d("DayZeroAiV2", "assistant-turn-v2 start")
 
