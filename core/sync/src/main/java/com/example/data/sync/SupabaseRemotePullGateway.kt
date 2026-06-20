@@ -1,6 +1,7 @@
 package com.example.data.sync
 
 import android.util.Log
+import com.example.data.identity.SupabaseAuthSessionStatus
 import com.example.data.identity.SupabaseAuthSessionProvider
 import com.example.data.remote.SupabaseConfig
 import com.example.data.sync.remote.DailyRecordRemoteDto
@@ -84,7 +85,7 @@ class SupabaseRemotePullGateway(
     ): RemotePullResult<T> {
         if (!isConfigured) return RemotePullResult.Skipped("remote_disabled")
         val session = sessionProvider.currentSessionOrNull()
-            ?: return RemotePullResult.Skipped("waiting_for_auth")
+            ?: return sessionUnavailablePullResult()
 
         val urlBuilder = "${restUrl()}$tableName".toHttpUrl().newBuilder()
             .addQueryParameter("select", "*")
@@ -246,6 +247,18 @@ class SupabaseRemotePullGateway(
     }
 
     private fun restUrl(): String = "${normalizedUrl()}rest/v1/"
+
+    private fun <T> sessionUnavailablePullResult(): RemotePullResult<T> {
+        return when (val status = sessionProvider.currentSessionStatus()) {
+            is SupabaseAuthSessionStatus.RefreshTemporaryFailure -> {
+                RemotePullResult.RetryableFailure("identity_temporarily_unavailable:${status.reason}")
+            }
+            is SupabaseAuthSessionStatus.RefreshPermanentlyRejected -> {
+                RemotePullResult.FatalFailure("identity_permanently_unavailable:${status.reason}")
+            }
+            else -> RemotePullResult.Skipped("waiting_for_auth")
+        }
+    }
 
     private fun normalizedUrl(): String {
         return if (supabaseUrl.endsWith("/")) supabaseUrl else "$supabaseUrl/"

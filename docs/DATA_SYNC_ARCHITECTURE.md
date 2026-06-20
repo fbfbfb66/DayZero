@@ -6,6 +6,12 @@ Supabase is the remote sync source. It is used for background synchronization of
 
 ## Current Stage
 
+Supabase anonymous Auth session handling is now refresh-first. If a saved anonymous session's access token is expired or within the proactive refresh window, the app exchanges the saved refresh token through `/auth/v1/token?grant_type=refresh_token` and atomically persists the returned access token, refresh token, user id, and expiry. Because Supabase refresh tokens rotate, the old refresh token is never kept after a successful refresh.
+
+The app only calls anonymous signup when there is no saved session, no refresh token, and no local blocked identity marker. Temporary refresh failures such as network errors, timeouts, rate limits, and HTTP 5xx pause Push/Pull and leave the old session untouched for retry. Permanent refresh rejection, such as an invalid or revoked refresh token, marks the cloud identity as unavailable and stops automatic Push/Pull rather than creating a new anonymous `user_id`.
+
+This does not solve uninstall / clear-app-data recovery for anonymous users. If Room, local owner id, and the saved Supabase session are all deleted, the app cannot prove ownership of the old anonymous `user_id`; a formal login or recovery mechanism remains future work.
+
 This stage establishes the local-first sync foundation for:
 
 - Daily records

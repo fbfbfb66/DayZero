@@ -1,6 +1,7 @@
 package com.example.data.sync
 
 import android.util.Log
+import com.example.data.identity.SupabaseAuthSessionStatus
 import com.example.data.identity.SupabaseAuthSessionProvider
 import com.example.data.remote.SupabaseConfig
 import com.example.domain.identity.AppIdentity
@@ -68,7 +69,7 @@ class SupabaseRemoteSyncGateway(
             ?: return RemoteSyncResult.FatalFailure("unsupported_soft_delete_entity:${payload.entityType}")
         val clientId = payload.clientId()
         val session = sessionProvider.currentSessionOrNull()
-            ?: return RemoteSyncResult.Skipped("waiting_for_auth")
+            ?: return sessionUnavailableSyncResult()
         val deletedAt = deletedAtIso(payload)
         val body = JSONObject()
             .put("deleted_at", deletedAt)
@@ -100,7 +101,7 @@ class SupabaseRemoteSyncGateway(
     ): RemoteSyncResult {
         if (!isConfigured) return RemoteSyncResult.Skipped("supabase_not_configured")
         val session = sessionProvider.currentSessionOrNull()
-            ?: return RemoteSyncResult.Skipped("waiting_for_auth")
+            ?: return sessionUnavailableSyncResult()
         val requestBody = body
             .put("user_id", session.userId)
             .put("updated_at", isoNow())
@@ -164,6 +165,18 @@ class SupabaseRemoteSyncGateway(
         } catch (e: Exception) {
             Log.e("DayZeroRemote", "upsert retryable failure entityType=$entityType reason=${e::class.java.simpleName}")
             RemoteSyncResult.RetryableFailure(e.message ?: e::class.java.simpleName)
+        }
+    }
+
+    private fun sessionUnavailableSyncResult(): RemoteSyncResult {
+        return when (val status = sessionProvider.currentSessionStatus()) {
+            is SupabaseAuthSessionStatus.RefreshTemporaryFailure -> {
+                RemoteSyncResult.RetryableFailure("identity_temporarily_unavailable:${status.reason}")
+            }
+            is SupabaseAuthSessionStatus.RefreshPermanentlyRejected -> {
+                RemoteSyncResult.FatalFailure("identity_permanently_unavailable:${status.reason}")
+            }
+            else -> RemoteSyncResult.Skipped("waiting_for_auth")
         }
     }
 

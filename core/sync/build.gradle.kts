@@ -29,4 +29,8 @@ dependencies {
   implementation(libs.kotlinx.coroutines.core)
   implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
+  testImplementation(libs.androidx.core)
+  testImplementation(libs.junit)
+  testImplementation(libs.kotlinx.coroutines.test)
+  testImplementation(libs.robolectric)
 }
