@@ -348,12 +348,49 @@ private class InMemoryAiDraftRepository(
     var createCount = 0
         private set
 
+    private val streamingStates = MutableStateFlow<Map<String, StreamingState>>(emptyMap())
+
+    data class StreamingState(
+        val conversationId: String,
+        val messageId: String,
+        val text: String,
+        val isStreaming: Boolean
+    )
+
+    override fun updateStreamingState(conversationId: String, messageId: String, text: String, isStreaming: Boolean) {
+        streamingStates.value = streamingStates.value + (conversationId to StreamingState(conversationId, messageId, text, isStreaming))
+    }
+
+    override fun clearStreamingState(conversationId: String) {
+        streamingStates.value = streamingStates.value - conversationId
+    }
+
     override suspend fun generateDraft(request: AiDraftRequest): CheckinDraft = error("unused")
 
-    override fun observeChatMessages(): Flow<List<AiChatMessage>> = messages.asStateFlow()
+    override fun observeChatMessages(): Flow<List<AiChatMessage>> {
+        return kotlinx.coroutines.flow.combine(messages, streamingStates) { msgs, states ->
+            msgs.map { msg ->
+                val state = states[msg.conversationId]
+                if (state != null && msg.id == state.messageId) {
+                    msg.copy(text = state.text)
+                } else {
+                    msg
+                }
+            }
+        }
+    }
 
     override fun observeChatMessages(conversationId: String): Flow<List<AiChatMessage>> {
-        return messages.map { current -> current.filter { it.conversationId == conversationId } }
+        return kotlinx.coroutines.flow.combine(messages, streamingStates) { msgs, states ->
+            val state = states[conversationId]
+            msgs.filter { it.conversationId == conversationId }.map { msg ->
+                if (state != null && msg.id == state.messageId) {
+                    msg.copy(text = state.text)
+                } else {
+                    msg
+                }
+            }
+        }
     }
 
     override suspend fun createConversationWithFirstMessage(text: String, now: Long): String? {

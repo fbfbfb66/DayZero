@@ -26,4 +26,8 @@ interface AiDraftRepository {
     suspend fun updateChatMessage(message: AiChatMessage)
     
     suspend fun clearChatMessages()
+
+    fun updateStreamingState(conversationId: String, messageId: String, text: String, isStreaming: Boolean)
+    
+    fun clearStreamingState(conversationId: String)
 }

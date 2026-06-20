@@ -35,15 +35,46 @@ class RemoteAiDraftRepository(
         return mapper.toDomain(responseDto)
     }
 
+    private val streamingStates = kotlinx.coroutines.flow.MutableStateFlow<Map<String, StreamingState>>(emptyMap())
+
+    data class StreamingState(
+        val conversationId: String,
+        val messageId: String,
+        val text: String,
+        val isStreaming: Boolean
+    )
+
+    override fun updateStreamingState(conversationId: String, messageId: String, text: String, isStreaming: Boolean) {
+        streamingStates.value = streamingStates.value + (conversationId to StreamingState(conversationId, messageId, text, isStreaming))
+    }
+
+    override fun clearStreamingState(conversationId: String) {
+        streamingStates.value = streamingStates.value - conversationId
+    }
+
     override fun observeChatMessages(): Flow<List<AiChatMessage>> {
-        return chatDao.observeAllMessages().map { entities ->
-            entities.map { chatMapper.toDomain(it) }
+        return kotlinx.coroutines.flow.combine(chatDao.observeAllMessages(), streamingStates) { entities, states ->
+            entities.map { chatMapper.toDomain(it) }.map { msg ->
+                val state = states[msg.conversationId]
+                if (state != null && msg.id == state.messageId) {
+                    msg.copy(text = state.text)
+                } else {
+                    msg
+                }
+            }
         }
     }
 
     override fun observeChatMessages(conversationId: String): Flow<List<AiChatMessage>> {
-        return chatDao.observeMessagesByConversationId(conversationId).map { entities ->
-            entities.map { chatMapper.toDomain(it) }
+        return kotlinx.coroutines.flow.combine(chatDao.observeMessagesByConversationId(conversationId), streamingStates) { entities, states ->
+            val state = states[conversationId]
+            entities.map { chatMapper.toDomain(it) }.map { msg ->
+                if (state != null && msg.id == state.messageId) {
+                    msg.copy(text = state.text)
+                } else {
+                    msg
+                }
+            }
         }
     }
 

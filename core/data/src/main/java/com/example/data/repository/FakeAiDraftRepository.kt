@@ -86,10 +86,47 @@ class FakeAiDraftRepository : AiDraftRepository {
         )
     }
 
-    override fun observeChatMessages(): Flow<List<AiChatMessage>> = _messages.asStateFlow()
+    private val streamingStates = MutableStateFlow<Map<String, StreamingState>>(emptyMap())
+
+    data class StreamingState(
+        val conversationId: String,
+        val messageId: String,
+        val text: String,
+        val isStreaming: Boolean
+    )
+
+    override fun updateStreamingState(conversationId: String, messageId: String, text: String, isStreaming: Boolean) {
+        streamingStates.value = streamingStates.value + (conversationId to StreamingState(conversationId, messageId, text, isStreaming))
+    }
+
+    override fun clearStreamingState(conversationId: String) {
+        streamingStates.value = streamingStates.value - conversationId
+    }
+
+    override fun observeChatMessages(): Flow<List<AiChatMessage>> {
+        return kotlinx.coroutines.flow.combine(_messages, streamingStates) { msgs, states ->
+            msgs.map { msg ->
+                val state = states[msg.conversationId]
+                if (state != null && msg.id == state.messageId) {
+                    msg.copy(text = state.text)
+                } else {
+                    msg
+                }
+            }
+        }
+    }
 
     override fun observeChatMessages(conversationId: String): Flow<List<AiChatMessage>> {
-        return _messages.map { messages -> messages.filter { it.conversationId == conversationId } }
+        return kotlinx.coroutines.flow.combine(_messages, streamingStates) { msgs, states ->
+            val state = states[conversationId]
+            msgs.filter { it.conversationId == conversationId }.map { msg ->
+                if (state != null && msg.id == state.messageId) {
+                    msg.copy(text = state.text)
+                } else {
+                    msg
+                }
+            }
+        }
     }
 
     override suspend fun createConversationWithFirstMessage(text: String, now: Long): String? {

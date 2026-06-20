@@ -243,40 +243,6 @@ class DayZeroViewModel @Inject constructor(
             targetConversationId = targetConversationId,
             fallbackReply = "好的，已为你处理。"
         )
-        return
-
-        try {
-            latencyLogger.mark(traceId, "remote_repository_send_start")
-            val turn = aiAssistantRepository.sendMessage(request)
-            latencyLogger.mark(
-                traceId,
-                "remote_repository_send_complete",
-                mapOf("cardsCount" to turn.cards.size, "cardTypes" to turn.cards.joinToString(",") { it.type.name })
-            )
-            val reply = turn.replyText.trim()
-
-            val assistantMessage = AiChatMessage(
-                conversationId = targetConversationId,
-                role = ChatRole.Assistant,
-                text = if (reply.isBlank()) "好的，已为你处理：" else reply,
-                assistantCards = turn.cards
-            )
-            latencyLogger.bindAssistantMessage(traceId, assistantMessage.id, conversationTypeForCards(turn.cards))
-            latencyLogger.mark(traceId, "room_assistant_message_insert_start")
-            aiDraftRepository.insertChatMessage(targetConversationId, assistantMessage)
-            latencyLogger.mark(traceId, "room_assistant_message_insert_complete")
-
-            _uiState.update {
-                it.copy(
-                    isAnalyzing = false,
-                    conversationState = AiRecordConversationState.Idle
-                )
-            }
-            latencyLogger.mark(traceId, "ui_state_assistant_complete")
-            Log.d("DayZeroAiV2", "assistant-turn-v2 success")
-        } catch (e: Exception) {
-            handleAssistantTurnV2Error(e, traceId)
-        }
     }
 
     fun sendInteractionResult(
@@ -372,36 +338,6 @@ class DayZeroViewModel @Inject constructor(
                     targetConversationId = targetConversationId,
                     fallbackReply = "这是我为你生成的记录。"
                 )
-                return@launch
-
-                latencyLogger.mark(traceId, "remote_repository_send_start")
-                val turn = aiAssistantRepository.sendMessage(request)
-                latencyLogger.mark(
-                    traceId,
-                    "remote_repository_send_complete",
-                    mapOf("cardsCount" to turn.cards.size, "cardTypes" to turn.cards.joinToString(",") { it.type.name })
-                )
-                val reply = turn.replyText.trim()
-                
-                val assistantMessage = AiChatMessage(
-                    conversationId = targetConversationId,
-                    role = ChatRole.Assistant,
-                    text = if (reply.isBlank()) "这是我为你生成的记录：" else reply,
-                    assistantCards = turn.cards
-                )
-                latencyLogger.bindAssistantMessage(traceId, assistantMessage.id, conversationTypeForCards(turn.cards))
-                latencyLogger.mark(traceId, "room_assistant_message_insert_start")
-                aiDraftRepository.insertChatMessage(targetConversationId, assistantMessage)
-                latencyLogger.mark(traceId, "room_assistant_message_insert_complete")
-
-                _uiState.update {
-                    it.copy(
-                        isAnalyzing = false,
-                        conversationState = AiRecordConversationState.Idle
-                    )
-                }
-                latencyLogger.mark(traceId, "ui_state_assistant_complete")
-                Log.d("DayZeroAiV2", "assistant-turn-v2 interaction_result success")
             } catch (e: Exception) {
                 Log.e("DayZeroAiV2", "assistant-turn-v2 interaction_result error", e)
                 handleAssistantTurnV2Error(e, traceId)
@@ -442,6 +378,7 @@ class DayZeroViewModel @Inject constructor(
 
         fun updateStreamingMessageText(text: String) {
             latestMessage = latestMessage.copy(text = text)
+            aiDraftRepository.updateStreamingState(targetConversationId, latestMessage.id, text, true)
             _uiState.update { state ->
                 state.copy(
                     chatMessages = state.chatMessages.map { message ->
@@ -485,13 +422,24 @@ class DayZeroViewModel @Inject constructor(
             }
         }
 
+        var firstDeltaTime = 0L
+        var deltaCount = 0
+        val isFirstTurn = request.recentMessages.isEmpty()
+        val turnSource = if (isFirstTurn) "首页首轮" else "已有会话发送"
+
+        Log.i("DayZeroAiStream", "stream request started | conversationId=$targetConversationId | messageId=${assistantMessage.id} | source=$turnSource")
+
         try {
             latencyLogger.mark(traceId, "remote_repository_stream_start")
+            Log.i("DayZeroAiStream", "stream connected | conversationId=$targetConversationId | messageId=${assistantMessage.id} | source=$turnSource")
             val turn = aiAssistantRepository.streamMessage(request) { delta ->
                 if (!firstDeltaReceived) {
                     firstDeltaReceived = true
+                    firstDeltaTime = System.currentTimeMillis()
                     latencyLogger.mark(traceId, "time_to_first_token")
+                    Log.i("DayZeroAiStream", "first delta received | conversationId=$targetConversationId | messageId=${assistantMessage.id} | source=$turnSource")
                 }
+                deltaCount++
                 synchronized(displayLock) {
                     targetText.append(delta)
                 }
@@ -510,6 +458,12 @@ class DayZeroViewModel @Inject constructor(
                 streamFinished = true
             }
             typewriterJob.join()
+            
+            val endTime = System.currentTimeMillis()
+            val duration = if (firstDeltaTime > 0) endTime - firstDeltaTime else 0
+            Log.i("DayZeroAiStream", "delta count / accumulated length | count=$deltaCount length=${targetText.length} | conversationId=$targetConversationId | messageId=${assistantMessage.id} | source=$turnSource")
+            Log.i("DayZeroAiStream", "stream final received | conversationId=$targetConversationId | messageId=${assistantMessage.id} | source=$turnSource | fallback=false | duration=$duration ms")
+            
             latencyLogger.mark(
                 traceId,
                 "ui_streaming_text_animation_complete",
@@ -525,17 +479,28 @@ class DayZeroViewModel @Inject constructor(
             )
             Log.d("DayZeroAiV2", "assistant-turn-v2-stream success")
         } catch (streamError: Exception) {
+            val fallbackReason = streamError.message ?: streamError::class.java.simpleName
+            Log.e("DayZeroAiStream", "stream failed | conversationId=$targetConversationId | messageId=${assistantMessage.id} | source=$turnSource | error=$fallbackReason")
+            
             synchronized(displayLock) {
                 streamFinished = true
             }
             typewriterJob.cancelAndJoin()
             Log.w("DayZeroAiV2", "assistant-turn-v2-stream fallback to assistant-turn-v2", streamError)
+            
+            Log.i("DayZeroAiStream", "fallback started + exact reason | reason=$fallbackReason | conversationId=$targetConversationId | messageId=${assistantMessage.id} | source=$turnSource")
+            
             latencyLogger.mark(
                 traceId,
                 "remote_repository_stream_failed_fallback_start",
                 mapOf("error" to (streamError.message ?: streamError::class.java.simpleName))
             )
             val turn = aiAssistantRepository.sendMessage(request)
+            
+            val endTime = System.currentTimeMillis()
+            val duration = if (firstDeltaTime > 0) endTime - firstDeltaTime else 0
+            Log.i("DayZeroAiStream", "fallback completed | conversationId=$targetConversationId | messageId=${assistantMessage.id} | source=$turnSource | fallback=true | duration=$duration ms")
+            
             latencyLogger.mark(
                 traceId,
                 "remote_repository_send_complete",
@@ -575,6 +540,7 @@ class DayZeroViewModel @Inject constructor(
         latencyLogger.mark(traceId, "actions_received", mapOf("cardsCount" to finalCards.size) + metadata)
         latencyLogger.mark(traceId, "room_assistant_message_update_final_start")
         aiDraftRepository.updateChatMessage(finalMessage)
+        finalMessage.conversationId?.let { aiDraftRepository.clearStreamingState(it) }
         latencyLogger.mark(traceId, "room_assistant_message_update_final_complete")
 
         _uiState.update {
@@ -584,6 +550,8 @@ class DayZeroViewModel @Inject constructor(
             )
         }
         latencyLogger.mark(traceId, "ui_state_assistant_complete")
+        
+        Log.i("DayZeroAiStream", "final persisted | conversationId=${finalMessage.conversationId} | messageId=${finalMessage.id}")
     }
 
     private suspend fun List<AiChatCard>.withDateMismatchGuardIfNeeded(
