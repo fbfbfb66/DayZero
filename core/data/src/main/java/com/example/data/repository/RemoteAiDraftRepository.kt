@@ -10,6 +10,7 @@ import com.example.domain.model.ai.AiChatMessage
 import com.example.domain.model.ai.AiDraftRequest
 import com.example.domain.model.ai.ChatRole
 import com.example.domain.model.ai.CheckinDraft
+import com.example.domain.model.ai.assistant.DateMismatchGuardCardPayload
 import com.example.domain.repository.AiDraftRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -90,7 +91,12 @@ class RemoteAiDraftRepository(
         return chatDao.getMessagesWithCards()
             .firstNotNullOfOrNull { entity ->
                 val message = chatMapper.toDomain(entity)
-                message.takeIf { it.assistantCards.any { card -> card.id == cardId } }
+                message.takeIf {
+                    it.assistantCards.any { card ->
+                        card.id == cardId ||
+                            (card is DateMismatchGuardCardPayload && card.pendingOriginalCard.id == cardId)
+                    }
+                }
             }
     }
 

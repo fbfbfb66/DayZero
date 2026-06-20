@@ -10,6 +10,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.SavedStateHandle
 import com.example.domain.model.AppState
 import com.example.domain.model.ai.AiChatMessage
@@ -19,7 +20,12 @@ import com.example.domain.model.ai.CheckinDraft
 import com.example.domain.model.ai.Conversation
 import com.example.domain.model.ai.assistant.DebugChoiceCardPayload
 import com.example.domain.model.ai.assistant.DebugChoiceOption
+import com.example.domain.model.ai.assistant.ConfirmCardItem
+import com.example.domain.model.ai.assistant.ConfirmCardMeal
+import com.example.domain.model.ai.assistant.ConfirmCardOption
+import com.example.domain.model.ai.assistant.DateMismatchGuardCardPayload
 import com.example.domain.model.ai.assistant.PayloadSummary
+import com.example.domain.model.ai.assistant.ShowConfirmCardPayload
 import com.example.domain.repository.AiDraftRepository
 import com.example.domain.repository.ConversationRepository
 import com.example.domain.usecase.CreateConversationWithFirstMessageUseCase
@@ -230,6 +236,44 @@ class AiRecordPhase3Test {
         assertTrue(sent.isEmpty())
     }
 
+    @Test
+    fun dateMismatchGuardRendererShowsPendingApprovedAndCancelledStates() {
+        val originalCard = showConfirmCard()
+        val pendingGuard = DateMismatchGuardCardPayload(
+            id = "guard-1",
+            conversationId = "a",
+            conversationDate = LocalDate.of(2026, 6, 18),
+            detectedCurrentDate = LocalDate.of(2026, 6, 20),
+            state = "pending",
+            pendingOriginalCard = originalCard
+        )
+        val guardEvents = mutableListOf<Pair<String, Boolean>>()
+        val visibleCard = mutableStateOf(pendingGuard)
+
+        composeRule.setContent {
+            MyApplicationTheme {
+                AssistantCardRenderer(
+                    card = visibleCard.value,
+                    actionHandler = object : AiRecordActionHandler by NoOpActionHandler {
+                        override fun handleDateMismatchGuardResult(guardId: String, approved: Boolean) {
+                            guardEvents += guardId to approved
+                        }
+                    }
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("正在记录到 6月18日").assertIsDisplayed()
+        composeRule.onNodeWithText("继续记录").performClick()
+        assertEquals(listOf("guard-1" to true), guardEvents)
+
+        composeRule.runOnIdle { visibleCard.value = pendingGuard.copy(state = "approved") }
+        composeRule.onNodeWithText("Confirm").assertIsDisplayed()
+
+        composeRule.runOnIdle { visibleCard.value = pendingGuard.copy(state = "cancelled") }
+        composeRule.onNodeWithText("已取消，本次内容未记录").assertIsDisplayed()
+    }
+
     private fun createViewModel(savedStateHandle: SavedStateHandle = SavedStateHandle()): AiRecordViewModel {
         return AiRecordViewModel(
             conversationRepository = conversationRepository,
@@ -393,9 +437,44 @@ private object NoOpActionHandler : AiRecordActionHandler {
         payloadSummary: PayloadSummary?
     ) = Unit
 
+    override fun handleDateMismatchGuardResult(guardId: String, approved: Boolean) = Unit
+
     override fun clearChatMessages() = Unit
     override fun clearLocalRecords() = Unit
     override fun clearAllData() = Unit
     override fun clearCloudBackupForDebug() = Unit
     override fun markAssistantMessageRendered(message: AiChatMessage) = Unit
+}
+
+private fun showConfirmCard(): ShowConfirmCardPayload {
+    val meal = ConfirmCardMeal(
+        mealType = "lunch",
+        mealLabel = "Lunch",
+        subtotalCalories = 300,
+        items = listOf(
+            ConfirmCardItem(
+                id = "item-1",
+                name = "rice",
+                amountText = "1 bowl",
+                calories = 300,
+                calorieConfidence = "medium"
+            )
+        )
+    )
+    return ShowConfirmCardPayload(
+        id = "confirm-card",
+        confirmType = "food_record",
+        title = "Confirm",
+        message = "Confirm food",
+        originalText = "rice",
+        mealType = null,
+        items = emptyList(),
+        weightKg = 72.5,
+        totalCalories = 300,
+        meals = listOf(meal),
+        buttons = listOf(
+            ConfirmCardOption("cancel", "Cancel"),
+            ConfirmCardOption("confirm", "Confirm")
+        )
+    )
 }

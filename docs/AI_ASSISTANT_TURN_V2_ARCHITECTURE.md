@@ -171,6 +171,13 @@ As of 2026-06-08, DayZero Phase 2 and Phase 3 have been fully verified and compl
   - The old AI check-in flow components (HybridIntentRouter, IntentClassifier, etc.) remain fully deprecated and bypassed.
 - **Next Phase**: Begin implementing weight tracking (e.g., `weight_record`) or daily summary tools under the new V2 architecture.
 - **Streaming Card Latency Optimization Completed**: `assistant-turn-v2-stream` now successfully implements server-side action normalization, keeping AI streaming fast while providing the client with complete UI payload data natively.
+- **AI history date mismatch guard completed locally**:
+  - `show_confirm_card` prompt, action name, payload schema, normalization, streaming protocol, and fallback protocol are unchanged.
+  - After stream/fallback cards are parsed, the Android client compares the owning conversation's fixed `conversationDate` with the device-local current date.
+  - If the dates differ, the client persists a local `date_mismatch_guard_card` containing the original `show_confirm_card` as `pendingOriginalCard`; this guard is not an AI tool and is never sent to Kimi.
+  - Continue/cancel guard actions are local Room state transitions. Continue reveals the original card unchanged; cancel keeps it hidden and writes no record.
+  - Final record confirmation resolves the original card's message and saves food, meals, and weight to the owning conversation date rather than `LocalDate.now()` or active UI state.
+  - Chat/conversation cloud sync remains unimplemented; Supabase schema and Edge Functions were not changed for this feature.
 
 ## Streaming card latency optimization handoff (已完成)
 

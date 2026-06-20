@@ -191,6 +191,20 @@ class AiAssistantRemoteMapper {
                 resolved = dto.resolved ?: false,
                 state = dto.state ?: "pending"
             )
+            "date_mismatch_guard_card" -> {
+                val originalCard = dto.pendingOriginalCard
+                    ?.let { toCardDomain(it) as? ShowConfirmCardPayload }
+                    ?: return null
+                DateMismatchGuardCardPayload(
+                    id = dto.id,
+                    conversationId = dto.conversationId ?: "",
+                    conversationDate = dto.conversationDate?.let { LocalDate.parse(it) } ?: LocalDate.now(),
+                    detectedCurrentDate = dto.detectedCurrentDate?.let { LocalDate.parse(it) } ?: LocalDate.now(),
+                    state = dto.state ?: "pending",
+                    pendingOriginalCard = originalCard,
+                    createdAt = dto.createdAt ?: System.currentTimeMillis()
+                )
+            }
             else -> null
         }
     }
@@ -344,6 +358,16 @@ class AiAssistantRemoteMapper {
                 buttons = card.buttons.map { AiChoiceOptionDto(id = it.id, label = it.label) },
                 resolved = card.resolved,
                 state = card.state
+            )
+            is DateMismatchGuardCardPayload -> AiChatCardDto(
+                type = "date_mismatch_guard_card",
+                id = card.id,
+                conversationId = card.conversationId,
+                conversationDate = card.conversationDate.toString(),
+                detectedCurrentDate = card.detectedCurrentDate.toString(),
+                state = card.state,
+                pendingOriginalCard = toDto(card.pendingOriginalCard),
+                createdAt = card.createdAt
             )
             else -> null
         }

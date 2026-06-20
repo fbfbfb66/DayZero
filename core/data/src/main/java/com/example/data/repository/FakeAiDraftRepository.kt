@@ -6,6 +6,7 @@ import com.example.domain.model.ai.AiDraftRequest
 import com.example.domain.model.ai.CheckinDraft
 import com.example.domain.model.ai.DraftFood
 import com.example.domain.model.ai.DraftMeal
+import com.example.domain.model.ai.assistant.DateMismatchGuardCardPayload
 import com.example.domain.repository.AiDraftRepository
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -112,7 +113,12 @@ class FakeAiDraftRepository : AiDraftRepository {
     }
 
     override suspend fun findMessageByAssistantCardId(cardId: String): AiChatMessage? {
-        return _messages.value.find { message -> message.assistantCards.any { it.id == cardId } }
+        return _messages.value.find { message ->
+            message.assistantCards.any { card ->
+                card.id == cardId ||
+                    (card is DateMismatchGuardCardPayload && card.pendingOriginalCard.id == cardId)
+            }
+        }
     }
 
     override suspend fun insertChatMessage(message: AiChatMessage) {

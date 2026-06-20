@@ -29,6 +29,7 @@ import com.example.domain.model.ai.assistant.DebugChoiceOption
 import com.example.domain.repository.AiAssistantRepository
 import com.example.domain.repository.ConversationRepository
 import com.example.domain.repository.RecordRepository
+import com.example.domain.time.CurrentDateProvider
 import com.example.domain.usecase.ClearLocalDataUseCase
 import com.example.domain.usecase.ConfirmFoodRecordUseCase
 import com.example.domain.usecase.CreateConversationWithFirstMessageUseCase
@@ -291,7 +292,9 @@ class DayZeroConversationPhase2Test {
             latencyLogger = AiLatencyTraceLogger(context),
             clearLocalDataUseCase = ClearLocalDataUseCase(recordRepository, aiDraftRepository),
             confirmFoodRecordUseCase = ConfirmFoodRecordUseCase(recordRepository),
-            createConversationWithFirstMessageUseCase = CreateConversationWithFirstMessageUseCase(aiDraftRepository)
+            createConversationWithFirstMessageUseCase = CreateConversationWithFirstMessageUseCase(aiDraftRepository),
+            conversationRepository = InMemoryConversationRepository(),
+            currentDateProvider = FixedCurrentDateProvider(LocalDate.of(2026, 6, 20))
         )
     }
 
@@ -378,6 +381,10 @@ class DayZeroConversationPhase2Test {
         override suspend fun softDeleteConversation(id: String, deletedAt: Long) {
             conversations.update { current -> current.map { if (it.id == id) it.copy(deletedAt = deletedAt) else it } }
         }
+    }
+
+    private class FixedCurrentDateProvider(private val date: LocalDate) : CurrentDateProvider {
+        override fun currentDate(): LocalDate = date
     }
 
     private class InMemoryPhase2RecordRepository : RecordRepository {

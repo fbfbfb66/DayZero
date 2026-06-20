@@ -19,10 +19,15 @@ import com.example.domain.model.ai.AiChatMessage
 import com.example.domain.model.ai.AiRecordConversationState
 import com.example.domain.model.ai.ChatRole
 import com.example.domain.model.ai.assistant.AiAssistantRequest
+import com.example.domain.model.ai.assistant.AiChatCard
+import com.example.domain.model.ai.assistant.DateMismatchGuardCardPayload
+import com.example.domain.model.ai.assistant.ShowConfirmCardPayload
 import com.example.domain.model.ai.assistant.ProtocolException
 import com.example.domain.repository.AiAssistantRepository
 import com.example.domain.repository.AiDraftRepository
+import com.example.domain.repository.ConversationRepository
 import com.example.domain.repository.RecordRepository
+import com.example.domain.time.CurrentDateProvider
 import com.example.domain.usecase.ClearLocalDataAction
 import com.example.domain.usecase.ClearLocalDataUseCase
 import com.example.domain.usecase.ConfirmFoodRecordUseCase
@@ -58,6 +63,8 @@ class DayZeroViewModel @Inject constructor(
     private val clearLocalDataUseCase: ClearLocalDataUseCase,
     private val confirmFoodRecordUseCase: ConfirmFoodRecordUseCase,
     private val createConversationWithFirstMessageUseCase: CreateConversationWithFirstMessageUseCase,
+    private val conversationRepository: ConversationRepository,
+    private val currentDateProvider: CurrentDateProvider,
     private val syncCoordinator: SyncCoordinator? = null,
     private val backfillCoordinator: BackfillCoordinator? = null,
     private val pullCoordinator: PullCoordinator? = null,
@@ -78,7 +85,7 @@ class DayZeroViewModel @Inject constructor(
         syncScheduler = effectiveSyncScheduler
     )
 
-    private val _uiState = MutableStateFlow(AppState(currentDate = LocalDate.now()))
+    private val _uiState = MutableStateFlow(AppState(currentDate = currentDateProvider.currentDate()))
     val uiState: StateFlow<AppState> = _uiState.asStateFlow()
 
     private val _syncStatusUiState = MutableStateFlow(SyncStatusUiState())
@@ -559,12 +566,13 @@ class DayZeroViewModel @Inject constructor(
         metadata: Map<String, Any?>
     ) {
         val finalReply = reply.trim().ifBlank { fallbackReply }
+        val finalCards = cards.withDateMismatchGuardIfNeeded(baseMessage.conversationId)
         val finalMessage = baseMessage.copy(
             text = finalReply,
-            assistantCards = cards
+            assistantCards = finalCards
         )
-        latencyLogger.bindAssistantMessage(traceId, finalMessage.id, conversationTypeForCards(cards))
-        latencyLogger.mark(traceId, "actions_received", mapOf("cardsCount" to cards.size) + metadata)
+        latencyLogger.bindAssistantMessage(traceId, finalMessage.id, conversationTypeForCards(finalCards))
+        latencyLogger.mark(traceId, "actions_received", mapOf("cardsCount" to finalCards.size) + metadata)
         latencyLogger.mark(traceId, "room_assistant_message_update_final_start")
         aiDraftRepository.updateChatMessage(finalMessage)
         latencyLogger.mark(traceId, "room_assistant_message_update_final_complete")
@@ -576,6 +584,64 @@ class DayZeroViewModel @Inject constructor(
             )
         }
         latencyLogger.mark(traceId, "ui_state_assistant_complete")
+    }
+
+    private suspend fun List<AiChatCard>.withDateMismatchGuardIfNeeded(
+        conversationId: String?
+    ): List<AiChatCard> {
+        if (conversationId.isNullOrBlank() || none { it is ShowConfirmCardPayload }) return this
+        val conversationDate = conversationRepository.getConversationById(conversationId)?.conversationDate ?: return this
+        val detectedCurrentDate = currentDateProvider.currentDate()
+        if (conversationDate == detectedCurrentDate) return this
+
+        return map { card ->
+            when {
+                card is DateMismatchGuardCardPayload -> card
+                card is ShowConfirmCardPayload && card.confirmType == "food_record" -> {
+                    DateMismatchGuardCardPayload(
+                        id = dateMismatchGuardId(card.id),
+                        conversationId = conversationId,
+                        conversationDate = conversationDate,
+                        detectedCurrentDate = detectedCurrentDate,
+                        state = "pending",
+                        pendingOriginalCard = card,
+                        createdAt = System.currentTimeMillis()
+                    )
+                }
+                else -> card
+            }
+        }
+    }
+
+    fun handleDateMismatchGuardResult(guardId: String, approved: Boolean) {
+        if (guardId.isBlank()) return
+        viewModelScope.launch {
+            updateDateMismatchGuardState(
+                guardId = guardId,
+                newState = if (approved) "approved" else "cancelled"
+            )
+        }
+    }
+
+    private suspend fun updateDateMismatchGuardState(guardId: String, newState: String) {
+        val targetMessage = aiDraftRepository.findMessageByAssistantCardId(guardId) ?: return
+        var changed = false
+        val updatedCards = targetMessage.assistantCards.map { card ->
+            if (card is DateMismatchGuardCardPayload && card.id == guardId && card.state == "pending") {
+                changed = true
+                card.copy(state = newState)
+            } else {
+                card
+            }
+        }
+        if (changed) {
+            aiDraftRepository.updateChatMessage(targetMessage.copy(assistantCards = updatedCards))
+            Log.d("DayZeroAiV2", "date mismatch guard $guardId updated $newState")
+        }
+    }
+
+    private fun dateMismatchGuardId(originalCardId: String): String {
+        return "date-mismatch-guard-$originalCardId"
     }
 
     private fun streamingTypewriterStep(remainingChars: Int): Int {
@@ -733,6 +799,7 @@ class DayZeroViewModel @Inject constructor(
         if (optionId == "cancel") {
             Log.d("DayZeroAiV2", "confirm food card clicked cancel")
             viewModelScope.launch {
+                if (!isShowConfirmCardActionAllowed(interactionId)) return@launch
                 val targetConversationId = conversationIdForInteraction(interactionId)
                 _uiState.update { it.copy(activeConversationId = targetConversationId) }
                 latencyLogger.mark(traceId, "room_confirm_card_state_update_start")
@@ -749,11 +816,12 @@ class DayZeroViewModel @Inject constructor(
 
             viewModelScope.launch {
                 try {
+                    if (!isShowConfirmCardActionAllowed(interactionId)) return@launch
                     val targetConversationId = conversationIdForInteraction(interactionId)
                     _uiState.update { it.copy(activeConversationId = targetConversationId) }
-                    val currentDate = _uiState.value.currentDate
+                    val targetRecordDate = recordDateForInteraction(interactionId)
                     latencyLogger.mark(traceId, "food_record_payload_map_start")
-                    val updatedRecord = confirmFoodRecordUseCase(currentDate, payloadSummary)
+                    val updatedRecord = confirmFoodRecordUseCase(targetRecordDate, payloadSummary)
                     latencyLogger.mark(
                         traceId,
                         "food_record_payload_map_complete",
@@ -791,6 +859,27 @@ class DayZeroViewModel @Inject constructor(
             ?: error("Cannot resolve conversation for interaction $interactionId")
     }
 
+    private suspend fun recordDateForInteraction(interactionId: String): LocalDate {
+        val conversationId = aiDraftRepository.findMessageByAssistantCardId(interactionId)?.conversationId
+            ?: error("Cannot resolve message for record card $interactionId")
+        return conversationRepository.getConversationById(conversationId)?.conversationDate
+            ?: error("Cannot resolve conversation date for record card $interactionId")
+    }
+
+    private suspend fun isShowConfirmCardActionAllowed(interactionId: String): Boolean {
+        val targetMessage = aiDraftRepository.findMessageByAssistantCardId(interactionId) ?: return false
+        val originalState = targetMessage.assistantCards.firstNotNullOfOrNull { card ->
+            when {
+                card is ShowConfirmCardPayload && card.id == interactionId -> card.state
+                card is DateMismatchGuardCardPayload && card.pendingOriginalCard.id == interactionId -> {
+                    if (card.state == "approved") card.pendingOriginalCard.state else "guard_${card.state}"
+                }
+                else -> null
+            }
+        }
+        return originalState == null || originalState == "pending"
+    }
+
     private suspend fun updateCardState(
         interactionId: String,
         newState: String,
@@ -800,12 +889,21 @@ class DayZeroViewModel @Inject constructor(
         val targetMessage = aiDraftRepository.findMessageByAssistantCardId(interactionId)
         if (targetMessage != null) {
             val updatedCards = targetMessage.assistantCards.map { card ->
-                if (card.id == interactionId && card is com.example.domain.model.ai.assistant.ShowConfirmCardPayload) {
+                if (card.id == interactionId && card is ShowConfirmCardPayload) {
                     card.copy(
                         state = newState,
                         resolved = true,
                         weightKg = updatedWeightKg ?: card.weightKg,
                         meals = updatedMeals ?: card.meals
+                    )
+                } else if (card is DateMismatchGuardCardPayload && card.pendingOriginalCard.id == interactionId) {
+                    card.copy(
+                        pendingOriginalCard = card.pendingOriginalCard.copy(
+                            state = newState,
+                            resolved = true,
+                            weightKg = updatedWeightKg ?: card.pendingOriginalCard.weightKg,
+                            meals = updatedMeals ?: card.pendingOriginalCard.meals
+                        )
                     )
                 } else {
                     card

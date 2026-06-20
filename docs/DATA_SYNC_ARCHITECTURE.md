@@ -19,6 +19,8 @@ AI conversation phase 2 adds local domain logic only: first-message conversation
 
 AI conversation phase 3 wires the local conversation model into visible UI only: AI home, history list, and conversation detail all observe Room-backed local state by `conversationId`. This still does not add Supabase tables, Edge Function changes, Push/Pull/Backfill handling, or sync queue entries for chat transcripts.
 
+AI conversation phase 4 adds a local date-mismatch guard for `show_confirm_card(food_record)` and binds final food/meal/weight writes to the owning `conversation.conversationDate`. This changes only the local confirmation target date and existing Room record write input. The resulting `DailyRecord`, meals, food entries, and weight records continue through the existing sync queue exactly as before; conversations, chat messages, and local guard cards still have no Supabase sync path.
+
 The AI runtime is not changed in this stage. `assistant-turn-v2-stream` remains the primary AI entry, `assistant-turn-v2` remains fallback, and Kimi prompts/protocols are unchanged. AI returns replies and actions only; the client performs deterministic database writes after user confirmation.
 
 This stage does not add a user-visible login system. It does not add phone, email, or WeChat login pages, and it does not require Supabase Auth before local records work.

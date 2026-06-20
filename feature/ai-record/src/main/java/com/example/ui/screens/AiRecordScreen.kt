@@ -123,6 +123,8 @@ interface AiRecordActionHandler {
         payloadSummary: PayloadSummary? = null
     )
 
+    fun handleDateMismatchGuardResult(guardId: String, approved: Boolean)
+
     fun clearChatMessages()
     fun clearLocalRecords()
     fun clearAllData()

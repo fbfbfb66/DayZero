@@ -39,7 +39,7 @@
 - **AI history UI (Phase 3) is implemented locally**. The AI tab now opens an AI home screen with a large first-message input and a Room-backed history list. Conversation detail is a second-level route that renders only the selected `conversationId` messages and hides the app bottom navigation bar.
 - **Chat cloud sync is not implemented yet**. No Supabase table, Edge Function, Push/Pull/Backfill path, or sync queue behavior was added for conversations or chat messages.
 - `show_confirm_card`, its prompt/action/payload contract, action normalization/parsing, multi-meal record writes, optional weight writes, Draft Card edit/confirm/cancel flow, `assistant-turn-v2-stream`, and `assistant-turn-v2` fallback remain unchanged by the conversation data foundation.
-- Next AI history phase: add date mismatch guard/prompt behavior and any remaining conversation polish while preserving the existing DayZero visual language.
+- **AI history local feature (Phase 4) complete**. Date mismatch guarding is now implemented for new `show_confirm_card(food_record)` cards. When a conversation's fixed `conversationDate` differs from the device-local date at card handling time, the client persists and renders a local system guard card before exposing the original record card.
 - **AI history conversation domain logic (Phase 2) complete**. New conversations and first user messages are created atomically through `CreateConversationWithFirstMessageUseCase` and the local chat repository. User messages, stream placeholders, final AI replies, fallback replies, card messages, card state updates, and local confirm/cancel feedback now carry an explicit `conversationId`.
 - **AI context is conversation-scoped**. Client requests still keep the existing recent-message clipping size of 10, but now read those messages from the target `conversationId` instead of the compatibility all-message stream. No server prompt or API protocol was changed.
 - **Async replies are pinned to the send-time conversation**. Each send/interaction captures an immutable target conversation id before network work starts, so stream completion and fallback update the original placeholder in that conversation even if later state points elsewhere.
@@ -49,7 +49,7 @@
 - **Bottom navigation behavior**: AI home, Calendar, and Trends remain top-level pages with the app bottom navigation bar. Conversation detail is a second-level route and does not compose the bottom navigation bar, freeing the bottom space for the chat input. The detail input owns `imePadding()` plus `navigationBarsPadding()` so it follows the keyboard and system gesture area.
 - **First-message flow**: home submit calls `CreateConversationWithFirstMessageUseCase` through `AiRecordViewModel`, navigates to detail on the one-shot creation event, then starts the existing assistant turn for the already-persisted first user message. This prevents duplicate first-message persistence.
 - **Current concurrency policy**: the visible UI remains a single global generation surface. While `isAnalyzing` is true, the home input and detail input are disabled. Users may return to AI home while generation continues; replies are still persisted to the send-time conversation and are visible when reopening it. Multi-conversation simultaneous generation UI is not introduced.
-- Still not implemented: date mismatch prompt card, chat/conversation cloud sync, history search, delete, rename, pinning, and AI-generated titles.
+- Still not implemented: chat/conversation cloud sync, history search, delete, rename, pinning, and AI-generated titles.
 
 ## Current Phase Features (Phase 4D-1 Complete)
 
@@ -103,7 +103,7 @@ Note: Several legacy interfaces/classes still exist in migrated modules for comp
 - Future AI history refinements must keep DayZero's current visual language, rounded corners, spacing, typography, motion, and fresh style. Reuse existing components and theme; do not drop in generic Material sample pages or introduce a mismatched design system.
 - Next step is to continue narrowing `DayZeroViewModel` into feature-specific state holders (`AiRecordViewModel`, Calendar/Trends state holders) and to add focused unit/UI tests around the extracted use cases and card renderer.
 
-### AI History & Conversation Foundation (Phases 1, 2 & 3 Technical Details)
+### AI History & Conversation Foundation (Phases 1, 2, 3 & 4 Technical Details)
 
 To support multiple chat histories, the database schema, domain layer, and view models have been updated to isolate chat sessions.
 
@@ -197,3 +197,33 @@ Implemented in **[DayZeroDatabase](file:///D:/Goings/APPProjects/DayZero/core/da
   - The detail input keeps the existing plus/input fusion animation and uses `imePadding()` and `navigationBarsPadding()` so the input tracks the keyboard and system gesture area.
 - **Tests**:
   - `AiRecordPhase3Test` in `:feature:ai-record` covers history observation, blank rejection, duplicate create prevention, one-shot creation event, home input clearing, detail conversation isolation/restoration, home/detail Compose rendering, card rendering through the existing renderer, and disabled send state during generation.
+
+### 7. Date Mismatch Guard & Conversation-Date Record Binding (Phase 4)
+- **Local-only system card**:
+  - `DateMismatchGuardCardPayload` is a client-side card model, not an AI tool and not a server action.
+  - It is persisted inside the existing `assistantCardsJson` message JSON as `date_mismatch_guard_card`.
+  - The original `show_confirm_card` is preserved unchanged as `pendingOriginalCard`, including its original card id, action payload, meals, weight, and state.
+- **Insertion point**:
+  - `DayZeroViewModel.completeAssistantMessage(...)` receives parsed AI cards from `assistant-turn-v2-stream` or the `assistant-turn-v2` fallback.
+  - Before the final assistant placeholder is updated in Room, the ViewModel compares the message's owning `conversation.conversationDate` with `CurrentDateProvider.currentDate()`.
+  - Matching dates keep the original card list unchanged. Mismatched past or future dates wrap only `show_confirm_card(confirmType=food_record)` cards in a pending guard.
+- **User decisions**:
+  - Pending guard cards render in `AssistantCardRenderer`, using DayZero's existing card styling.
+  - "Continue recording" changes the guard state from `pending` to `approved`; the renderer then shows the embedded original `FoodDraftConfirmCard` exactly once.
+  - "Cancel" changes the guard state from `pending` to `cancelled`; the original record card remains hidden and no food/weight record is written.
+  - State transitions are idempotent and only allow `pending -> approved` or `pending -> cancelled`.
+- **Record date source**:
+  - Final confirm/cancel actions look up the message containing the original card id, including cards nested inside a date guard.
+  - Record writes use `conversationRepository.getConversationById(message.conversationId).conversationDate`.
+  - `LocalDate.now()`, AI payload date fields, active UI conversation state, and route state do not decide the final `DailyRecord` natural date.
+  - Current-date conversations still behave like before because no guard is inserted and the conversation date equals the device-local date.
+- **Compatibility**:
+  - Existing historical unwrapped `show_confirm_card` messages are not rewritten.
+  - If a user confirms an old unwrapped card now, the save path still resolves its owning `conversationId` and writes food, meals, and weight to that conversation's fixed date.
+  - Non-confirm cards (`ask_record_intent_card`, `ask_missing_info_card`, debug choice cards, and other card types) are not intercepted.
+- **Tests**:
+  - `DayZeroDateMismatchGuardTest` covers same-date pass-through, past/future mismatch guard insertion, approve/cancel idempotency, no-network guard decisions, conversation-date food/meal/weight writes after page state changes, and old unwrapped card compatibility.
+  - `AiRecordPhase3Test` includes feature-level Compose coverage for pending/approved/cancelled guard rendering.
+- **Cloud sync status**:
+  - Chat/conversation cloud sync is still not implemented.
+  - Supabase schema, Edge Functions, record sync queue/backfill/pull, and existing food/weight sync remain unchanged.

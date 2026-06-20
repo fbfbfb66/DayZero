@@ -29,12 +29,14 @@ import com.example.data.sync.SupabaseRemotePullGateway
 import com.example.data.sync.SupabaseRemoteSyncGateway
 import com.example.data.sync.SyncCoordinator
 import com.example.data.sync.SyncHealthReporter
+import com.example.data.time.SystemCurrentDateProvider
 import com.example.data.telemetry.AiLatencyTraceLogger
 import com.example.domain.identity.CurrentIdentityProvider
 import com.example.domain.repository.AiAssistantRepository
 import com.example.domain.repository.AiDraftRepository
 import com.example.domain.repository.ConversationRepository
 import com.example.domain.repository.RecordRepository
+import com.example.domain.time.CurrentDateProvider
 import com.example.domain.usecase.ClearLocalDataUseCase
 import com.example.domain.usecase.ConfirmFoodRecordUseCase
 import com.example.domain.usecase.CreateConversationWithFirstMessageUseCase
@@ -206,6 +208,12 @@ object DayZeroHiltModule {
         aiDraftRepository: AiDraftRepository
     ): CreateConversationWithFirstMessageUseCase {
         return CreateConversationWithFirstMessageUseCase(aiDraftRepository = aiDraftRepository)
+    }
+
+    @Provides
+    @Singleton
+    fun provideCurrentDateProvider(): CurrentDateProvider {
+        return SystemCurrentDateProvider()
     }
 
     @Provides

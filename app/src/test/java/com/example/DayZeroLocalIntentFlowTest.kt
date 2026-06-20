@@ -8,11 +8,14 @@ import com.example.domain.model.MealType
 import com.example.domain.model.RecordStatus
 import com.example.domain.model.ai.AiRecordConversationState
 import com.example.domain.model.ai.ChatRole
+import com.example.domain.model.ai.Conversation
 import com.example.domain.model.ai.assistant.AiAssistantRequest
 import com.example.domain.model.ai.assistant.AiAssistantTurn
 import com.example.domain.model.ai.assistant.AiIntent
 import com.example.domain.repository.AiAssistantRepository
+import com.example.domain.repository.ConversationRepository
 import com.example.domain.repository.RecordRepository
+import com.example.domain.time.CurrentDateProvider
 import com.example.domain.usecase.ClearLocalDataUseCase
 import com.example.domain.usecase.ConfirmFoodRecordUseCase
 import com.example.domain.usecase.CreateConversationWithFirstMessageUseCase
@@ -92,7 +95,9 @@ class DayZeroLocalIntentFlowTest {
             latencyLogger = createLatencyLogger(),
             clearLocalDataUseCase = ClearLocalDataUseCase(recordRepository, aiDraftRepository),
             confirmFoodRecordUseCase = ConfirmFoodRecordUseCase(recordRepository),
-            createConversationWithFirstMessageUseCase = CreateConversationWithFirstMessageUseCase(aiDraftRepository)
+            createConversationWithFirstMessageUseCase = CreateConversationWithFirstMessageUseCase(aiDraftRepository),
+            conversationRepository = InMemoryConversationRepository(),
+            currentDateProvider = FixedCurrentDateProvider(LocalDate.of(2026, 6, 20))
         )
 
         viewModel.sendAiMessage("Weight input: 94kg today")
@@ -127,7 +132,9 @@ class DayZeroLocalIntentFlowTest {
             latencyLogger = createLatencyLogger(),
             clearLocalDataUseCase = ClearLocalDataUseCase(recordRepository, aiDraftRepository),
             confirmFoodRecordUseCase = ConfirmFoodRecordUseCase(recordRepository),
-            createConversationWithFirstMessageUseCase = CreateConversationWithFirstMessageUseCase(aiDraftRepository)
+            createConversationWithFirstMessageUseCase = CreateConversationWithFirstMessageUseCase(aiDraftRepository),
+            conversationRepository = InMemoryConversationRepository(),
+            currentDateProvider = FixedCurrentDateProvider(LocalDate.of(2026, 6, 20))
         )
     }
 
@@ -230,4 +237,34 @@ private class InMemoryRecordRepository : RecordRepository {
     override suspend fun clearAllRecords() {
         _records.value = emptyList()
     }
+}
+
+private class InMemoryConversationRepository : ConversationRepository {
+    private val conversations = MutableStateFlow<List<Conversation>>(emptyList())
+
+    override suspend fun insertConversation(conversation: Conversation) {
+        conversations.update { current -> current.filterNot { it.id == conversation.id } + conversation }
+    }
+
+    override suspend fun getConversationById(id: String): Conversation? {
+        return conversations.value.find { it.id == id }
+    }
+
+    override fun observeConversations(): Flow<List<Conversation>> = conversations.asStateFlow()
+
+    override fun observeConversationsByLastActivity(): Flow<List<Conversation>> = conversations.asStateFlow()
+
+    override suspend fun updateConversationSummary(
+        id: String,
+        title: String,
+        lastMessagePreview: String,
+        lastActivityAt: Long,
+        updatedAt: Long
+    ) = Unit
+
+    override suspend fun softDeleteConversation(id: String, deletedAt: Long) = Unit
+}
+
+private class FixedCurrentDateProvider(private val date: LocalDate) : CurrentDateProvider {
+    override fun currentDate(): LocalDate = date
 }

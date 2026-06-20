@@ -39,7 +39,13 @@ data class AiChatCardDto(
     val mealType: String? = null, // Legacy
     val items: List<ConfirmCardItemDto>? = null, // Legacy
     val meals: List<ConfirmCardMealDto>? = null,
-    val buttons: List<AiChoiceOptionDto>? = null
+    val buttons: List<AiChoiceOptionDto>? = null,
+    // Local-only DateMismatchGuardCard. This is persisted in Room chat JSON and is not sent as an AI tool.
+    val conversationId: String? = null,
+    val conversationDate: String? = null,
+    val detectedCurrentDate: String? = null,
+    val pendingOriginalCard: AiChatCardDto? = null,
+    val createdAt: Long? = null
 )
 
 @JsonClass(generateAdapter = true)

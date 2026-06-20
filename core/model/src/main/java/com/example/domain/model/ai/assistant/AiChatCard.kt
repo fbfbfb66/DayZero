@@ -131,6 +131,17 @@ data class ShowConfirmCardPayload(
     override val type: AiCardType = AiCardType.ShowConfirmCard
 ) : AiChatCard
 
+data class DateMismatchGuardCardPayload(
+    override val id: String,
+    val conversationId: String,
+    val conversationDate: LocalDate,
+    val detectedCurrentDate: LocalDate,
+    val state: String = "pending",
+    val pendingOriginalCard: ShowConfirmCardPayload,
+    val createdAt: Long = System.currentTimeMillis(),
+    override val type: AiCardType = AiCardType.DateMismatchGuardCard
+) : AiChatCard
+
 data class ConfirmCardMeal(
     val mealType: String,
     val mealLabel: String?,

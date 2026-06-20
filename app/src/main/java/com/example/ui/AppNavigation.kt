@@ -117,6 +117,10 @@ fun MainApp() {
                 )
             }
 
+            override fun handleDateMismatchGuardResult(guardId: String, approved: Boolean) {
+                viewModel.handleDateMismatchGuardResult(guardId = guardId, approved = approved)
+            }
+
             override fun clearChatMessages() {
                 viewModel.clearChatMessages()
             }

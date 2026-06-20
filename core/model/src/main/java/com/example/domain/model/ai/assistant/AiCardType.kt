@@ -10,5 +10,6 @@ enum class AiCardType {
     DebugChoiceCard,
     AskRecordIntentCard,
     AskMissingInfoCard,
-    ShowConfirmCard
+    ShowConfirmCard,
+    DateMismatchGuardCard
 }
