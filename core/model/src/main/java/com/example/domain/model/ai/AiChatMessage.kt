@@ -5,6 +5,7 @@ import java.util.UUID
 
 data class AiChatMessage(
     val id: String = UUID.randomUUID().toString(),
+    val conversationId: String? = null,
     val role: ChatRole,
     val text: String,
     val createdAt: Long = System.currentTimeMillis(),

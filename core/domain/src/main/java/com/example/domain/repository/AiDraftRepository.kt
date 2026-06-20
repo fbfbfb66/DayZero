@@ -9,6 +9,8 @@ interface AiDraftRepository {
     suspend fun generateDraft(request: AiDraftRequest): CheckinDraft
     
     fun observeChatMessages(): Flow<List<AiChatMessage>>
+
+    fun observeChatMessages(conversationId: String): Flow<List<AiChatMessage>>
     
     suspend fun insertChatMessage(message: AiChatMessage)
 

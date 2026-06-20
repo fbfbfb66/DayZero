@@ -13,7 +13,7 @@ This stage establishes the local-first sync foundation for:
 - Food entries
 - Weight records
 
-Chat transcripts are not synced in this stage.
+Chat transcripts are not synced in this stage. Local AI conversations now exist only as a Room data foundation: `conversations` owns `ai_chat_messages` through a non-null `conversationId`, with UUIDs and millisecond timestamps chosen so future Supabase tables can map them directly. No chat/conversation Supabase tables, Edge Functions, Push/Pull/Backfill code, or sync queue operations have been added yet.
 
 The AI runtime is not changed in this stage. `assistant-turn-v2-stream` remains the primary AI entry, `assistant-turn-v2` remains fallback, and Kimi prompts/protocols are unchanged. AI returns replies and actions only; the client performs deterministic database writes after user confirmation.
 

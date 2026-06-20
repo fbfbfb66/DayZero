@@ -85,6 +85,10 @@ class FakeAiDraftRepository : AiDraftRepository {
 
     override fun observeChatMessages(): Flow<List<AiChatMessage>> = _messages.asStateFlow()
 
+    override fun observeChatMessages(conversationId: String): Flow<List<AiChatMessage>> {
+        return _messages.asStateFlow()
+    }
+
     override suspend fun insertChatMessage(message: AiChatMessage) {
         _messages.update { it + message }
     }

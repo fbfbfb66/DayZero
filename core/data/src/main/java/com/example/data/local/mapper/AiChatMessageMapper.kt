@@ -46,6 +46,7 @@ class AiChatMessageMapper {
 
         return AiChatMessage(
             id = entity.id,
+            conversationId = entity.conversationId,
             role = try { ChatRole.valueOf(entity.role) } catch (e: Exception) { ChatRole.Assistant },
             text = entity.text,
             createdAt = entity.createdAt,
@@ -57,7 +58,7 @@ class AiChatMessageMapper {
         )
     }
 
-    fun toEntity(domain: AiChatMessage): AiChatMessageEntity {
+    fun toEntity(domain: AiChatMessage, conversationId: String = requireNotNull(domain.conversationId)): AiChatMessageEntity {
         val contentJson = domain.choiceCard?.let { choiceCardAdapter.toJson(it) }
         
         val assistantCardsJson = if (domain.assistantCards.isNotEmpty()) {
@@ -71,6 +72,7 @@ class AiChatMessageMapper {
         
         return AiChatMessageEntity(
             id = domain.id,
+            conversationId = conversationId,
             role = domain.role.name,
             text = domain.text,
             createdAt = domain.createdAt,

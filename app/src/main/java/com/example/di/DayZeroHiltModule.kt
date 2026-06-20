@@ -5,6 +5,7 @@ import com.example.data.identity.CompositeIdentityProvider
 import com.example.data.identity.LocalIdentityProvider
 import com.example.data.identity.SupabaseAnonymousIdentityProvider
 import com.example.data.local.dao.AiChatMessageDao
+import com.example.data.local.dao.ConversationDao
 import com.example.data.local.dao.DailyRecordDao
 import com.example.data.local.dao.SyncQueueDao
 import com.example.data.local.database.DayZeroDatabase
@@ -14,6 +15,7 @@ import com.example.data.remote.api.AiDraftApiService
 import com.example.data.remote.stream.AssistantTurnStreamClient
 import com.example.data.repository.RemoteAiAssistantRepository
 import com.example.data.repository.RemoteAiDraftRepository
+import com.example.data.repository.RoomConversationRepository
 import com.example.data.repository.RoomRecordRepository
 import com.example.data.sync.BackfillCoordinator
 import com.example.data.sync.BackfillStateStore
@@ -31,6 +33,7 @@ import com.example.data.telemetry.AiLatencyTraceLogger
 import com.example.domain.identity.CurrentIdentityProvider
 import com.example.domain.repository.AiAssistantRepository
 import com.example.domain.repository.AiDraftRepository
+import com.example.domain.repository.ConversationRepository
 import com.example.domain.repository.RecordRepository
 import com.example.domain.usecase.ClearLocalDataUseCase
 import com.example.domain.usecase.ConfirmFoodRecordUseCase
@@ -70,6 +73,9 @@ object DayZeroHiltModule {
 
     @Provides
     fun provideAiChatMessageDao(database: DayZeroDatabase): AiChatMessageDao = database.aiChatMessageDao()
+
+    @Provides
+    fun provideConversationDao(database: DayZeroDatabase): ConversationDao = database.conversationDao()
 
     @Provides
     fun provideSyncQueueDao(database: DayZeroDatabase): SyncQueueDao = database.syncQueueDao()
@@ -198,9 +204,18 @@ object DayZeroHiltModule {
     @Singleton
     fun provideAiDraftRepository(
         apiService: AiDraftApiService,
-        chatDao: AiChatMessageDao
+        chatDao: AiChatMessageDao,
+        conversationDao: ConversationDao
     ): AiDraftRepository {
-        return RemoteAiDraftRepository(apiService = apiService, chatDao = chatDao)
+        return RemoteAiDraftRepository(apiService = apiService, chatDao = chatDao, conversationDao = conversationDao)
+    }
+
+    @Provides
+    @Singleton
+    fun provideConversationRepository(
+        conversationDao: ConversationDao
+    ): ConversationRepository {
+        return RoomConversationRepository(conversationDao = conversationDao)
     }
 
     @Provides

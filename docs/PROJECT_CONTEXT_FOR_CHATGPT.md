@@ -35,6 +35,11 @@
 - **Kimi Latency Analysis**: Identified that high latency is 100% caused by Kimi (Moonshot API `kimi-k2.6`) response time and network routing between Supabase (outside China) and Moonshot (inside China). Deno edge function execution overhead is negligible (< 2ms).
 - `assistant-turn-v2-stream` (Version 11) is the current primary AI runtime entrypoint. `assistant-turn-v2` (Version 18) remains as a compatibility fallback.
 - Room chat persistence is fully enabled. User messages, AI replies, and cards are fully persistent. 
+- **AI history conversation data foundation (Phase 1) complete**. Local Room now has a `conversations` table and every `ai_chat_messages` row belongs to a non-null `conversationId`. The database migration from version 9 to 10 safely groups the old single chat stream by device-local natural day, creates one legacy conversation per day with a stable UUID, and copies existing messages without changing message text, card payload JSON, card state, or ordering.
+- **AI history UI is not implemented yet**. There is no history list screen, chat-detail navigation, conversation-switching ViewModel, or date prompt card in this phase.
+- **Chat cloud sync is not implemented yet**. No Supabase table, Edge Function, Push/Pull/Backfill path, or sync queue behavior was added for conversations or chat messages.
+- `show_confirm_card`, its prompt/action/payload contract, action normalization/parsing, multi-meal record writes, optional weight writes, Draft Card edit/confirm/cancel flow, `assistant-turn-v2-stream`, and `assistant-turn-v2` fallback remain unchanged by the conversation data foundation.
+- Next AI history phase: build conversation Repository/ViewModel/page state logic on top of the local Conversation data, then add UI while preserving the existing DayZero visual language.
 
 ## Current Phase Features (Phase 4D-1 Complete)
 
@@ -85,4 +90,59 @@ Note: Several legacy interfaces/classes still exist in migrated modules for comp
 - AI architecture reference is `docs/AI_ASSISTANT_TURN_V2_ARCHITECTURE.md`.
 - Data sync architecture reference is `docs/DATA_SYNC_ARCHITECTURE.md`.
 - Current code architecture is now multi-module and Hilt-based. Future changes should respect module boundaries: UI/feature modules must not depend directly on Room DAO, Retrofit services, Supabase gateways, or sync coordinators; domain/use cases must not depend on Compose, Android UI, Room entities, or remote DTOs.
+- Future AI home, history list, and chat detail UI must keep DayZero's current visual language, rounded corners, spacing, typography, motion, and fresh style. Reuse existing components and theme; do not drop in generic Material sample pages or introduce a mismatched design system.
 - Next step is to continue narrowing `DayZeroViewModel` into feature-specific state holders (`AiRecordViewModel`, Calendar/Trends state holders) and to add focused unit/UI tests around the extracted use cases and card renderer.
+
+## AI History & Conversation Foundation (Phase 1 Technical Details)
+
+To support multiple chat histories, a new local database schema and repository layer have been established in Room (Schema Version 10).
+
+### 1. Data Models & Database Entities
+- **[Conversation](file:///D:/Goings/APPProjects/DayZero/core/model/src/main/java/com/example/domain/model/ai/Conversation.kt)** (in `:core:model`):
+  Pure domain model representing a chat session.
+  ```kotlin
+  data class Conversation(
+      val id: String = UUID.randomUUID().toString(),
+      val conversationDate: LocalDate,
+      val title: String,
+      val lastMessagePreview: String,
+      val createdAt: Long = System.currentTimeMillis(),
+      val updatedAt: Long = createdAt,
+      val lastActivityAt: Long = createdAt,
+      val deletedAt: Long? = null
+  )
+  ```
+- **[ConversationEntity](file:///D:/Goings/APPProjects/DayZero/core/database/src/main/java/com/example/data/local/entity/ConversationEntity.kt)** (in `:core:database`):
+  Room entity mapped to the `conversations` table. Has indices on `conversationDate` and `lastActivityAt`.
+- **[AiChatMessageEntity](file:///D:/Goings/APPProjects/DayZero/core/database/src/main/java/com/example/data/local/entity/AiChatMessageEntity.kt)** (in `:core:database`):
+  Modified to add `conversationId: String` which has a foreign key constraint referencing `conversations(id)` with `ON DELETE CASCADE`. Indexes are added for `conversationId` and `(conversationId, createdAt)`.
+
+### 2. Room Migration (9 -> 10)
+Implemented in **[DayZeroDatabase](file:///D:/Goings/APPProjects/DayZero/core/database/src/main/java/com/example/data/local/database/DayZeroDatabase.kt)**, the migration safely ports existing single-stream chat records into grouped conversations:
+- **Group by Date**: Queries all existing `ai_chat_messages` and groups them by natural date using the device's system default timezone (`ZoneId.systemDefault()`).
+- **Stable UUID Generation**: For each date group, a stable conversation UUID is generated deterministically via:
+  `UUID.nameUUIDFromBytes("dayzero-legacy-ai-chat-${'$'}date".toByteArray(StandardCharsets.UTF_8)).toString()`
+  This prevents duplicate conversations if migration/re-entry happens.
+- **Title and Preview Extrapolations**:
+  - The conversation **title** is extracted from the first user message in that date's group (truncated to a maximum of 32 characters), falling back to a neutral title (e.g., `6月18日的对话`) if no user text is found.
+  - The conversation **preview text** is set to the last non-empty message text or `"这条对话包含一张记录卡片"` if it only contains interactive/checkin cards.
+- **Orphan Prevention**: After inserting conversations and creating the new `ai_chat_messages` table with the foreign key constraint, the migration checks that no messages are left with a null/orphaned `conversationId`.
+
+### 3. DAO & Repository Layer API
+- **[ConversationDao](file:///D:/Goings/APPProjects/DayZero/core/database/src/main/java/com/example/data/local/dao/ConversationDao.kt)**:
+  Exposes queries to insert, fetch by ID, observe all active conversations sorted by `lastActivityAt DESC, createdAt DESC`, update summary titles/previews, and soft delete.
+- **[ConversationRepository](file:///D:/Goings/APPProjects/DayZero/core/domain/src/main/java/com/example/domain/repository/ConversationRepository.kt)** & **[RoomConversationRepository](file:///D:/Goings/APPProjects/DayZero/core/data/src/main/java/com/example/data/repository/RoomConversationRepository.kt)**:
+  Domain repository interface and Room-backed implementation for managing conversations.
+- **[AiDraftRepository](file:///D:/Goings/APPProjects/DayZero/core/domain/src/main/java/com/example/domain/repository/AiDraftRepository.kt)**:
+  Expanded to support:
+  - `fun observeChatMessages(conversationId: String): Flow<List<AiChatMessage>>`
+  - In `RemoteAiDraftRepository`, insertion and update functions automatically resolve `conversationId` by finding the latest active conversation session, creating a new session dynamically if none exists, and updating the corresponding conversation's preview, title, and activity timestamps upon new messages.
+
+### 4. Testing & Verification
+- Unit and migration tests are implemented in **[DayZeroConversationMigrationTest](file:///D:/Goings/APPProjects/DayZero/app/src/test/java/com/example/DayZeroConversationMigrationTest.kt)** (using Robolectric and in-memory database builders). These verify:
+  - Empty migrations generate no empty conversations.
+  - Legacy chat streams are correctly split into natural-day conversations with preserved message ordering.
+  - Interactive card JSON payloads remain intact.
+  - Re-opening database doesn't cause duplicate migrations.
+  - DAO operations perform correct sorting, summary updating, and soft deletion.
+

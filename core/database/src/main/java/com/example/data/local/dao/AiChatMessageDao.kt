@@ -10,8 +10,18 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface AiChatMessageDao {
+    // Compatibility path for the current single-stream chat UI. New history UI should query by conversationId.
     @Query("SELECT * FROM ai_chat_messages ORDER BY createdAt ASC")
     fun observeAllMessages(): Flow<List<AiChatMessageEntity>>
+
+    @Query("SELECT * FROM ai_chat_messages WHERE conversationId = :conversationId ORDER BY createdAt ASC, id ASC")
+    fun observeMessagesByConversationId(conversationId: String): Flow<List<AiChatMessageEntity>>
+
+    @Query("SELECT * FROM ai_chat_messages WHERE conversationId = :conversationId ORDER BY createdAt ASC, id ASC")
+    suspend fun getMessagesByConversationId(conversationId: String): List<AiChatMessageEntity>
+
+    @Query("SELECT * FROM ai_chat_messages WHERE id = :id LIMIT 1")
+    suspend fun getMessageById(id: String): AiChatMessageEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMessage(message: AiChatMessageEntity)
