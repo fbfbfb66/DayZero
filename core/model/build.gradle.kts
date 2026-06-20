@@ -16,4 +16,5 @@ kotlin {
 dependencies {
   implementation(libs.kotlinx.coroutines.core)
   implementation(libs.moshi.kotlin)
+  testImplementation(libs.junit)
 }

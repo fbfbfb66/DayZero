@@ -49,5 +49,6 @@ dependencies {
   implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
   implementation(libs.retrofit)
+  testImplementation(libs.junit)
   "ksp"(libs.moshi.kotlin.codegen)
 }

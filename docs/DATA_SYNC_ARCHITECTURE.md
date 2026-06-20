@@ -25,7 +25,9 @@ AI conversation phase 2 adds local domain logic only: first-message conversation
 
 AI conversation phase 3 wires the local conversation model into visible UI only: AI home, history list, and conversation detail all observe Room-backed local state by `conversationId`. This still does not add Supabase tables, Edge Function changes, Push/Pull/Backfill handling, or sync queue entries for chat transcripts.
 
-AI conversation phase 4 adds a local date-mismatch guard for `show_confirm_card(food_record)` and binds final food/meal/weight writes to the owning `conversation.conversationDate`. This changes only the local confirmation target date and existing Room record write input. The resulting `DailyRecord`, meals, food entries, and weight records continue through the existing sync queue exactly as before; conversations, chat messages, and local guard cards still have no Supabase sync path.
+AI conversation phase 4 adds a local date-mismatch guard for `show_confirm_card(food_record)` and binds final food/meal/weight writes to the owning `conversation.conversationDate`. This changes only the local confirmation target date and existing Room record write input. The resulting `DailyRecord`, meals, food entries, and weight records continue through the existing sync queue exactly as before.
+
+Phase 6A adds only the remote schema and client data contract for future chat sync. The new remote tables are `ai_conversations` and `ai_chat_messages`, with local UUIDs as remote primary keys, owner-scoped RLS, soft-delete tombstones, and database-controlled `server_updated_at` cursors. The current app still does not enqueue, push, pull, backfill, schedule, merge, or display chat data from Supabase.
 
 The AI runtime is not changed in this stage. `assistant-turn-v2-stream` remains the primary AI entry, `assistant-turn-v2` remains fallback, and Kimi prompts/protocols are unchanged. AI returns replies and actions only; the client performs deterministic database writes after user confirmation.
 
@@ -124,9 +126,26 @@ Remote database tables reserve:
 
 `localOwnerId` is not a remote security authority and must not be used as the basis for RLS authorization. RLS policies must continue to use remote auth identity such as `auth.uid()`.
 
+Chat sync tables follow the same remote auth boundary. `ai_conversations.user_id` and `ai_chat_messages.user_id` default to `auth.uid()`, and RLS permits authenticated users to select, insert, and update only their own rows. `ai_chat_messages` also uses a composite foreign key `(conversation_id, user_id)` to `ai_conversations(id, user_id)` so a message cannot be attached to another user's conversation.
+
 ## Delete Model
 
 Business entities reserve `deletedAt` for soft delete synchronization. The remote sync model should not depend on physical deletes as the only representation of removal.
+
+Chat sync also uses tombstones. `ai_conversations.deleted_at` and `ai_chat_messages.deleted_at` represent deletion for future sync. Phase 6A grants no hard delete permission for the Android client on chat tables.
+
+## Chat Sync Contract
+
+The detailed Phase 6A chat sync contract is documented in `docs/CHAT_SYNC_ARCHITECTURE.md`.
+
+Key points:
+
+- `conversation_date` is a pure date and must not be timezone shifted.
+- Business timestamps are distinct from `server_updated_at`.
+- Future Pull must use `(server_updated_at, id)` as the stable cursor.
+- `assistant_cards` is `jsonb` and must preserve full `assistantCardsJson`, including unknown future fields.
+- Streaming deltas, input drafts, route state, and Compose temporary state are not part of the remote contract.
+- Chat Push, Pull, Backfill, scheduling, deletion sync, and multi-device merge remain unimplemented.
 
 ## Logging
 

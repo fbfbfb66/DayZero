@@ -10,10 +10,13 @@ The app expects these public tables:
 - `meals`
 - `food_entries`
 - `weight_records`
+- `ai_conversations` (Phase 6A contract only; no runtime Push/Pull yet)
+- `ai_chat_messages` (Phase 6A contract only; no runtime Push/Pull yet)
 
 The current canonical migration source of truth is:
 
 - `supabase/migrations/20260619023000_dayzero_core_records_schema.sql`
+- `supabase/migrations/20260621060000_dayzero_ai_chat_sync_schema.sql` for Phase 6A chat schema
 
 The older `20260618120000_dayzero_core_records.sql` file is a historical design draft and does not define the current canonical field names.
 
@@ -134,6 +137,38 @@ Recent Supabase projects may not expose new tables to the Data API automatically
 
 The migration grants `select`, `insert`, `update`, and `delete` on the four business tables to `authenticated` and revokes table privileges from unauthenticated `anon`. Android anonymous sign-in uses an authenticated session. The Android client may use only the configured publishable/anon key. A `service_role` key must never be stored in Android source, resources, generated build config, logs, or runtime preferences.
 
+For Phase 6A chat tables, the migration grants only `select`, `insert`, and `update` to `authenticated` and revokes all table privileges from `anon`. No hard-delete policy or grant is added for `ai_conversations` or `ai_chat_messages`; future deletion sync must use `deleted_at` tombstones.
+
+## Phase 6A Chat Tables
+
+`ai_conversations` includes `id`, `user_id default auth.uid()`, `conversation_date`, `title`, `last_message_preview`, `created_at`, `updated_at`, `last_activity_at`, `deleted_at`, `server_updated_at`, `schema_version`, and `unique(id, user_id)`.
+
+`ai_chat_messages` includes `id`, `user_id default auth.uid()`, `conversation_id`, `role`, `message_type`, `text`, `content_json`, `assistant_cards`, `suggested_replies_json`, `created_at`, `updated_at`, `deleted_at`, `server_updated_at`, `schema_version`, and a composite foreign key `(conversation_id, user_id)` to `ai_conversations(id, user_id)`.
+
+Required chat indexes:
+
+- `ai_conversations_user_server_cursor_idx` on `(user_id, server_updated_at, id)`
+- `ai_conversations_user_active_activity_idx` on `(user_id, last_activity_at desc, id)` where `deleted_at is null`
+- `ai_conversations_user_deleted_at_idx` on `(user_id, deleted_at)`
+- `ai_conversations_user_conversation_date_idx` on `(user_id, conversation_date)`
+- `ai_chat_messages_user_server_cursor_idx` on `(user_id, server_updated_at, id)`
+- `ai_chat_messages_conversation_owner_fk_idx` on `(conversation_id, user_id)`
+- `ai_chat_messages_conversation_order_idx` on `(user_id, conversation_id, created_at, id)`
+- `ai_chat_messages_user_deleted_at_idx` on `(user_id, deleted_at)`
+
+RLS policies:
+
+- `ai_conversations_select_own`
+- `ai_conversations_insert_own`
+- `ai_conversations_update_own`
+- `ai_chat_messages_select_own`
+- `ai_chat_messages_insert_own_conversation`
+- `ai_chat_messages_update_own_conversation`
+
+Message insert/update policies require both `auth.uid() = user_id` and an owned parent conversation. The composite foreign key provides the same ownership guard at the database constraint layer.
+
+The server cursor for chat is `server_updated_at`, not business `updated_at`. Future Pull must use `(server_updated_at, id)` as a two-part cursor.
+
 ## Auth Configuration
 
 DayZero currently relies on Supabase Anonymous Sign-Ins for invisible remote identity. In the Supabase Dashboard for project `sybenxmxnwwtlvkeojtj`, enable:
@@ -208,6 +243,12 @@ For relation reconstruction, verify:
 ## SQL Editor And Migration Execution
 
 Preferred deployment is applying `supabase/migrations/20260619023000_dayzero_core_records_schema.sql` to project `sybenxmxnwwtlvkeojtj` through Supabase MCP or SQL Editor.
+
+For Phase 6A chat schema, also apply `supabase/migrations/20260621060000_dayzero_ai_chat_sync_schema.sql`.
+
+If automated Postgres/RLS integration tests are unavailable, run `supabase/verification/20260621060000_verify_ai_chat_sync_schema.sql` after applying the migration and record which checks were executed manually. Do not mark the schema as deployed or verified unless the SQL has actually run against the target Supabase project.
+
+Phase 6A deployment note: on 2026-06-21, `20260621060000_dayzero_ai_chat_sync_schema.sql` was applied to Supabase project `sybenxmxnwwtlvkeojtj` via MCP. Static read-back verification confirmed both tables, primary keys, the composite message owner foreign key, RLS enabled, owner policies, server cursor indexes, trigger installation, and grants limited to `authenticated` select/insert/update. Full two-user RLS integration probes were not executed.
 
 If using SQL Editor:
 
@@ -294,6 +335,7 @@ The current stage does not implement:
 - Social features.
 - Full account binding UI.
 - Chat transcript sync.
+- Chat Push/Pull/Backfill. Phase 6A adds only `ai_conversations` and `ai_chat_messages` schema plus client DTO contracts.
 - AI runtime changes.
 - `assistant-turn-v2-stream` protocol changes.
 - Restoring the old Intent chain.

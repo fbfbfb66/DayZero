@@ -30,6 +30,7 @@
 - **Supabase Schema Verification**: Added `docs/SUPABASE_SCHEMA_VERIFICATION.md` as the definitive checklist for the remote sync schema, RLS policies, and idempotency requirements.
 - **UI Integration for Sync Status Completed**: Added `SyncStatusRepository` and UI components (`ui/sync/`) to observe and display the `SyncHealthSnapshot`. Integrated sync status indicators into `AiRecordScreen` and `TrendsScreen`. Also updated `SupabaseRemoteSyncGateway` to handle remote deletions.
 - **Backfill & Sync Health Completed**: Fully implemented `BackfillCoordinator`, `BackfillStateStore`, and `SyncHealthReporter`. The system can now automatically discover unsynced historical records (`DailyRecordDao.getUnsyncedRecords`) and enqueue them, ensuring complete local-to-remote data consistency. Comprehensive testing added via `DayZeroSyncBackfillTest`.
+- **Phase 6A Chat Sync Contract Complete**. Added remote schema migration and client DTO/contracts for future AI conversation sync. Remote table names are `ai_conversations` and `ai_chat_messages`. They use local UUIDs as remote primary keys, `user_id default auth.uid()`, strict owner-scoped RLS, soft-delete tombstones, composite message ownership FK, and database-controlled `server_updated_at` cursors. This phase does not implement Chat Push, Chat Pull, Chat Backfill, scheduler changes, UI changes, or a merge engine.
 - **Phase 4D-1 Complete**: Real database writing for `show_confirm_card` (`food_record`) has been fully implemented on the client side, now supporting multiple meals (`meals[]`) and optional weight recording (`weightKg`).
 - **Draft Card State Persistence Fix**: Resolved a critical bug where manually edited weight/meals on the draft card were reset in the UI once the card status transitioned to "confirmed". Now, the local UI state in `FoodDraftConfirmCard.kt` is keyed on `card.id` instead of `card.state` to prevent resets, and `updateCardState(...)` in `DayZeroViewModel.kt` persists the final user edits directly into the Room database chat history.
 - **Weight Pre-population**: Configured the server-side normalization wrapper `normalizeActions()` to read `todayRecord` from the database and pre-populate `action.payload.weightKg` with the existing weight record in the database if the AI does not output a new weight.
@@ -39,7 +40,7 @@
 - Room chat persistence is fully enabled. User messages, AI replies, and cards are fully persistent. 
 - **AI history conversation data foundation (Phase 1) complete**. Local Room now has a `conversations` table and every `ai_chat_messages` row belongs to a non-null `conversationId`. The database migration from version 9 to 10 safely groups the old single chat stream by device-local natural day, creates one legacy conversation per day with a stable UUID, and copies existing messages without changing message text, card payload JSON, card state, or ordering.
 - **AI history UI (Phase 3) is implemented locally**. The AI tab now opens an AI home screen with a large first-message input and a Room-backed history list. Conversation detail is a second-level route that renders only the selected `conversationId` messages and hides the app bottom navigation bar.
-- **Chat cloud sync is not implemented yet**. No Supabase table, Edge Function, Push/Pull/Backfill path, or sync queue behavior was added for conversations or chat messages.
+- **Chat cloud runtime sync is not implemented yet**. Phase 6A added Supabase schema and client-side data contracts only. No Edge Function, Push/Pull/Backfill path, WorkManager scheduling, production sync queue behavior, deletion sync, UI behavior, or multi-device merge engine was added for conversations or chat messages.
 - `show_confirm_card`, its prompt/action/payload contract, action normalization/parsing, multi-meal record writes, optional weight writes, Draft Card edit/confirm/cancel flow, `assistant-turn-v2-stream`, and `assistant-turn-v2` fallback remain unchanged by the conversation data foundation.
 - **AI history local feature (Phase 4) complete**. Date mismatch guarding is now implemented for new `show_confirm_card(food_record)` cards. When a conversation's fixed `conversationDate` differs from the device-local date at card handling time, the client persists and renders a local system guard card before exposing the original record card.
 - **Streaming Context Alignment (Phase 4 Streaming) complete**. Addressed an issue where AI replies did not stream incrementally on the new multi-conversation AI history UI. The transient streaming state is now mapped by `conversationId` and combined purely in memory within the `observeChatMessages` flow in the `AiDraftRepository`, bypassing Room for real-time `reply_delta` display. This ensures the conversational UI instantly updates with partial tokens per session, safely clearing state and merging with the database upon stream completion or fallback.
@@ -92,6 +93,10 @@ Note: Several legacy interfaces/classes still exist in migrated modules for comp
 ## Supabase
 
 - Project: `sybenxmxnwwtlvkeojtj` (`DayZero`)
+- Phase 6A chat tables: `ai_conversations`, `ai_chat_messages`
+- Chat server cursor: `server_updated_at` plus `id` as stable secondary cursor
+- Chat card JSON: full `assistantCardsJson` is stored in `ai_chat_messages.assistant_cards` as `jsonb`; null and `[]` are distinct
+- Phase 6A deployment status: applied to Supabase project `sybenxmxnwwtlvkeojtj` via MCP on 2026-06-21. Static schema/RLS/grant/index/trigger verification was read back from the project. Full two-user RLS integration probes were not executed.
 - Primary Edge Function: `assistant-turn-v2-stream` (Version 11, timeout=15s)
 - Fallback Edge Function: `assistant-turn-v2` (Version 18)
 - Retired Edge Function: `ai-assistant-turn` should stay deleted/unused
@@ -105,7 +110,22 @@ Note: Several legacy interfaces/classes still exist in migrated modules for comp
 - Data sync architecture reference is `docs/DATA_SYNC_ARCHITECTURE.md`.
 - Current code architecture is now multi-module and Hilt-based. Future changes should respect module boundaries: UI/feature modules must not depend directly on Room DAO, Retrofit services, Supabase gateways, or sync coordinators; domain/use cases must not depend on Compose, Android UI, Room entities, or remote DTOs.
 - Future AI history refinements must keep DayZero's current visual language, rounded corners, spacing, typography, motion, and fresh style. Reuse existing components and theme; do not drop in generic Material sample pages or introduce a mismatched design system.
-- Next step is to continue narrowing `DayZeroViewModel` into feature-specific state holders (`AiRecordViewModel`, Calendar/Trends state holders) and to add focused unit/UI tests around the extracted use cases and card renderer.
+- Next sync step is Phase 6B: Chat Push plus Backfill. General architecture work can continue narrowing `DayZeroViewModel` into feature-specific state holders.
+
+### Phase 6A Chat Sync Contract
+
+- Remote schema source: `supabase/migrations/20260621060000_dayzero_ai_chat_sync_schema.sql`.
+- Verification SQL: `supabase/verification/20260621060000_verify_ai_chat_sync_schema.sql`.
+- Design doc: `docs/CHAT_SYNC_ARCHITECTURE.md`.
+- Client contract models: `ChatSyncConversationSnapshot`, `ChatSyncMessageSnapshot`, and `ChatSyncServerCursor` in `:core:model`.
+- Network DTOs: `RemoteConversationDto`, `RemoteAiChatMessageDto`, and `RemoteChatSyncMapper` in `:core:network`.
+- Inert sync constants: `ChatSyncQueueContract` in `:core:sync`; these constants are not wired into `SyncPayloadParser`, `LocalFirstSyncCoordinator`, `BackfillCoordinator`, `PullCoordinator`, or `SyncScheduler`.
+- RLS rule: rows are visible/mutable only when `auth.uid() = user_id`.
+- Message ownership rule: `ai_chat_messages(conversation_id, user_id)` references `ai_conversations(id, user_id)`, preventing orphan and cross-owner message attachment.
+- Server cursor rule: future chat Pull must page by `(server_updated_at, id)`, not by client/business `updated_at` alone.
+- Synced state: conversation fixed date/title/preview/timestamps/tombstone, final user messages, final assistant messages, full assistant card JSON, card edits, confirmed/cancelled state, and date guard pending/approved/cancelled state.
+- Unsynced state: `reply_delta`, `StreamingState`, `isAnalyzing`, typewriter progress, input drafts, selected route, `activeConversationId`, keyboard/Compose temporary state, and transient network errors.
+- Formal login is still not implemented. Uninstall or system clear-data still loses the anonymous Supabase identity and cannot recover old anonymous-owned remote data.
 
 ### AI History & Conversation Foundation (Phases 1, 2, 3 & 4 Technical Details)
 
