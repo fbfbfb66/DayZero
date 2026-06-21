@@ -269,21 +269,29 @@ fun CalendarScreen(uiState: AppState, onNavigateToAi: () -> Unit) {
                 }
             ) { targetRecord ->
                 if (targetRecord == null) {
+                    val today = uiState.currentDate
+                    val tipText = when {
+                        selectedDate.isBefore(today) -> "当时没有记录哦。"
+                        selectedDate.isAfter(today) -> "我在这里等你"
+                        else -> "今天还没有记录，告诉 AI 你吃了什么吧。"
+                    }
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier.padding(32.dp).fillMaxWidth()
                     ) {
                         Text(
-                            "今天还没有记录，告诉 AI 你吃了什么吧。",
+                            tipText,
                             color = TextSecondary,
                             textAlign = TextAlign.Center
                         )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Button(
-                            onClick = onNavigateToAi,
-                            colors = ButtonDefaults.buttonColors(containerColor = BrandGreen)
-                        ) {
-                            Text("用 AI 记录", color = Color.White)
+                        if (selectedDate == today) {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Button(
+                                onClick = onNavigateToAi,
+                                colors = ButtonDefaults.buttonColors(containerColor = BrandGreen)
+                            ) {
+                                Text("用 AI 记录", color = Color.White)
+                            }
                         }
                     }
                 } else {
