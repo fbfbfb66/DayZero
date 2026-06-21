@@ -23,7 +23,7 @@ import java.util.UUID
 
 @Database(
     entities = [DailyRecordEntity::class, AiChatMessageEntity::class, ConversationEntity::class, SyncQueueEntity::class],
-    version = 10,
+    version = 11,
     exportSchema = false
 )
 abstract class DayZeroDatabase : RoomDatabase() {
@@ -243,7 +243,22 @@ abstract class DayZeroDatabase : RoomDatabase() {
             }
         }
 
-        val ALL_MIGRATIONS = arrayOf(MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10)
+        internal val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                Log.d("DayZeroSync", "room migration start 10->11")
+                try {
+                    db.execSQL("ALTER TABLE ai_chat_messages ADD COLUMN updatedAt INTEGER NOT NULL DEFAULT 0")
+                    db.execSQL("ALTER TABLE ai_chat_messages ADD COLUMN deletedAt INTEGER DEFAULT NULL")
+                    db.execSQL("UPDATE ai_chat_messages SET updatedAt = createdAt WHERE updatedAt = 0")
+                    Log.d("DayZeroSync", "room migration success 10->11")
+                } catch (e: Exception) {
+                    Log.e("DayZeroSync", "room migration error 10->11", e)
+                    throw e
+                }
+            }
+        }
+
+        val ALL_MIGRATIONS = arrayOf(MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11)
 
         fun getDatabase(context: Context): DayZeroDatabase {
             return INSTANCE ?: synchronized(this) {

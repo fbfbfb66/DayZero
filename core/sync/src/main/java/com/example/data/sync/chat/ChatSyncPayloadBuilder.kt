@@ -41,7 +41,7 @@ class ChatSyncPayloadBuilder {
             .putNullableString("suggestedRepliesJson", message.suggestedRepliesJson)
             .put("createdAt", message.createdAt.toIsoInstant())
             .put("updatedAt", updatedAtMillis.toIsoInstant())
-            .put("deletedAt", JSONObject.NULL)
+            .putNullableInstant("deletedAt", message.deletedAt)
             .put("schemaVersion", CHAT_SYNC_SCHEMA_VERSION)
     }
 

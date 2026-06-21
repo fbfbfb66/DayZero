@@ -37,7 +37,15 @@ Phase 6C-2 implements conversation-only remote merge behind `ChatConversationRem
 
 Phase 6C-2 regression was run on 2026-06-21: `clean`, `:core:database:testDebugUnitTest`, `:core:data:testDebugUnitTest`, `:core:sync:testDebugUnitTest`, `:app:testDebugUnitTest`, `:app:assembleDebug`, and root `test` all completed successfully.
 
-Production Chat Pull lifecycle integration, Message/Card Merge, multi-device message reconciliation, chat deletion UI, and account binding remain unimplemented.
+Phase 6C-3 implements local Message/Card remote merge without changing the production sync lifecycle. `ChatMessagePullCoordinator` fetches message pages, `ChatMessageRemoteMerger` applies each page in one Room transaction, `ChatMessageCardMergePolicy` merges `assistantCardsJson` as generic JSON, and `ChatMessagePullStateStore` stores an independent message cursor by Supabase `remoteUserId`. Remote message apply updates only `AiChatMessageEntity` rows and the message cursor; it does not enqueue SyncQueue tasks, write DailyRecord data, call AI repositories, or update conversation summaries.
+
+Phase 6C-3 message dirty detection uses `SyncQueueDao.countActiveTasksForEntityAndOperation(...)` with `ownerLocalId = identity.localOwnerId`, legacy `local_uninitialized` compatibility, `entityType = ai_chat_message`, `operation = UPSERT_AI_CHAT_MESSAGE`, the specific message id, and active statuses `PENDING`, `PROCESSING`, `FAILED_RETRYABLE`, and `WAITING_FOR_AUTH`. This leaves the older generic `countActiveTasksForEntity(...)` operation-agnostic for existing daily/food/weight pull semantics.
+
+Message immutable fields are `id`, `conversationId`, `role`, `messageType`, and `createdAt`. User final text and assistant final text are immutable; only a local empty assistant placeholder may be completed by a remote final snapshot. Message tombstones are monotonic. Remote message tombstones map directly to the `deletedAt` column, preserving original text and card JSON. Card merge preserves unknown JSON fields, `pendingOriginalCard`, `meals`, `weightKg`, null, empty objects, and `[]`; `show_confirm_card` follows `pending < cancelled < confirmed`, and Date Guard terminal conflicts resolve with the nested original card state.
+
+Production Chat Pull lifecycle integration, multi-device lifecycle orchestration, chat deletion UI, and account binding remain unimplemented. The next sync phase is Phase 6D.
+
+Phase 6C-3 regression was run on 2026-06-21: `:core:database:testDebugUnitTest --rerun-tasks` (verifying Room schema migration 10->11 via `Migration10to11Test`), `:core:data:testDebugUnitTest --rerun-tasks` (data layer), `:core:sync:testDebugUnitTest --rerun-tasks` (sync module), and `:app:testDebugUnitTest --rerun-tasks` (verifying `RemoteAiDraftRepositoryTombstoneTest` for tombstone updates, and `DayZeroChatSyncBackfillTest` for backfill payloads and idempotency) all completed successfully alongside `:app:assembleDebug` and `./gradlew test --rerun-tasks`. Phase 6D has not started yet.
 
 The AI runtime is not changed in this stage. `assistant-turn-v2-stream` remains the primary AI entry, `assistant-turn-v2` remains fallback, and Kimi prompts/protocols are unchanged. AI returns replies and actions only; the client performs deterministic database writes after user confirmation.
 
@@ -154,11 +162,12 @@ Key points:
 
 - `conversation_date` is a pure date and must not be timezone shifted.
 - Business timestamps are distinct from `server_updated_at`.
-- Future Pull must use `(server_updated_at, id)` as the stable cursor.
+- Chat Pull uses `(server_updated_at, id)` as the stable cursor for conversation and message transport/coordinator code. Production lifecycle integration remains pending.
 - `assistant_cards` is `jsonb` and must preserve full `assistantCardsJson`, including unknown future fields.
 - Streaming deltas, input drafts, route state, and Compose temporary state are not part of the remote contract.
 - Phase 6B implements Chat Push and Chat Backfill through the existing sync queue.
-- Chat Pull, deletion UI/sync, and multi-device merge remain unimplemented.
+- Phase 6C implements pull transport and local Conversation/Message merge, still outside production scheduler lifecycle.
+- Deletion UI/sync and production multi-device orchestration remain unimplemented.
 
 ## Phase 6B Queue And Backfill Order
 
@@ -178,7 +187,7 @@ The scheduler runs:
 5. existing business Pull;
 6. health refresh.
 
-`UPSERT_AI_CONVERSATION` is ordered before `UPSERT_AI_CHAT_MESSAGE`, so parent conversations are pushed before messages. Phase 6C-2 still does not add Chat Pull to the production scheduler lifecycle.
+`UPSERT_AI_CONVERSATION` is ordered before `UPSERT_AI_CHAT_MESSAGE`, so parent conversations are pushed before messages. Phase 6C-3 still does not add Chat Pull to the production scheduler lifecycle.
 
 ## Logging
 

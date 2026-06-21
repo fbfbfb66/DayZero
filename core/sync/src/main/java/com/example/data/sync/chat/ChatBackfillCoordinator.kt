@@ -123,7 +123,7 @@ class ChatBackfillCoordinator(
                 if (!queueWriter.isSyncableFinalMessage(message)) {
                     stats = stats.copy(skippedPlaceholderCount = stats.skippedPlaceholderCount + 1)
                 } else {
-                    val enqueued = queueWriter.enqueueMessageUpsert(message, identity, updatedAtMillis = message.createdAt)
+                    val enqueued = queueWriter.enqueueMessageUpsert(message, identity)
                     stats = if (enqueued) {
                         stats.copy(enqueuedMessageCount = stats.enqueuedMessageCount + 1)
                     } else {

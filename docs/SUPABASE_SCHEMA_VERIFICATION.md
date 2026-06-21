@@ -357,7 +357,23 @@ Phase 6C-2 is client-side Room merge work and does not change the Supabase schem
 - **Verified locally**: Immutable conversation conflicts throw out of the Room page transaction, rolling back prior rows in that page and preventing cursor advancement.
 - **Verified locally**: Exact timestamp ties accept remote mutable fields only when local has no active matching push queue and immutable fields match. This rule does not restore tombstones.
 - **Regression run**: On 2026-06-21, `./gradlew clean`, `:core:database:testDebugUnitTest`, `:core:data:testDebugUnitTest`, `:core:sync:testDebugUnitTest`, `:app:testDebugUnitTest`, `:app:assembleDebug`, and `./gradlew test` all completed successfully.
-- **Note**: Phase 6C-3 Message/Card Merge has not started, and conversation pull is not yet wired into the production sync scheduler lifecycle.
+- **Note**: Phase 6C-3 Message/Card Merge is now implemented locally. Conversation and message pull are still not wired into the production sync scheduler lifecycle.
+
+## Phase 6C-3 Message/Card Merge Verification
+
+Phase 6C-3 is client-side Room merge work and does not change the Supabase schema, RLS policies, grants, triggers, indexes, Edge Functions, or migrations.
+
+- **Verified locally**: `ChatMessagePullCoordinator` uses Supabase `identity.remoteUserId` for the Message cursor and passes `identity.localOwnerId` to the merger for local queue dirty checks. Message cursor storage is separate from Conversation cursor storage.
+- **Verified locally**: Message dirty detection uses `countActiveTasksForEntityAndOperation(...)` with owner (`identity.localOwnerId` or legacy `local_uninitialized`), `entityType = ai_chat_message`, message id, `operation = UPSERT_AI_CHAT_MESSAGE`, and active statuses `PENDING`, `PROCESSING`, `FAILED_RETRYABLE`, and `WAITING_FOR_AUTH`. Other operations, owners, entity types, `DONE`, and `FAILED_FATAL` do not make the message dirty.
+- **Verified locally**: Parent validation rejects orphan messages. Active and tombstoned local parent conversations are accepted, but a missing parent throws and rolls back the whole page. No fake parent conversation is inserted.
+- **Verified locally**: Existing local messages validate immutable fields (`id`, `conversationId`, `role`, `messageType`, `createdAt`). User final text and assistant final text conflicts roll back the whole page. A local assistant placeholder can become a remote final message.
+- **Verified locally**: Message tombstones are monotonic. Remote tombstones are mapped directly to the local `deletedAt` column while preserving text, card JSON, suggested replies, and original content JSON.
+- **Verified locally**: Card JSON is merged as a generic JSON tree by card id/type. Unknown fields, unknown card types, nested objects, `pendingOriginalCard`, `meals`, `weightKg`, null, `{}`, and `[]` are preserved. Type conflicts throw and prevent cursor advancement.
+- **Verified locally**: `show_confirm_card` state is monotonic (`pending < cancelled < confirmed`) and Date Guard terminal conflicts resolve using the merged nested original card state.
+- **Verified locally**: Pulling a confirmed card only restores chat history. DailyRecord count remains unchanged, no new SyncQueue tasks are created, and conversation summary fields are not updated by Message Merge.
+- **Verified locally**: Unsupported future chat schema versions are fatal and are not parsed silently.
+- **Regression run**: On 2026-06-21, `:core:database:testDebugUnitTest --rerun-tasks` (verifying Room schema migration 10->11 via `Migration10to11Test`), `:core:data:testDebugUnitTest --rerun-tasks`, `:core:sync:testDebugUnitTest --rerun-tasks`, and `:app:testDebugUnitTest --rerun-tasks` (verifying `RemoteAiDraftRepositoryTombstoneTest` and `DayZeroChatSyncBackfillTest`) all completed successfully alongside `:app:assembleDebug` and `./gradlew test --rerun-tasks`.
+- **Note**: Production Pull lifecycle integration, global `PullCoordinator` integration, `SyncScheduler` integration, UI changes, AI prompt changes, Edge Function changes, and Phase 6D have not started yet.
 ## Partial Pull Verification
 
 When validating pull reliability, check these failure modes:

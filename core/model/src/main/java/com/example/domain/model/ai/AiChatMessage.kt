@@ -13,7 +13,9 @@ data class AiChatMessage(
     val messageType: ChatMessageType = ChatMessageType.Text,
     val choiceCard: ChoiceCard? = null,
     val assistantCards: List<AiChatCard> = emptyList(),
-    val suggestedReplies: List<String> = emptyList()
+    val suggestedReplies: List<String> = emptyList(),
+    val updatedAt: Long = createdAt,
+    val deletedAt: Long? = null
 )
 
 enum class ChatMessageType {

@@ -34,8 +34,7 @@ class ChatSyncQueueWriter(
 
     suspend fun enqueueMessageUpsert(
         message: AiChatMessageEntity,
-        identity: AppIdentity,
-        updatedAtMillis: Long = System.currentTimeMillis()
+        identity: AppIdentity
     ): Boolean {
         if (!isSyncableFinalMessage(message)) {
             Log.d(LOG_PREFIX, "enqueue skipped placeholder messageId=${message.id}")
@@ -47,7 +46,7 @@ class ChatSyncQueueWriter(
                 entityType = ChatSyncQueueContract.ENTITY_MESSAGE,
                 entityLocalId = message.id,
                 operation = ChatSyncQueueContract.OP_UPSERT_MESSAGE,
-                payloadJson = payloadBuilder.messagePayload(message, identity, updatedAtMillis).toString(),
+                payloadJson = payloadBuilder.messagePayload(message, identity, message.updatedAt).toString(),
                 status = DayZeroSyncConstants.STATUS_PENDING,
                 createdAt = now,
                 updatedAt = now,
@@ -58,6 +57,7 @@ class ChatSyncQueueWriter(
     }
 
     fun isSyncableFinalMessage(message: AiChatMessageEntity): Boolean {
+        if (message.deletedAt != null) return true
         if (message.role.equals("Assistant", ignoreCase = true)) {
             val hasStoredPayload = message.text.isNotBlank() ||
                 !message.contentJson.isNullOrBlank() ||

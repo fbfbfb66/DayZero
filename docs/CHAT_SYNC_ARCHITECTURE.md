@@ -1,6 +1,6 @@
 # DayZero Chat Sync Architecture
 
-Phase 6A established the remote schema and client-side data contract for AI conversation sync. Phase 6B adds local enqueue, Chat Push, and historical Chat Backfill. Chat Pull, multi-device merge, chat deletion UI, search, rename, pinning, and login/account binding are still not implemented.
+Phase 6A established the remote schema and client-side data contract for AI conversation sync. Phase 6B adds local enqueue, Chat Push, and historical Chat Backfill. Phase 6C-1 adds pull transport, Phase 6C-2 adds Conversation Merge, and Phase 6C-3 adds Message/Card Merge. Production Chat Pull lifecycle integration, chat deletion UI, search, rename, pinning, and login/account binding are still not implemented.
 
 ## Current Runtime Behavior
 
@@ -118,15 +118,15 @@ Phase 6B Chat Push and Backfill have been fully verified on a real device:
 - **Security & RLS Enforcement**: Remote API client attempts to mutate `user_id` on existing rows or execute hard SQL `DELETE` queries are successfully rejected with `HTTP 403 Forbidden` errors.
 - **Pull Status**: Chat Pull is still not implemented.
 
-## Conflict Rules For Future Phases
+## Conflict Rules
 
 Conversation mutable fields (`title`, `last_message_preview`, `last_activity_at`, `deleted_at`) use deterministic last server version wins. `deleted_at` is a tombstone and old active uploads must not casually revive it. `conversation_date` is fixed after creation.
 
-Message `role`, `created_at`, and `conversation_id` are immutable after creation. User text and final AI text are treated as immutable in normal operation. `assistant_cards` may change when a user edits, confirms, cancels, approves, or cancels a guard. Confirmed/cancelled cards must not be overwritten by older pending states, and date guards must not regress from approved/cancelled to pending.
+Message `id`, `conversation_id`, `role`, `message_type`, and `created_at` are immutable after creation. User final text is immutable. Assistant final text is immutable except for the specific local placeholder to remote final transition. `assistant_cards`, `content_json`, and `suggested_replies_json` are mutable clean-message fields subject to tombstone, dirty, and card state-machine rules. Confirmed/cancelled cards must not be overwritten by older pending states, and date guards must not regress from approved/cancelled to pending.
 
 ## Phase Boundary
 
-Phase 6B implements Chat Push and Chat Backfill only. It does not implement Chat Pull, multi-device merge, chat deletion UI, remote hard delete, account binding, or anonymous identity recovery after uninstall.
+Phase 6C-3 implements local Message/Card Merge but still does not wire Chat Pull into production lifecycle. It does not implement chat deletion UI, remote hard delete, account binding, or anonymous identity recovery after uninstall.
 
 ## Phase 6C-1 Chat Pull Transport
 
@@ -166,4 +166,135 @@ Executed on 2026-06-21 with `JAVA_HOME = C:\Program Files\Android\Android Studio
 - `./gradlew :app:assembleDebug`: SUCCESS; debug APK assembled. Gradle warned that `libandroidx.graphics.path.so` could not be stripped and was packaged as-is.
 - `./gradlew test`: SUCCESS.
 
-Phase 6C-3 has not started. Message/Card Merge, production Pull lifecycle integration, global `PullCoordinator` integration, `SyncScheduler` integration, UI changes, AI prompt changes, and Edge Function changes remain out of scope.
+Phase 6C-3 has now implemented Message/Card Merge. Production Pull lifecycle integration, global `PullCoordinator` integration, `SyncScheduler` integration, UI changes, AI prompt changes, and Edge Function changes remain out of scope.
+
+## Phase 6C-3 Chat Remote Pull Message/Card Merge
+
+Phase 6C-3 implements local Message Pull merge capability behind explicit classes only:
+
+- `ChatMessagePullCoordinator`
+- `ChatMessagePullStateStore`
+- `ChatMessageRemoteMerger`
+- `ChatMessageCardMergePolicy`
+
+It is not connected to the production `PullCoordinator`, `SyncScheduler`, WorkManager flow, UI, AI prompt, Edge Function, or login system.
+
+### Message Merge Flow
+
+The page flow is:
+
+1. `ChatMessagePullCoordinator` reads `identity.remoteUserId`.
+2. It reads the independent message cursor from `ChatMessagePullStateStore`.
+3. It calls `ChatRemotePullGateway.fetchMessagePage(...)`.
+4. It passes the full page to `ChatMessageRemoteMerger`.
+5. The merger runs one Room `withTransaction` for the entire page.
+6. After successful transaction commit only, the coordinator saves `(serverUpdatedAt, id)` for the same Supabase remote user id.
+
+Network fetch is outside the Room transaction. Cursor save failure is retryable and leaves the page replayable.
+
+### Parent And Orphan Rules
+
+Each remote message must reference an existing local parent conversation. Active parents and tombstoned parents are accepted. Missing parents throw `MissingParentConversationException`, roll back the full page, and prevent cursor advancement. The merger never creates a synthetic conversation and never inserts orphan messages.
+
+### Dirty Query
+
+Message dirty detection uses the operation-specific DAO query:
+
+`countActiveTasksForEntityAndOperation(ownerLocalId, entityType = ai_chat_message, entityLocalId = messageId, operation = UPSERT_AI_CHAT_MESSAGE)`.
+
+The SQL filters owner (`identity.localOwnerId` or legacy `local_uninitialized`), entity type, entity id, operation, and active statuses: `PENDING`, `PROCESSING`, `FAILED_RETRYABLE`, `WAITING_FOR_AUTH`. `DONE`, `FAILED_FATAL`, other owners, other entity types, and other operations do not make the message dirty. Dirty local messages are deferred; their queue rows are not deleted or modified. Remote apply creates no new queue rows.
+
+### Final Text And Placeholder Rules
+
+For existing rows:
+
+- User final text is immutable. Any remote user text mismatch is `ImmutableMessageContentConflict`.
+- Assistant local placeholder plus remote final is allowed when immutable fields match. It completes the same local row and does not create a second message.
+- Assistant final plus remote placeholder is invalid remote data and halts the page.
+- Assistant final plus remote final with different text is `ImmutableMessageContentConflict`.
+- Same final text may still merge cards, content JSON, and suggested replies.
+
+Streaming state is in memory and keyed by conversation in `RemoteAiDraftRepository`; Message Merge does not depend on Compose/UI state and does not call repository update paths. A remote final can complete the persistent placeholder row directly through DAO remote-apply update.
+
+Unsupported future `schemaVersion` values are fatal. They are not silently downgraded.
+
+### Tombstone Rules
+
+Remote `ai_chat_messages.deleted_at` is monotonic. The local `AiChatMessageEntity` in Room version 11 added `updatedAt` and `deletedAt` columns. Remote message tombstones map directly to the `deletedAt` column, preserving original text, `assistantCardsJson`, `suggestedRepliesJson`, and original `contentJson`.
+
+Rules:
+
+- Local tombstone plus remote active stays tombstoned.
+- Clean active local plus remote tombstone applies a tombstone when the remote timestamp is not older than the local comparable timestamp.
+- Old remote tombstone with newer local active is ignored.
+- Dirty local plus remote active/tombstone is deferred.
+- Missing local plus remote tombstone inserts a marked tombstone message row to preserve cursor-reset monotonicity.
+
+No hard delete is used. Tombstoning a message never deletes DailyRecord data, meals, food entries, weight data, or card payload history.
+
+### Card JSON Merge
+
+`ChatMessageCardMergePolicy` parses `assistantCardsJson` as a generic JSON tree, not as domain DTOs. Cards align by `id`; same id with different `type` throws `CardMergeConflictException` and rolls back the page. Unknown card types and unknown fields are preserved. Nested objects, `pendingOriginalCard`, `meals`, `weightKg`, null, `{}`, and `[]` retain their semantic distinctions. JSON key order is ignored for equality.
+
+`show_confirm_card` state order is `pending < cancelled < confirmed`. `confirmed` wins over `cancelled`, terminal states never return to `pending`, and repeated application is idempotent.
+
+`date_mismatch_guard_card` states are `pending`, `approved`, and `cancelled`. Terminal states never return to `pending`. `approved` versus `cancelled` resolves to `approved` only when the merged nested original show-confirm card is `confirmed`; otherwise `cancelled` wins. The nested original card remains preserved for history in both outcomes.
+
+Cards without a special state machine keep complete JSON and choose the clean newer-or-tie snapshot deterministically while preserving missing fields from the other side.
+
+### Side Effects
+
+Remote Message Merge can modify only `AiChatMessageEntity` rows and message pull cursor state. It does not call:
+
+- `DayZeroViewModel`
+- `ConfirmFoodRecordUseCase`
+- AI repositories
+- interaction result handlers
+- `ChatSyncQueueWriter`
+- `SyncScheduler`
+- ordinary `AiDraftRepository` insert/update paths
+
+Pulling a `show_confirm_card(state = confirmed)` restores chat history only. It does not write DailyRecord data or enqueue business sync.
+
+### Cursor Scope
+
+Message cursor storage is separate from conversation cursor storage. Both save exact `(serverUpdatedAt, id)` ISO-8601 strings, but each has its own SharedPreferences file. Cursor keys use Supabase `identity.remoteUserId`, matching `auth.uid()`. Dirty checks use the local queue owner `identity.localOwnerId`; the two identities are intentionally not interchangeable.
+
+### Phase 6C-3 Focused Test Coverage
+
+In addition to merger tests (`ChatMessageRemoteMergerTest`, `ChatMessagePullCoordinatorTest`, and `ChatMessageCardMergePolicyTest`), new dedicated verification tests have been added to fully close Phase 6C-3 verification gaps:
+
+1. **Migration Verification (`Migration10to11Test`)**:
+   - Creates a real SQLite database file, sets up the full V10 database schema (including `daily_records`, `sync_queue`, `conversations`, and `ai_chat_messages` tables, foreign keys, and indexes), sets version to 10, inserts 8 historical records covering user message, assistant message, card-only message, null/empty/array `contentJson`, unknown card fields, and multiple messages per conversation.
+   - Upgrades database to V11 using `Room.databaseBuilder` and `DayZeroDatabase.MIGRATION_10_11` with `.allowMainThreadQueries()`.
+   - Asserts that all rows and columns are correctly preserved, `updatedAt` is updated to match `createdAt`, `deletedAt` is default-initialized to `null`, and indexes/foreign keys exist (validated via SQLite PRAGMA queries).
+
+2. **Repository Tombstone Competition Testing (`RemoteAiDraftRepositoryTombstoneTest`)**:
+   - Asserts repository-level mutation boundaries on a real database instance:
+     - **Streaming Final**: Submitting final text to a locally tombstoned placeholder affects 0 rows, preserving `deletedAt`, keeping text empty, hiding from active queries, generating no sync queue entries, and leaving conversation summary untouched.
+     - **Fallback Final**: Submitting fallback response to a tombstoned placeholder behaves identically (affects 0 rows).
+     - **Card Update**: Proves that lookups for tombstoned cards return null, and updates affect 0 rows with no sync queue tasks or summary modifications.
+     - **Active Message normal update (Positive Control)**: Verifies normal updates still work (updates text, advances `updatedAt`, generates sync queue entry with `ai_chat_message` entity type, and updates conversation summary).
+
+3. **Chat Sync Backfill Testing (`DayZeroChatSyncBackfillTest`)**:
+   - Verifies `ChatBackfillCoordinator` behaves correctly:
+     - **Persisted `updatedAt`**: Serializes payloads with exact persisted `updatedAt` (formatted as ISO-8601 UTC string), never using current time.
+     - **Tombstone Backfill**: Outputs correct `deletedAt` in backfill payload.
+     - **Placeholder Skip**: Skips empty assistant placeholder messages (does not enqueue).
+     - **Card-only Final**: Successfully enqueues assistant messages that contain only cards (empty text).
+     - **Idempotency**: Re-running backfill coalesces rather than duplicates sync tasks, keeping the payload stable.
+
+### Phase 6C-3 Regression Log
+
+Executed on 2026-06-21 with `JAVA_HOME = C:\Program Files\Android\Android Studio\jbr`:
+
+- `./gradlew --stop`: SUCCESS, stopped Gradle daemons.
+- `./gradlew clean`: SUCCESS.
+- `./gradlew :core:database:testDebugUnitTest --rerun-tasks`: SUCCESS, ran and passed Room schema validation tests.
+- `./gradlew :core:data:testDebugUnitTest --rerun-tasks`: SUCCESS, ran and passed data module tests (NO-SOURCE, passed).
+- `./gradlew :core:sync:testDebugUnitTest --rerun-tasks`: SUCCESS, ran and passed sync module tests.
+- `./gradlew :app:testDebugUnitTest --rerun-tasks`: SUCCESS, ran and passed all VM, migration, repository tombstone race, and backfill tests.
+- `./gradlew :app:assembleDebug`: SUCCESS, debug build successfully compiled.
+- `./gradlew test --rerun-tasks`: SUCCESS, full test regression passed successfully.
+
+The next phase is Phase 6D: production lifecycle orchestration for Chat Pull (currently not started, production pull lifecycle integration is pending).

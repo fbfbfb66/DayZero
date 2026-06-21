@@ -11,22 +11,25 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface AiChatMessageDao {
     // Compatibility path for the current single-stream chat UI. New history UI should query by conversationId.
-    @Query("SELECT * FROM ai_chat_messages ORDER BY createdAt ASC")
+    @Query("SELECT * FROM ai_chat_messages WHERE deletedAt IS NULL ORDER BY createdAt ASC")
     fun observeAllMessages(): Flow<List<AiChatMessageEntity>>
 
-    @Query("SELECT * FROM ai_chat_messages WHERE conversationId = :conversationId ORDER BY createdAt ASC, id ASC")
+    @Query("SELECT * FROM ai_chat_messages WHERE conversationId = :conversationId AND deletedAt IS NULL ORDER BY createdAt ASC, id ASC")
     fun observeMessagesByConversationId(conversationId: String): Flow<List<AiChatMessageEntity>>
 
-    @Query("SELECT * FROM ai_chat_messages WHERE conversationId = :conversationId ORDER BY createdAt ASC, id ASC")
+    @Query("SELECT * FROM ai_chat_messages WHERE conversationId = :conversationId AND deletedAt IS NULL ORDER BY createdAt ASC, id ASC")
     suspend fun getMessagesByConversationId(conversationId: String): List<AiChatMessageEntity>
 
-    @Query("SELECT * FROM ai_chat_messages WHERE conversationId = :conversationId ORDER BY createdAt DESC, id DESC LIMIT :limit")
+    @Query("SELECT * FROM ai_chat_messages WHERE conversationId = :conversationId AND deletedAt IS NULL ORDER BY createdAt DESC, id DESC LIMIT :limit")
     suspend fun getRecentMessagesByConversationId(conversationId: String, limit: Int): List<AiChatMessageEntity>
 
-    @Query("SELECT * FROM ai_chat_messages WHERE id = :id LIMIT 1")
+    @Query("SELECT * FROM ai_chat_messages WHERE id = :id AND deletedAt IS NULL LIMIT 1")
     suspend fun getMessageById(id: String): AiChatMessageEntity?
 
-    @Query("SELECT * FROM ai_chat_messages WHERE assistantCardsJson IS NOT NULL ORDER BY createdAt DESC, id DESC")
+    @Query("SELECT * FROM ai_chat_messages WHERE id = :id LIMIT 1")
+    suspend fun getMessageByIdIncludingDeleted(id: String): AiChatMessageEntity?
+
+    @Query("SELECT * FROM ai_chat_messages WHERE assistantCardsJson IS NOT NULL AND deletedAt IS NULL ORDER BY createdAt DESC, id DESC")
     suspend fun getMessagesWithCards(): List<AiChatMessageEntity>
 
     @Query(
@@ -47,8 +50,50 @@ interface AiChatMessageDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMessage(message: AiChatMessageEntity)
 
-    @Update
-    suspend fun updateMessage(message: AiChatMessageEntity)
+    @Query(
+        """
+        UPDATE ai_chat_messages
+        SET text = :text,
+            messageType = :messageType,
+            contentJson = :contentJson,
+            assistantCardsJson = :assistantCardsJson,
+            suggestedRepliesJson = :suggestedRepliesJson,
+            updatedAt = :updatedAt
+        WHERE id = :id
+          AND deletedAt IS NULL
+        """
+    )
+    suspend fun updateMessageContentIfActive(
+        id: String,
+        text: String,
+        messageType: String,
+        contentJson: String?,
+        assistantCardsJson: String?,
+        suggestedRepliesJson: String?,
+        updatedAt: Long
+    ): Int
+
+    @Query(
+        """
+        UPDATE ai_chat_messages
+        SET text = :text,
+            contentJson = :contentJson,
+            assistantCardsJson = :assistantCardsJson,
+            suggestedRepliesJson = :suggestedRepliesJson,
+            updatedAt = :updatedAt,
+            deletedAt = :deletedAt
+        WHERE id = :id
+        """
+    )
+    suspend fun applyRemoteMutableFields(
+        id: String,
+        text: String,
+        contentJson: String?,
+        assistantCardsJson: String?,
+        suggestedRepliesJson: String?,
+        updatedAt: Long,
+        deletedAt: Long?
+    ): Int
 
     @Query("DELETE FROM ai_chat_messages")
     suspend fun deleteAllMessages()

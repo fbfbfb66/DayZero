@@ -27,4 +27,7 @@ dependencies {
   implementation(libs.androidx.room.runtime)
   implementation(libs.moshi.kotlin)
   "ksp"(libs.androidx.room.compiler)
+  testImplementation(libs.junit)
+  testImplementation(libs.androidx.junit)
+  testImplementation(libs.robolectric)
 }

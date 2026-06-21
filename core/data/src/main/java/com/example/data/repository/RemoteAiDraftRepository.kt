@@ -118,7 +118,7 @@ class RemoteAiDraftRepository(
             val firstMessageEntity = chatMapper.toEntity(firstMessage, conversationId)
             chatDao.insertMessage(firstMessageEntity)
             chatSyncQueueWriter?.enqueueConversationUpsert(conversation, identity)
-            chatSyncQueueWriter?.enqueueMessageUpsert(firstMessageEntity, identity, updatedAtMillis = now)
+            chatSyncQueueWriter?.enqueueMessageUpsert(firstMessageEntity, identity)
         }
         return conversationId
     }
@@ -158,7 +158,7 @@ class RemoteAiDraftRepository(
             conversationDao.getConversationById(conversationId)?.let { conversation ->
                 chatSyncQueueWriter?.enqueueConversationUpsert(conversation, identity)
             }
-            chatSyncQueueWriter?.enqueueMessageUpsert(messageEntity, identity, updatedAtMillis = updatedAt)
+            chatSyncQueueWriter?.enqueueMessageUpsert(messageEntity, identity)
         }
     }
 
@@ -171,12 +171,23 @@ class RemoteAiDraftRepository(
         val identity = identityProvider.currentIdentity()
         val updatedAt = System.currentTimeMillis()
         database.withTransaction {
-            chatDao.updateMessage(messageEntity)
-            refreshConversationSummaryInTransaction(conversationId, messageWithConversation)
-            conversationDao.getConversationById(conversationId)?.let { conversation ->
-                chatSyncQueueWriter?.enqueueConversationUpsert(conversation, identity)
+            val rowsAffected = chatDao.updateMessageContentIfActive(
+                id = messageEntity.id,
+                text = messageEntity.text,
+                messageType = messageEntity.messageType,
+                contentJson = messageEntity.contentJson,
+                assistantCardsJson = messageEntity.assistantCardsJson,
+                suggestedRepliesJson = messageEntity.suggestedRepliesJson,
+                updatedAt = updatedAt
+            )
+            if (rowsAffected > 0) {
+                val updatedEntity = messageEntity.copy(updatedAt = updatedAt)
+                refreshConversationSummaryInTransaction(conversationId, messageWithConversation)
+                conversationDao.getConversationById(conversationId)?.let { conversation ->
+                    chatSyncQueueWriter?.enqueueConversationUpsert(conversation, identity)
+                }
+                chatSyncQueueWriter?.enqueueMessageUpsert(updatedEntity, identity)
             }
-            chatSyncQueueWriter?.enqueueMessageUpsert(messageEntity, identity, updatedAtMillis = updatedAt)
         }
     }
 

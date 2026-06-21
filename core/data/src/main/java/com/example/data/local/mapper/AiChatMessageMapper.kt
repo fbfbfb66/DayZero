@@ -54,7 +54,9 @@ class AiChatMessageMapper {
             messageType = type,
             choiceCard = choiceCard,
             assistantCards = assistantCards,
-            suggestedReplies = suggestedReplies
+            suggestedReplies = suggestedReplies,
+            updatedAt = entity.updatedAt,
+            deletedAt = entity.deletedAt
         )
     }
 
@@ -80,7 +82,9 @@ class AiChatMessageMapper {
             messageType = domain.messageType.name,
             contentJson = contentJson,
             assistantCardsJson = assistantCardsJson,
-            suggestedRepliesJson = suggestedRepliesJson
+            suggestedRepliesJson = suggestedRepliesJson,
+            updatedAt = domain.updatedAt,
+            deletedAt = domain.deletedAt
         )
     }
 }

@@ -30,5 +30,7 @@ data class AiChatMessageEntity(
     val messageType: String,
     val contentJson: String? = null, // For ChoiceCard details
     val assistantCardsJson: String? = null, // New: For complex assistant cards
-    val suggestedRepliesJson: String? = null // New: For quick replies
+    val suggestedRepliesJson: String? = null, // New: For quick replies
+    val updatedAt: Long = 0L,
+    val deletedAt: Long? = null
 )
