@@ -20,8 +20,13 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -31,6 +36,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavDestination.Companion.hierarchy
@@ -191,9 +197,20 @@ fun MainApp() {
 
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
+            contentWindowInsets = WindowInsets(0.dp),
             snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
             bottomBar = {
-                if (showBottomBar) {
+                AnimatedVisibility(
+                    visible = showBottomBar,
+                    enter = slideInVertically(
+                        initialOffsetY = { it },
+                        animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing)
+                    ) + fadeIn(animationSpec = tween(durationMillis = 350)),
+                    exit = slideOutVertically(
+                        targetOffsetY = { it },
+                        animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing)
+                    ) + fadeOut(animationSpec = tween(durationMillis = 350))
+                ) {
                     NavigationBar(containerColor = WarmBackground) {
                         items.forEach { screen ->
                             val selected = when (screen) {
@@ -226,12 +243,20 @@ fun MainApp() {
                 }
             }
         ) { innerPadding ->
+            val targetBottomPadding = innerPadding.calculateBottomPadding()
+            val animatedBottomPadding by animateDpAsState(
+                targetValue = if (showBottomBar) targetBottomPadding else 0.dp,
+                animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing),
+                label = "bottomPadding"
+            )
             NavHost(
                 navController = navController,
                 startDestination = Screen.Calendar.route,
                 modifier = Modifier
-                    .padding(innerPadding)
-                    .consumeWindowInsets(innerPadding),
+                    .padding(
+                        top = innerPadding.calculateTopPadding(),
+                        bottom = 0.dp
+                    ),
                 enterTransition = {
                     slideInHorizontally(
                         initialOffsetX = { it },
@@ -258,30 +283,34 @@ fun MainApp() {
                 }
             ) {
                 composable(Screen.Calendar.route) {
-                    CalendarScreen(
-                        uiState = uiState,
-                        onNavigateToAi = {
-                            navController.navigate(Screen.AiRecord.route) {
-                                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
-                                launchSingleTop = true
-                                restoreState = true
+                    Box(modifier = Modifier.fillMaxSize().padding(bottom = animatedBottomPadding)) {
+                        CalendarScreen(
+                            uiState = uiState,
+                            onNavigateToAi = {
+                                navController.navigate(Screen.AiRecord.route) {
+                                    popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                                    launchSingleTop = true
+                                    restoreState = true
+                                }
                             }
-                        }
-                    )
+                        )
+                    }
                 }
                 composable(Screen.AiRecord.route) {
-                    AiRecordHomeScreen(
-                        state = aiRecordUiState.history,
-                        isAnalyzing = uiState.isAnalyzing,
-                        onInputChange = aiRecordViewModel::updateHomeInput,
-                        onSubmit = aiRecordViewModel::submitHomeInput,
-                        onOpenConversation = { conversationId ->
-                            aiRecordViewModel.openConversation(conversationId)
-                            navController.navigate(aiConversationRoute(conversationId)) {
-                                launchSingleTop = true
+                    Box(modifier = Modifier.fillMaxSize().padding(bottom = animatedBottomPadding)) {
+                        AiRecordHomeScreen(
+                            state = aiRecordUiState.history,
+                            isAnalyzing = uiState.isAnalyzing,
+                            onInputChange = aiRecordViewModel::updateHomeInput,
+                            onSubmit = aiRecordViewModel::submitHomeInput,
+                            onOpenConversation = { conversationId ->
+                                aiRecordViewModel.openConversation(conversationId)
+                                navController.navigate(aiConversationRoute(conversationId)) {
+                                    launchSingleTop = true
+                                }
                             }
-                        }
-                    )
+                        )
+                    }
                 }
                 composable(
                     route = AI_CONVERSATION_ROUTE,
@@ -307,12 +336,14 @@ fun MainApp() {
                     )
                 }
                 composable(Screen.Trends.route) {
-                    TrendsScreen(
-                        uiState = uiState,
-                        syncStatusUiState = syncStatusUiState,
-                        onManualSync = viewModel::runManualSync,
-                        onManualRestoreCheck = viewModel::runManualRestoreCheck
-                    )
+                    Box(modifier = Modifier.fillMaxSize().padding(bottom = animatedBottomPadding)) {
+                        TrendsScreen(
+                            uiState = uiState,
+                            syncStatusUiState = syncStatusUiState,
+                            onManualSync = viewModel::runManualSync,
+                            onManualRestoreCheck = viewModel::runManualRestoreCheck
+                        )
+                    }
                 }
             }
         }
