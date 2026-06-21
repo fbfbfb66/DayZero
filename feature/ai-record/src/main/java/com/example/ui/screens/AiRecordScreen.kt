@@ -40,6 +40,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -240,12 +241,18 @@ fun AiConversationScreen(
     }
 
     var inputText by remember(conversationId) { mutableStateOf("") }
-    val listState = rememberLazyListState()
     val messages = detailState.messages
     val isCurrentConversationAnalyzing = appState.isAnalyzing && appState.activeConversationId == conversationId
     val hasAssistantPlaceholder = messages.lastOrNull()?.let { message ->
         message.role == ChatRole.Assistant && message.text.isBlank() && message.assistantCards.isEmpty()
     } == true
+
+    val listState = remember(conversationId) {
+        val lastMsgIndex = (messages.size - 1).coerceAtLeast(0)
+        val hasAnalyzingItem = isCurrentConversationAnalyzing && !hasAssistantPlaceholder
+        val initialIndex = if (hasAnalyzingItem) messages.size else lastMsgIndex
+        LazyListState(firstVisibleItemIndex = initialIndex)
+    }
 
     val currentMessages by rememberUpdatedState(messages)
     var prevSize by remember(conversationId) { mutableStateOf(messages.size) }
