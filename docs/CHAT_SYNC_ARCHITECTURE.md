@@ -1,6 +1,6 @@
 # DayZero Chat Sync Architecture
 
-Phase 6A established the remote schema and client-side data contract for AI conversation sync. Phase 6B adds local enqueue, Chat Push, and historical Chat Backfill. Phase 6C-1 adds pull transport, Phase 6C-2 adds Conversation Merge, and Phase 6C-3 adds Message/Card Merge. Production Chat Pull lifecycle integration, chat deletion UI, search, rename, pinning, and login/account binding are still not implemented.
+Phase 6A established the remote schema and client-side data contract for AI conversation sync. Phase 6B adds local enqueue, Chat Push, and historical Chat Backfill. Phase 6C-1 adds pull transport, Phase 6C-2 adds Conversation Merge, and Phase 6C-3 adds Message/Card Merge. Phase 6D-1 implements the `ChatPullCoordinator` orchestrator. Phase 6D-2 (SyncScheduler / Hilt integration), Phase 6D-3 (Health Reporting), chat deletion UI, search, rename, pinning, and login/account binding are still not implemented.
 
 ## Current Runtime Behavior
 
@@ -126,7 +126,7 @@ Message `id`, `conversation_id`, `role`, `message_type`, and `created_at` are im
 
 ## Phase Boundary
 
-Phase 6C-3 implements local Message/Card Merge but still does not wire Chat Pull into production lifecycle. It does not implement chat deletion UI, remote hard delete, account binding, or anonymous identity recovery after uninstall.
+Phase 6C-3 implements local Message/Card Merge. Phase 6D-1 implements the `ChatPullCoordinator`. Phase 6D-2 and 6D-3 (production lifecycle wiring and health reporting) are pending. Chat deletion UI, remote hard delete, account binding, or anonymous identity recovery after uninstall are pending.
 
 ## Phase 6C-1 Chat Pull Transport
 
@@ -297,4 +297,24 @@ Executed on 2026-06-21 with `JAVA_HOME = C:\Program Files\Android\Android Studio
 - `./gradlew :app:assembleDebug`: SUCCESS, debug build successfully compiled.
 - `./gradlew test --rerun-tasks`: SUCCESS, full test regression passed successfully.
 
-The next phase is Phase 6D: production lifecycle orchestration for Chat Pull (currently not started, production pull lifecycle integration is pending).
+The next phase was Phase 6D-1.
+
+## Phase 6D-1 Chat Pull Production Orchestrator
+
+Phase 6D-1 implements `ChatPullCoordinator` in `:core:sync` which wires the `ChatConversationPullCoordinator` and `ChatMessagePullCoordinator` into a unified pull sequence.
+
+### Orchestration Contract
+- **Strict Sequential Order**: Conversations are always pulled before Messages.
+- **Fail-Fast Conversation**: If `pullConversations` returns `RetryableFailure` or `FatalFailure`, the message pull is skipped entirely, and the error propagates directly.
+- **Message Errors Retain Conversation Success**: If conversations succeed but messages fail, the coordinator returns `MessageRetryableFailure` or `MessageFatalFailure`, carrying the successful `ChatConversationMergeStats` so partial metrics are not lost.
+- **Missing Parent Un-Recovered**: `DeferredMissingParent` errors from the message layer are intentionally un-recovered within the orchestrator itself. They are mapped to a `MessageRetryableFailure`, which stops message cursor advancement and allows the next sync run to retry.
+- **Single-Flight Concurrency**: Handled via `Mutex.tryLock()`. Concurrent overlapping calls to `pullAll()` skip the operation and return `ChatPullResult.SkippedAlreadyRunning`, ensuring only one sync loop runs at a time.
+
+### Phase 6D-1 Regression Log
+
+Executed on 2026-06-21 with `JAVA_HOME = C:\Program Files\Android\Android Studio\jbr`:
+
+- `./gradlew :core:sync:testDebugUnitTest --rerun-tasks`: SUCCESS, ChatPullCoordinatorTest passed with Log mocked.
+- `./gradlew :app:testDebugUnitTest :app:assembleDebug --rerun-tasks`: SUCCESS.
+
+Phase 6D-2 (Scheduler / Hilt integration) and Phase 6D-3 (Health Reporting / End-to-End Test) are next.

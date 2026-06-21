@@ -107,13 +107,21 @@ Note: Several legacy interfaces/classes still exist in migrated modules for comp
 - Stream prompt version: `stream_compact_v1`
 - `verify_jwt=false`
 
+## Sync Architecture
+
+- **Pull-based sync**: DayZero uses a pull-based sync engine, coordinated locally via `PullCoordinator`.
+- **Separate Chat vs Business Record pipelines**: The sync process is strictly separated into Daily Record (business record) sync and Chat (AI Conversation) sync.
+- Chat push happens immediately via `ChatSyncQueueWriter`, while business record push uses `SyncQueueWriter`.
+- Backfill scans for missing items and populates the sync queue.
+
 ## Architecture reference
 
 - AI architecture reference is `docs/AI_ASSISTANT_TURN_V2_ARCHITECTURE.md`.
 - Data sync architecture reference is `docs/DATA_SYNC_ARCHITECTURE.md`.
+- Chat sync architecture reference is `docs/CHAT_SYNC_ARCHITECTURE.md`.
 - Current code architecture is now multi-module and Hilt-based. Future changes should respect module boundaries: UI/feature modules must not depend directly on Room DAO, Retrofit services, Supabase gateways, or sync coordinators; domain/use cases must not depend on Compose, Android UI, Room entities, or remote DTOs.
 - Future AI history refinements must keep DayZero's current visual language, rounded corners, spacing, typography, motion, and fresh style. Reuse existing components and theme; do not drop in generic Material sample pages or introduce a mismatched design system.
-- Next sync step is Phase 6D: production lifecycle orchestration for Chat Pull. General architecture work can continue narrowing `DayZeroViewModel` into feature-specific state holders.
+- Phase 6D-1 complete: `ChatPullCoordinator` implemented for production lifecycle orchestration, wiring conversation and message pulls sequentially with strict single-flight blocking. True `SyncScheduler` / Hilt wiring pending in Phase 6D-2.
 
 ### Phase 6A Chat Sync Contract
 
@@ -180,7 +188,17 @@ Note: Several legacy interfaces/classes still exist in migrated modules for comp
 - Room Schema Migration Validation: `Migration10to11Test` was updated to perform true schema validation by initializing a real SQLite database file at version 10 (setting tables, indexes, foreign keys, version PRAGMA, and inserting 8 historical test rows), upgrading via Room's databaseBuilder with `MIGRATION_10_11` using `.allowMainThreadQueries()`, and verifying that the database was successfully opened, all rows preserved (user message, assistant message, card-only message, contentJson = null, contentJson = {}, contentJson = [], unknown assistant card fields, multiple messages per conversation), all columns preserved with default new values (`updatedAt = createdAt`, `deletedAt = null`), and indexes/foreign keys exist.
 - Repository Tombstone Race Testing: `RemoteAiDraftRepositoryTombstoneTest` was added in `:app` module to test Streaming final, Fallback final, Card updates, and Active message update behaviors. It verified that updating a locally tombstoned message does not resurrect it (the conditional UPDATE affects 0 rows, so it does not enqueue sync queue tasks or update the conversation summary) while active message updates continue to succeed normally.
 - Chat Sync Backfill Testing: `DayZeroChatSyncBackfillTest` was added to verify `ChatBackfillCoordinator` behavior, including using the persisted `updatedAt`/`deletedAt` timestamps in the sync queue payload (never using current time or `createdAt`), skipping empty assistant placeholders, enqueuing card-only messages, and demonstrating idempotency (re-running backfill coalesces rather than duplicating tasks and leaves payloads identical).
-- Phase boundary: Phase 6D has not started yet. Production Pull lifecycle wiring remains pending.
+- Phase boundary: Phase 6D-1 complete (`ChatPullCoordinator` built). Phase 6D-2 (Scheduler / Hilt integration) and 6D-3 (Health Reporting / End-to-End Test) remain pending.
+
+### Phase 6D-1 Chat Pull Production Orchestrator
+- Orchestrator implemented: `ChatPullCoordinator` wraps both `ChatConversationPullCoordinator` and `ChatMessagePullCoordinator` in `:core:sync`.
+- Production running behavior: Still identical to Phase 6C-3 because it is NOT wired to any production trigger.
+- Not integrated: Scheduler, Hilt, Sync Health, and UI are completely untouched.
+- Execution order: Strict sequential flow. `pullConversations` is executed first; `pullMessages` is executed only if conversations succeed.
+- Error Handling: Errors from either layer are mapped to a sealed `ChatPullResult`. A conversation failure (retryable/fatal) skips message pull. A message failure propagates the error but retains the successful `ChatConversationMergeStats`. Missing parents (`DeferredMissingParent`) are un-recovered within the pull orchestrator and bubble up as a message retryable failure, preventing message cursor advancement.
+- Single-Flight concurrency: Enforced via `Mutex.tryLock()`. Concurrent calls return `ChatPullResult.SkippedAlreadyRunning`.
+- Tests added: `ChatPullCoordinatorTest` using MockK validates sequential execution, failure short-circuiting, success-stat retention, and `Mutex` concurrency locking.
+- Next phase: Phase 6D-2 has not started. Phase 6D-2 will inject `ChatPullCoordinator` into `InProcessSyncScheduler` / Hilt production entry points.
 
 ### AI History & Conversation Foundation (Phases 1, 2, 3 & 4 Technical Details)
 

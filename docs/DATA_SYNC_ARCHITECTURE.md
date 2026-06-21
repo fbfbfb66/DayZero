@@ -43,9 +43,9 @@ Phase 6C-3 message dirty detection uses `SyncQueueDao.countActiveTasksForEntityA
 
 Message immutable fields are `id`, `conversationId`, `role`, `messageType`, and `createdAt`. User final text and assistant final text are immutable; only a local empty assistant placeholder may be completed by a remote final snapshot. Message tombstones are monotonic. Remote message tombstones map directly to the `deletedAt` column, preserving original text and card JSON. Card merge preserves unknown JSON fields, `pendingOriginalCard`, `meals`, `weightKg`, null, empty objects, and `[]`; `show_confirm_card` follows `pending < cancelled < confirmed`, and Date Guard terminal conflicts resolve with the nested original card state.
 
-Production Chat Pull lifecycle integration, multi-device lifecycle orchestration, chat deletion UI, and account binding remain unimplemented. The next sync phase is Phase 6D.
+Production Chat Pull lifecycle integration, multi-device lifecycle orchestration, chat deletion UI, and account binding remain unimplemented. Phase 6D-1 added the `ChatPullCoordinator` orchestrator for chat sync. Please see `docs/CHAT_SYNC_ARCHITECTURE.md` for full Chat Pull orchestration details. Phase 6D-2 will wire it into the `SyncScheduler`.
 
-Phase 6C-3 regression was run on 2026-06-21: `:core:database:testDebugUnitTest --rerun-tasks` (verifying Room schema migration 10->11 via `Migration10to11Test`), `:core:data:testDebugUnitTest --rerun-tasks` (data layer), `:core:sync:testDebugUnitTest --rerun-tasks` (sync module), and `:app:testDebugUnitTest --rerun-tasks` (verifying `RemoteAiDraftRepositoryTombstoneTest` for tombstone updates, and `DayZeroChatSyncBackfillTest` for backfill payloads and idempotency) all completed successfully alongside `:app:assembleDebug` and `./gradlew test --rerun-tasks`. Phase 6D has not started yet.
+Phase 6C-3 regression was run on 2026-06-21: `:core:database:testDebugUnitTest --rerun-tasks` (verifying Room schema migration 10->11 via `Migration10to11Test`), `:core:data:testDebugUnitTest --rerun-tasks` (data layer), `:core:sync:testDebugUnitTest --rerun-tasks` (sync module), and `:app:testDebugUnitTest --rerun-tasks` (verifying `RemoteAiDraftRepositoryTombstoneTest` for tombstone updates, and `DayZeroChatSyncBackfillTest` for backfill payloads and idempotency) all completed successfully alongside `:app:assembleDebug` and `./gradlew test --rerun-tasks`. Phase 6D-1 was completed successfully with the `ChatPullCoordinator` tests.
 
 The AI runtime is not changed in this stage. `assistant-turn-v2-stream` remains the primary AI entry, `assistant-turn-v2` remains fallback, and Kimi prompts/protocols are unchanged. AI returns replies and actions only; the client performs deterministic database writes after user confirmation.
 
@@ -162,7 +162,7 @@ Key points:
 
 - `conversation_date` is a pure date and must not be timezone shifted.
 - Business timestamps are distinct from `server_updated_at`.
-- Chat Pull uses `(server_updated_at, id)` as the stable cursor for conversation and message transport/coordinator code. Production lifecycle integration remains pending.
+- Chat Pull uses `(server_updated_at, id)` as the stable cursor for conversation and message transport/coordinator code. Phase 6D-1 provides the unified `ChatPullCoordinator`, but production lifecycle integration (`SyncScheduler` wiring) remains pending in Phase 6D-2.
 - `assistant_cards` is `jsonb` and must preserve full `assistantCardsJson`, including unknown future fields.
 - Streaming deltas, input drafts, route state, and Compose temporary state are not part of the remote contract.
 - Phase 6B implements Chat Push and Chat Backfill through the existing sync queue.
@@ -187,7 +187,7 @@ The scheduler runs:
 5. existing business Pull;
 6. health refresh.
 
-`UPSERT_AI_CONVERSATION` is ordered before `UPSERT_AI_CHAT_MESSAGE`, so parent conversations are pushed before messages. Phase 6C-3 still does not add Chat Pull to the production scheduler lifecycle.
+`UPSERT_AI_CONVERSATION` is ordered before `UPSERT_AI_CHAT_MESSAGE`, so parent conversations are pushed before messages. Phase 6D-1 provides the `ChatPullCoordinator` for pulling, but Phase 6D-2 will actually add Chat Pull to the production scheduler lifecycle.
 
 ## Logging
 
