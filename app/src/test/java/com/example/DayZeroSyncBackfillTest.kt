@@ -390,6 +390,32 @@ class DayZeroSyncBackfillTest {
     }
 
     @Test
+    fun pullDoesNotOverwriteSyncedLocalRecordWithActiveQueueTask() = runTest {
+        val local = mapper.toEntity(sampleConfirmedRecord().copy(id = "remote-record-1"), LOCAL_OWNER_ID)
+            .copy(
+                syncStatus = DayZeroSyncConstants.STATUS_SYNCED,
+                lastSyncedAt = 1_000L,
+                updatedAt = 1_000L,
+                aiSummary = "local queued summary"
+            )
+        database.dailyRecordDao().upsertRecord(local)
+        database.syncQueueDao().insert(goodQueueTask("remote-record-1", 1_500L))
+        val pullCoordinator = createPullCoordinator(
+            gateway = FakePullGateway(
+                dailyRecords = listOf(remoteDailyRecord("remote-record-1", updatedAt = 2_000L))
+            )
+        )
+
+        val stats = pullCoordinator.runOnce(com.example.data.sync.PullMode.INCREMENTAL)
+
+        assertEquals(1, stats.conflictCount)
+        val after = database.dailyRecordDao().getRecordByClientIdIncludingDeleted("remote-record-1")
+        require(after != null)
+        assertEquals("local queued summary", after.aiSummary)
+        assertEquals(1, database.syncQueueDao().countByStatus(DayZeroSyncConstants.STATUS_PENDING))
+    }
+
+    @Test
     fun pullAppliesRemoteSoftDeleteToSyncedLocalRecord() = runTest {
         val local = mapper.toEntity(sampleConfirmedRecord().copy(id = "remote-record-1"), LOCAL_OWNER_ID)
             .copy(

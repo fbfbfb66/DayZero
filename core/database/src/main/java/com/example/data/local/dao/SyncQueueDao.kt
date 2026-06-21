@@ -153,6 +153,23 @@ interface SyncQueueDao {
 
     @Query(
         """
+        SELECT COUNT(*) FROM sync_queue
+        WHERE ownerLocalId IN (:ownerLocalId, 'local_uninitialized')
+          AND entityType = :entityType
+          AND entityLocalId = :entityLocalId
+          AND operation = :operation
+          AND status IN ('PENDING', 'PROCESSING', 'FAILED_RETRYABLE', 'WAITING_FOR_AUTH')
+        """
+    )
+    suspend fun countActiveTasksForEntityAndOperation(
+        ownerLocalId: String,
+        entityType: String,
+        entityLocalId: String,
+        operation: String
+    ): Int
+
+    @Query(
+        """
         UPDATE sync_queue
         SET payloadJson = :payloadJson,
             operation = :operation,

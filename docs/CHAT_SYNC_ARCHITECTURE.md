@@ -138,3 +138,32 @@ Phase 6C-1 implements the pure network transport for Chat Pull without integrati
 - **Zero Local Mutations**: This phase reads strictly from the server. It still does not write to Room, does not implement conflict merge logic, does not push the formal `PullStateStore` cursor, and does not run inside the production `PullCoordinator`. 
 
 The next phase remains Phase 6C-2: Conversation Merge.
+
+## Phase 6C-2 Chat Remote Pull Conversation Merge
+
+Phase 6C-2 implements conversation-only remote pull merge. It does not implement Message/Card Merge and is not wired into the production pull scheduler yet.
+
+- **Direct DAO Writing (No Push Loop)**: `ChatConversationRemoteMerger` writes remote conversation snapshots directly through `ConversationDao` and never enqueues `SyncQueue` items while applying remote state.
+- **Dirty Query API**: `SyncQueueDao.countActiveTasksForEntity(...)` remains a generic operation-agnostic query for existing daily record pull behavior. Conversation merge uses `countActiveTasksForEntityAndOperation(...)` with `entityType = ai_conversation`, `operation = UPSERT_AI_CONVERSATION`, owner filtering (`ownerLocalId` or legacy `local_uninitialized`), entity id filtering, and active statuses (`PENDING`, `PROCESSING`, `FAILED_RETRYABLE`, `WAITING_FOR_AUTH`). Other chat operations such as `UPSERT_AI_CHAT_MESSAGE` do not make a conversation dirty.
+- **Owner And Cursor Scope**: dirty checks use local queue owner identity (`identity.localOwnerId`). Pull cursor state uses Supabase `identity.remoteUserId`, matching `auth.uid()`. These identities are intentionally separate and must not be interchanged.
+- **Tombstone Rules**: local tombstones are monotonic for ordinary Pull: local deleted plus remote active stays deleted, even when timestamps tie or remote is newer. Remote tombstones soft-delete clean active local records when `remote.updatedAt >= local.updatedAt`; old remote tombstones are ignored when local clean active is newer; dirty local records defer both remote active and remote tombstone snapshots.
+- **Existing Parent Safety**: when a local conversation already exists, mutable remote changes are applied only with `UPDATE` (`updateConversationSummary` or `softDeleteConversation`). The merger inserts only when no local parent row exists, avoiding SQLite `REPLACE` delete/reinsert behavior and protecting `ai_chat_messages` from `ON DELETE CASCADE`.
+- **Immutable Conflicts**: mismatched `conversationDate` or `createdAt` throws `ImmutableConflictException` out of the Room `withTransaction` block. The whole page is rolled back, the cursor is not saved, the queue is unchanged, and existing messages remain unchanged.
+- **Exact-Timestamp Tie**: when local has no active matching push queue and business `updatedAt` is equal but mutable fields differ, the remote mutable state is accepted as the deterministic convergence result. This rule does not apply to immutable fields or tombstone restoration.
+- **Cursor Persistence**: `ChatConversationPullStateStore` stores `serverUpdatedAt` and `id` together under the Supabase remote user id with synchronous `commit()`. If saving fails, the coordinator returns retryable failure so the page can be replayed.
+- **Tests**: regression tests cover operation-specific dirty checks, generic daily-record dirty behavior, tombstone monotonicity, repeated page application, exact timestamp ties, old remote rows, soft delete, message row preservation, immutable conflict page rollback, cursor user isolation, and refresh user-id mismatch blocking.
+
+### Phase 6C-2 Regression Log
+
+Executed on 2026-06-21 with `JAVA_HOME = C:\Program Files\Android\Android Studio\jbr`:
+
+- `./gradlew --stop`: SUCCESS, stopped 1 Gradle daemon.
+- `./gradlew clean`: SUCCESS.
+- `./gradlew :core:database:testDebugUnitTest`: SUCCESS; task was `NO-SOURCE`.
+- `./gradlew :core:data:testDebugUnitTest`: SUCCESS; task was `NO-SOURCE`.
+- `./gradlew :core:sync:testDebugUnitTest`: SUCCESS; formal run reused the build cache after the same source set had already passed in a focused pre-regression run.
+- `./gradlew :app:testDebugUnitTest`: SUCCESS; formal run reused the build cache after the same source set had already passed in a focused pre-regression run.
+- `./gradlew :app:assembleDebug`: SUCCESS; debug APK assembled. Gradle warned that `libandroidx.graphics.path.so` could not be stripped and was packaged as-is.
+- `./gradlew test`: SUCCESS.
+
+Phase 6C-3 has not started. Message/Card Merge, production Pull lifecycle integration, global `PullCoordinator` integration, `SyncScheduler` integration, UI changes, AI prompt changes, and Edge Function changes remain out of scope.

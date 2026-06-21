@@ -151,6 +151,34 @@ class SupabaseAnonymousIdentityProviderTest {
     }
 
     @Test
+    fun refreshUserIdMismatchBlocksCloudIdentityAndGatewayReturnsFatal() = runTest {
+        saveStoredSession(accessToken = "access-old", refreshToken = "refresh-old", expiresAt = nowSeconds() - 10)
+        val auth = RecordingAuthInterceptor(
+            refreshResponses = ArrayDeque(
+                listOf(AuthResponse.success("user-b", "access-new", "refresh-new"))
+            )
+        )
+        val provider = provider(auth)
+
+        val session = provider.currentSessionOrNull()
+        val gatewayResult = SupabaseRemoteSyncGateway(
+            okHttpClient = OkHttpClient.Builder().addInterceptor(auth).build(),
+            sessionProvider = provider,
+            supabaseUrl = SUPABASE_URL,
+            anonKey = ANON_KEY,
+            isConfigured = true
+        ).upsertDailyRecord(samplePayload())
+
+        assertEquals(null, session)
+        assertEquals("access-old", authPrefs().getString(KEY_ACCESS_TOKEN, null))
+        assertEquals("refresh-old", authPrefs().getString(KEY_REFRESH_TOKEN, null))
+        assertEquals(1, auth.refreshCount)
+        assertEquals(0, auth.signupCount)
+        assertTrue(provider.currentSessionStatus() is SupabaseAuthSessionStatus.RefreshPermanentlyRejected)
+        assertTrue(gatewayResult is RemoteSyncResult.FatalFailure)
+    }
+
+    @Test
     fun firstRunSignsUpOnceThenReusesStoredSession() = runTest {
         val auth = RecordingAuthInterceptor(
             signupResponses = ArrayDeque(

@@ -31,7 +31,13 @@ Phase 6A added the remote schema and client data contract for chat sync. The rem
 
 Phase 6B adds local chat enqueue, Chat Push, and historical Chat Backfill. Real-device verification of Chat Push has been successfully completed: new conversations and unique assistant final messages successfully push; placeholder and streaming delta messages are not uploaded; card JSONB is stored natively without double-encoding; card updates update the same message ID without duplication; and backfill execution is idempotent. Chat push runs automatically via SyncScheduler. 
 
-Phase 6C-1 implements the pure network transport for Chat Pull using `(server_updated_at, id)` composite pagination. It reads real remote data accurately but does not yet write to Room or merge with the database. Chat Pull integration, multi-device merge, chat deletion UI, and account binding remain unimplemented.
+Phase 6C-1 implements the pure network transport for Chat Pull using `(server_updated_at, id)` composite pagination. It reads real remote data accurately but does not yet write to Room or merge with the database.
+
+Phase 6C-2 implements conversation-only remote merge behind `ChatConversationRemoteMerger` and `ChatConversationPullCoordinator`. It writes remote conversations directly to Room without creating push queue items. Conversation dirty detection uses `SyncQueueDao.countActiveTasksForEntityAndOperation(...)` with owner, entity type, entity id, `UPSERT_AI_CONVERSATION`, and active status filters; the older generic `countActiveTasksForEntity(...)` remains operation-agnostic for daily record pull semantics. Tombstones are monotonic, existing parent conversations are updated with `UPDATE` rather than `REPLACE`, immutable conflicts roll back the whole page transaction, and conversation cursors are scoped by Supabase `remoteUserId`.
+
+Phase 6C-2 regression was run on 2026-06-21: `clean`, `:core:database:testDebugUnitTest`, `:core:data:testDebugUnitTest`, `:core:sync:testDebugUnitTest`, `:app:testDebugUnitTest`, `:app:assembleDebug`, and root `test` all completed successfully.
+
+Production Chat Pull lifecycle integration, Message/Card Merge, multi-device message reconciliation, chat deletion UI, and account binding remain unimplemented.
 
 The AI runtime is not changed in this stage. `assistant-turn-v2-stream` remains the primary AI entry, `assistant-turn-v2` remains fallback, and Kimi prompts/protocols are unchanged. AI returns replies and actions only; the client performs deterministic database writes after user confirmation.
 
@@ -172,7 +178,7 @@ The scheduler runs:
 5. existing business Pull;
 6. health refresh.
 
-`UPSERT_AI_CONVERSATION` is ordered before `UPSERT_AI_CHAT_MESSAGE`, so parent conversations are pushed before messages. Phase 6B does not add Chat Pull.
+`UPSERT_AI_CONVERSATION` is ordered before `UPSERT_AI_CHAT_MESSAGE`, so parent conversations are pushed before messages. Phase 6C-2 still does not add Chat Pull to the production scheduler lifecycle.
 
 ## Logging
 

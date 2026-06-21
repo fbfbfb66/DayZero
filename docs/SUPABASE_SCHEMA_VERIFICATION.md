@@ -345,6 +345,19 @@ Phase 6C-1 read access and pagination mechanisms have been verified against the 
 - **Verified**: Raw JSONB extraction successfully extracts the `assistant_cards` field exactly as it exists in Supabase without field truncation or Moshi coercion errors.
 - **Verified**: 401/403 HTTP errors properly trigger exactly one controlled `forceRefreshSession` and retry. Temporary and permanent identity errors correctly map to `RetryableFailure` and `FatalFailure`.
 - **Note**: No local database modifications were made. The results are contained purely within remote data models.
+
+## Phase 6C-2 Conversation Merge Verification
+
+Phase 6C-2 is client-side Room merge work and does not change the Supabase schema, RLS policies, grants, triggers, indexes, or migrations.
+
+- **Verified locally**: Conversation dirty detection uses the dedicated `countActiveTasksForEntityAndOperation(...)` query with owner, entity type, entity id, `UPSERT_AI_CONVERSATION`, and active status filters. The generic `countActiveTasksForEntity(...)` query remains operation-agnostic for existing daily record pull behavior.
+- **Verified locally**: `local_uninitialized` is treated only as a legacy local queue owner fallback. Supabase cursor scope uses `identity.remoteUserId`, matching `auth.uid()`, and is not mixed with local owner ids.
+- **Verified locally**: Tombstone merge is monotonic. Local deleted conversations are not resurrected by ordinary remote active pull; clean active conversations apply new remote tombstones; old remote tombstones are ignored; dirty local rows defer remote active and tombstone snapshots.
+- **Verified locally**: Existing local conversation parents are updated with `UPDATE` only, avoiding `REPLACE` cascade risk for `ai_chat_messages`.
+- **Verified locally**: Immutable conversation conflicts throw out of the Room page transaction, rolling back prior rows in that page and preventing cursor advancement.
+- **Verified locally**: Exact timestamp ties accept remote mutable fields only when local has no active matching push queue and immutable fields match. This rule does not restore tombstones.
+- **Regression run**: On 2026-06-21, `./gradlew clean`, `:core:database:testDebugUnitTest`, `:core:data:testDebugUnitTest`, `:core:sync:testDebugUnitTest`, `:app:testDebugUnitTest`, `:app:assembleDebug`, and `./gradlew test` all completed successfully.
+- **Note**: Phase 6C-3 Message/Card Merge has not started, and conversation pull is not yet wired into the production sync scheduler lifecycle.
 ## Partial Pull Verification
 
 When validating pull reliability, check these failure modes:
