@@ -18,6 +18,7 @@ import com.example.domain.model.ai.assistant.DateMismatchGuardCardPayload
 import com.example.domain.repository.AiDraftRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -43,6 +44,7 @@ class RemoteAiDraftRepository(
     }
 
     private val streamingStates = kotlinx.coroutines.flow.MutableStateFlow<Map<String, StreamingState>>(emptyMap())
+    private val repositoryScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default)
 
     data class StreamingState(
         val conversationId: String,
@@ -56,15 +58,32 @@ class RemoteAiDraftRepository(
     }
 
     override fun clearStreamingState(conversationId: String) {
+        val current = streamingStates.value[conversationId]
+        if (current != null) {
+            streamingStates.value = streamingStates.value + (conversationId to current.copy(isStreaming = false))
+        }
+    }
+
+    private fun clearStreamingStateActual(conversationId: String) {
         streamingStates.value = streamingStates.value - conversationId
     }
 
     override fun observeChatMessages(): Flow<List<AiChatMessage>> {
         return kotlinx.coroutines.flow.combine(chatDao.observeAllMessages(), streamingStates) { entities, states ->
             entities.map { chatMapper.toDomain(it) }.map { msg ->
-                val state = states[msg.conversationId]
-                if (state != null && msg.id == state.messageId) {
-                    msg.copy(text = state.text)
+                val convId = msg.conversationId
+                val state = if (convId != null) states[convId] else null
+                if (state != null && msg.id == state.messageId && convId != null) {
+                    if (msg.text.isNotBlank() || msg.assistantCards.isNotEmpty()) {
+                        if (!state.isStreaming) {
+                            repositoryScope.launch {
+                                clearStreamingStateActual(convId)
+                            }
+                        }
+                        msg
+                    } else {
+                        msg.copy(text = state.text)
+                    }
                 } else {
                     msg
                 }
@@ -77,7 +96,16 @@ class RemoteAiDraftRepository(
             val state = states[conversationId]
             entities.map { chatMapper.toDomain(it) }.map { msg ->
                 if (state != null && msg.id == state.messageId) {
-                    msg.copy(text = state.text)
+                    if (msg.text.isNotBlank() || msg.assistantCards.isNotEmpty()) {
+                        if (!state.isStreaming) {
+                            repositoryScope.launch {
+                                clearStreamingStateActual(conversationId)
+                            }
+                        }
+                        msg
+                    } else {
+                        msg.copy(text = state.text)
+                    }
                 } else {
                     msg
                 }

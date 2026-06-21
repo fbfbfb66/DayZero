@@ -244,4 +244,48 @@ class SupabaseChatRemotePullGatewayTest {
         assertEquals("c3", page.nextCursor?.id)
         assertTrue(page.hasMore)
     }
+
+    @Test
+    fun `parseRemoteTime - Z format parses to correct epoch millis`() {
+        val gateway = SupabaseChatRemotePullGateway(mockHttpClient(), sessionProvider, isConfigured = true)
+        val epoch = gateway.parseRemoteTime("2026-06-21T13:39:20.154Z")
+        assertEquals(1782049160154L, epoch)
+    }
+
+    @Test
+    fun `parseRemoteTime - plus 00 00 offset format parses to same epoch millis`() {
+        val gateway = SupabaseChatRemotePullGateway(mockHttpClient(), sessionProvider, isConfigured = true)
+        val epoch = gateway.parseRemoteTime("2026-06-21T13:39:20.154+00:00")
+        assertEquals(1782049160154L, epoch)
+    }
+
+    @Test
+    fun `parseRemoteTime - microsecond format parses cleanly`() {
+        val gateway = SupabaseChatRemotePullGateway(mockHttpClient(), sessionProvider, isConfigured = true)
+        // .123456 should parse and convert to milliseconds by truncating/dividing, returning 154 ms
+        val epoch = gateway.parseRemoteTime("2026-06-21T13:39:20.154321+00:00")
+        assertEquals(1782049160154L, epoch)
+    }
+
+    @Test
+    fun `parseRemoteTime - positive and negative offsets parse correctly`() {
+        val gateway = SupabaseChatRemotePullGateway(mockHttpClient(), sessionProvider, isConfigured = true)
+        val positive = gateway.parseRemoteTime("2026-06-21T13:39:20.154+08:00")
+        assertEquals(1782020360154L, positive) // 8 hours earlier in UTC
+
+        val negative = gateway.parseRemoteTime("2026-06-21T13:39:20.154-05:00")
+        assertEquals(1782067160154L, negative) // 5 hours later in UTC
+    }
+
+    @Test(expected = java.time.format.DateTimeParseException::class)
+    fun `parseRemoteTime - invalid format throws DateTimeParseException`() {
+        val gateway = SupabaseChatRemotePullGateway(mockHttpClient(), sessionProvider, isConfigured = true)
+        gateway.parseRemoteTime("invalid-date-time-string")
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun `parseRemoteTime - blank string throws IllegalArgumentException`() {
+        val gateway = SupabaseChatRemotePullGateway(mockHttpClient(), sessionProvider, isConfigured = true)
+        gateway.parseRemoteTime("   ")
+    }
 }

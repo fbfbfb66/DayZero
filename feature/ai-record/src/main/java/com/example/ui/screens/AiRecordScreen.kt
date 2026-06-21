@@ -9,12 +9,16 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.updateTransition
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -57,6 +61,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -87,6 +93,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.delay
 import java.util.Locale
 
 object AiRecordTestTags {
@@ -240,9 +247,67 @@ fun AiConversationScreen(
         message.role == ChatRole.Assistant && message.text.isBlank() && message.assistantCards.isEmpty()
     } == true
 
+    val currentMessages by rememberUpdatedState(messages)
+    var prevSize by remember(conversationId) { mutableStateOf(messages.size) }
+    var prevAnalyzing by remember(conversationId) { mutableStateOf(isCurrentConversationAnalyzing) }
+    var userInterrupted by remember(conversationId) { mutableStateOf(false) }
+    var followActive by remember(conversationId) { mutableStateOf(false) }
+
+    LaunchedEffect(isCurrentConversationAnalyzing) {
+        if (isCurrentConversationAnalyzing) {
+            followActive = true
+        } else {
+            // Keep follow active for a short duration to allow final cards/layout to render and scroll
+            delay(800)
+            followActive = false
+        }
+    }
+
+    LaunchedEffect(listState.interactionSource) {
+        listState.interactionSource.interactions.collect { interaction ->
+            if (interaction is DragInteraction.Start) {
+                userInterrupted = true
+            }
+        }
+    }
+
     LaunchedEffect(messages.size, isCurrentConversationAnalyzing) {
-        if (messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.lastIndex)
+        if (currentMessages.isNotEmpty()) {
+            val sizeChanged = currentMessages.size > prevSize
+            val startedAnalyzing = isCurrentConversationAnalyzing && !prevAnalyzing
+
+            if (sizeChanged || startedAnalyzing) {
+                userInterrupted = false
+                val lastItemIndex = (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)
+                listState.scrollToItem(lastItemIndex)
+            }
+        }
+        prevSize = currentMessages.size
+        prevAnalyzing = isCurrentConversationAnalyzing
+    }
+
+    LaunchedEffect(listState, followActive, userInterrupted) {
+        if (followActive && !userInterrupted) {
+            snapshotFlow { listState.layoutInfo }
+                .collect { layoutInfo ->
+                    val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
+                    if (lastVisibleItem != null) {
+                        val lastItemIndex = (layoutInfo.totalItemsCount - 1).coerceAtLeast(0)
+                        if (lastVisibleItem.index == lastItemIndex) {
+                            val viewportEnd = layoutInfo.viewportEndOffset - layoutInfo.afterContentPadding
+                            val itemEnd = lastVisibleItem.offset + lastVisibleItem.size
+                            val delta = itemEnd - viewportEnd
+                            if (delta > 0) {
+                                listState.animateScrollBy(
+                                    value = delta.toFloat(),
+                                    animationSpec = tween(durationMillis = 120, easing = LinearEasing)
+                                )
+                            }
+                        } else if (lastVisibleItem.index < lastItemIndex) {
+                            listState.scrollToItem(lastItemIndex)
+                        }
+                    }
+                }
         }
     }
 
@@ -495,7 +560,7 @@ private fun ChatMessageRow(
         Column {
             if (message.text.isNotBlank()) {
                 AiMessage(message.text, message.createdAt)
-            } else if (isAnalyzing && isLastMessage && message.assistantCards.isEmpty()) {
+            } else if ((isAnalyzing || message.text.isBlank()) && isLastMessage && message.assistantCards.isEmpty()) {
                 AiMessageComponent {
                     TypingIndicator()
                 }
@@ -688,34 +753,30 @@ private fun AiMessageComponent(content: @Composable () -> Unit) {
 @Composable
 private fun TypingIndicator() {
     val infiniteTransition = rememberInfiniteTransition(label = "typing")
-
-    @Composable
-    fun Dot(delay: Int) {
-        val yOffset by infiniteTransition.animateFloat(
-            initialValue = 0f,
-            targetValue = -6f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(400, delayMillis = delay),
-                repeatMode = RepeatMode.Reverse
-            ),
-            label = "dot"
-        )
-        Box(
-            modifier = Modifier
-                .padding(horizontal = 2.dp)
-                .size(6.dp)
-                .graphicsLayer { translationY = yOffset }
-                .background(TextSecondary.copy(alpha = 0.4f), CircleShape)
-        )
-    }
+    val delays = listOf(0, 150, 300)
 
     Row(
         modifier = Modifier.padding(vertical = 4.dp, horizontal = 2.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Dot(0)
-        Dot(150)
-        Dot(300)
+        delays.forEach { delay ->
+            val yOffset by infiniteTransition.animateFloat(
+                initialValue = 0f,
+                targetValue = -6f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(400, delayMillis = delay),
+                    repeatMode = RepeatMode.Reverse
+                ),
+                label = "dot_$delay"
+            )
+            Box(
+                modifier = Modifier
+                    .padding(horizontal = 2.dp)
+                    .size(6.dp)
+                    .graphicsLayer { translationY = yOffset }
+                    .background(TextSecondary.copy(alpha = 0.4f), CircleShape)
+            )
+        }
     }
 }
 

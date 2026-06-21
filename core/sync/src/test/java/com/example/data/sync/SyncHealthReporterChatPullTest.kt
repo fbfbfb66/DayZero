@@ -14,6 +14,7 @@ import io.mockk.mockk
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -95,5 +96,44 @@ class SyncHealthReporterChatPullTest {
         assertEquals(2, snapshot.fatalFailureCount)
         assertEquals(PullStatus.FAILED_FATAL, snapshot.chatPullStatus)
         assertEquals("auth_error", snapshot.chatPullLastError)
+    }
+
+    @Test
+    fun `snapshot recovery clears fatal count after successful completed pull`() = runTest {
+        val identityProvider = mockk<CurrentIdentityProvider>()
+        coEvery { identityProvider.currentIdentity() } returns AppIdentity("local", "remote", "supabase", true)
+        val syncQueueDao = mockk<SyncQueueDao>(relaxed = true)
+        coEvery { syncQueueDao.countByStatus(DayZeroSyncConstants.STATUS_FAILED_RETRYABLE) } returns 0
+        coEvery { syncQueueDao.countByStatus(DayZeroSyncConstants.STATUS_FAILED_FATAL) } returns 0
+        val backfillStore = mockk<BackfillStateStore>()
+        every { backfillStore.snapshot() } returns BackfillStateSnapshot(BackfillStatus.NOT_STARTED, null, null, null, null, null, 0, 0, 0, 0, 0, 0, 0)
+        val dailyRecordDao = mockk<DailyRecordDao>()
+        coEvery { dailyRecordDao.countConfirmedRecordsUpdatedAfter(0L) } returns 0
+        coEvery { dailyRecordDao.countBusinessRecordsIncludingDeleted() } returns 10
+        val chatPullStateStore = mockk<ChatPullHealthStateStore>()
+        every { chatPullStateStore.snapshot() } returns ChatPullHealthState(
+            status = PullStatus.COMPLETED,
+            lastAttemptAt = null,
+            lastSuccessAt = 12345L,
+            lastFailureAt = null,
+            lastError = null
+        )
+
+        val reporter = SyncHealthReporter(
+            syncQueueDao = syncQueueDao,
+            identityProvider = identityProvider,
+            backfillStateStore = backfillStore,
+            pullStateStore = null,
+            chatPullHealthStateStore = chatPullStateStore,
+            dailyRecordDao = dailyRecordDao,
+            remoteSyncEnabledProvider = { true }
+        )
+
+        val snapshot = reporter.snapshot()
+
+        assertEquals(0, snapshot.fatalFailureCount)
+        assertEquals(0, snapshot.retryableFailureCount)
+        assertEquals(PullStatus.COMPLETED, snapshot.chatPullStatus)
+        assertNull(snapshot.chatPullLastError)
     }
 }

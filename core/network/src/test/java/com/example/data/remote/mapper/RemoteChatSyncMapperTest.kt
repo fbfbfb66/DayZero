@@ -166,6 +166,25 @@ class RemoteChatSyncMapperTest {
         assertEquals(false, "activeConversationId" in propertyNames)
     }
 
+    @Test
+    fun testDateTimeParsingFormats() {
+        val formats = listOf(
+            "2026-06-21T13:39:20.154Z",
+            "2026-06-21T13:39:20.154+00:00",
+            "2026-06-21T13:39:20.154000+00:00",
+            "2026-06-21T13:39:20Z",
+            "2026-06-21T13:39:20+08:00",
+            "2026-06-21T13:39:20.154-05:00"
+        )
+        for (f in formats) {
+            val instantResult = runCatching { java.time.Instant.parse(f).toEpochMilli() }
+            val offsetResult = runCatching { java.time.OffsetDateTime.parse(f).toInstant().toEpochMilli() }
+            println("Format: $f")
+            println("  Instant.parse: success=${instantResult.isSuccess}, error=${instantResult.exceptionOrNull()?.javaClass?.simpleName}, value=${instantResult.getOrNull()}")
+            println("  OffsetDateTime.parse: success=${offsetResult.isSuccess}, error=${offsetResult.exceptionOrNull()?.javaClass?.simpleName}, value=${offsetResult.getOrNull()}")
+        }
+    }
+
     private fun messageDto(assistantCardsJson: String?): RemoteAiChatMessageDto {
         return RemoteAiChatMessageDto(
             id = "66666666-6666-6666-6666-666666666666",
@@ -179,3 +198,4 @@ class RemoteChatSyncMapperTest {
         )
     }
 }
+

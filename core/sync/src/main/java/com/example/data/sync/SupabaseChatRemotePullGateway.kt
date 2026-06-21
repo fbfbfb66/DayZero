@@ -219,10 +219,17 @@ class SupabaseChatRemotePullGateway(
         return value?.takeIf { it.isNotBlank() }?.let(::parseRemoteTime)
     }
 
-    private fun parseRemoteTime(value: String): Long {
-        return runCatching { Instant.parse(value).toEpochMilli() }
-            .getOrElse { System.currentTimeMillis() }
+    internal fun parseRemoteTime(value: String): Long {
+        if (value.isBlank()) {
+            throw IllegalArgumentException("Remote time value is blank")
+        }
+        return try {
+            java.time.OffsetDateTime.parse(value).toInstant().toEpochMilli()
+        } catch (e: java.time.format.DateTimeParseException) {
+            java.time.Instant.parse(value).toEpochMilli()
+        }
     }
+
 
     private fun restUrl(): String = "${normalizedUrl()}rest/v1/"
 

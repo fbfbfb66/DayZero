@@ -393,3 +393,60 @@ This configuration caused `ComponentActivity` to register as a launcher activity
   - All Gradle compile, build, and unit test tasks (`:app:compileDebugKotlin`, `:app:testDebugUnitTest`, `:core:sync:testDebugUnitTest`, `:app:assembleDebug`, `test`) completed successfully.
   - Reinstalled debug build using standard `./gradlew :app:installDebug` without data loss.
   - Verified app launch on real device (`10AE9X0J0Z001SJ`). App launched cleanly without crashing, successfully resolved local anonymous identity, refreshed Supabase auth session, and stayed active.
+
+## Remote Time Parsing & Sync Health Recovery Fix (2026-06-21)
+
+### User-Visible Problem
+- The "数据同步" sync health card on the Trends page turned yellow with the warnings:
+  - "部分记录需要处理"
+  - "本地记录仍然可用，云端同步遇到不能自动恢复的问题"
+  - "等待同步：0条"
+
+### Verified Root Cause
+- PostgREST returned timestamp strings with numeric offsets (e.g. `"2026-06-21T13:39:20.154+00:00"`).
+- In Java 8 / Android desugaring, `Instant.parse()` strictly expects timezone offset to be `'Z'` and throws `DateTimeParseException` for numeric offsets like `+00:00`.
+- The parser previously caught this parsing failure and fell back to returning `System.currentTimeMillis()`.
+- Returning `System.currentTimeMillis()` for remote times created an inconsistency between local and remote `createdAt` values for the same conversation/message entity.
+- This inconsistency triggered an `ImmutableConflictException` ("immutable conflict: createdAt local=... remote=...") during local database merge.
+- The merge transaction rolled back, enqueuing a fatal pull failure in `ChatPullHealthStateStore`, which turned the Trends sync card yellow.
+
+### Gemini's Original Analysis Correctness
+- **Correct**: `Instant.parse()` indeed fails for timestamps with offsets on Java 8/Android desugaring, and using `OffsetDateTime.parse` first is the correct solution.
+- **Incorrect/Unproven**: Gemini's suggestion to retain a fallback to `System.currentTimeMillis()` on parser failure was the core mechanism of the bug, masking parsing issues and causing database immutable field conflicts.
+
+### File Modifications
+- **[SupabaseChatRemotePullGateway.kt](file:///D:/Goings/APPProjects/DayZero/core/sync/src/main/java/com/example/data/sync/SupabaseChatRemotePullGateway.kt)**: Made `parseRemoteTime` internal and updated it to parse using `OffsetDateTime` first, falling back to `Instant.parse`, and throwing the exception upon failure.
+- **[SupabaseRemotePullGateway.kt](file:///D:/Goings/APPProjects/DayZero/core/sync/src/main/java/com/example/data/sync/SupabaseRemotePullGateway.kt)**: Implemented the same robust parser.
+- **[SupabaseChatRemotePullGatewayTest.kt](file:///D:/Goings/APPProjects/DayZero/core/sync/src/test/java/com/example/data/sync/SupabaseChatRemotePullGatewayTest.kt)**: Added datetime parsing tests covering UTC `Z`, offsets (`+00:00`, `+08:00`, `-05:00`), varying sub-second precision (including microsecond formats), invalid formats, and blank inputs. Verified that failures do not fallback to system execution time.
+- **[SyncHealthReporterChatPullTest.kt](file:///D:/Goings/APPProjects/DayZero/core/sync/src/test/java/com/example/data/sync/SyncHealthReporterChatPullTest.kt)**: Added a test verifying that subsequent successful pulls clear the fatal failure count and restore health status, and fixed the missing `assertNull` import compilation error.
+
+### Time Parsing Strategy
+- Parse remote times using:
+  ```kotlin
+  try {
+      java.time.OffsetDateTime.parse(value).toInstant().toEpochMilli()
+  } catch (e: java.time.format.DateTimeParseException) {
+      java.time.Instant.parse(value).toEpochMilli()
+  }
+  ```
+- This format handles variable sub-second precision (e.g. microseconds) and timezone offsets seamlessly, while failing fast on invalid/blank inputs.
+- All silent current-time fallbacks (e.g. `System.currentTimeMillis()`) have been removed from remote timestamp parsing.
+
+### Transaction & Cursor Safety
+- When parsing fails, the thrown exception aborts the remote page pull and rolls back the Room database transaction. No incorrect database writes are made, and no pull cursors are advanced.
+- The failure is safely tracked in `ChatPullHealthStateStore` to alert the user of sync status via the health panel.
+
+### Health State Recovery
+- When a new sync pull is triggered and succeeds, the `ChatPullHealthStateStore` transitions back to `COMPLETED` and clears `lastError`.
+- `SyncHealthReporter` reads the `COMPLETED` status, resetting the aggregated `fatalFailureCount` back to `0`. The Trends sync status card automatically recovers to the normal, healthy state on the next successful sync.
+
+### Commands Executed & Results
+- Compiled tests successfully: `.\gradlew.bat :core:sync:compileDebugUnitTestKotlin`
+- Executed all project unit tests (clean and no-cache): `.\gradlew.bat test --no-build-cache --rerun-tasks` (passed with 220/220 successful tasks)
+- Built debug APK successfully: `.\gradlew.bat :app:assembleDebug`
+
+### Verification & Constraints
+- NO database schema changes or migrations were made.
+- Remote Supabase tables and RLS policies were left unchanged.
+- Physical device data and anonymous session states were fully preserved (no `connectedDebugAndroidTest` or `adb uninstall` was run on the connected device).
+- Normal recovery can be manually verified using a safe overwrite install.
