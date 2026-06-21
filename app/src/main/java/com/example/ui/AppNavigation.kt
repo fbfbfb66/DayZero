@@ -16,6 +16,12 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -227,20 +233,28 @@ fun MainApp() {
                     .padding(innerPadding)
                     .consumeWindowInsets(innerPadding),
                 enterTransition = {
-                    androidx.compose.animation.fadeIn(animationSpec = androidx.compose.animation.core.tween(220)) +
-                        androidx.compose.animation.slideInVertically(
-                            initialOffsetY = { 36 },
-                            animationSpec = androidx.compose.animation.core.tween(220)
-                        )
+                    slideInHorizontally(
+                        initialOffsetX = { it },
+                        animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing)
+                    ) + fadeIn(animationSpec = tween(durationMillis = 350))
                 },
-                exitTransition = { androidx.compose.animation.fadeOut(animationSpec = androidx.compose.animation.core.tween(180)) },
-                popEnterTransition = { androidx.compose.animation.fadeIn(animationSpec = androidx.compose.animation.core.tween(180)) },
+                exitTransition = {
+                    slideOutHorizontally(
+                        targetOffsetX = { -it / 3 },
+                        animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing)
+                    ) + fadeOut(animationSpec = tween(durationMillis = 350))
+                },
+                popEnterTransition = {
+                    slideInHorizontally(
+                        initialOffsetX = { -it / 3 },
+                        animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing)
+                    ) + fadeIn(animationSpec = tween(durationMillis = 350))
+                },
                 popExitTransition = {
-                    androidx.compose.animation.fadeOut(animationSpec = androidx.compose.animation.core.tween(180)) +
-                        androidx.compose.animation.slideOutVertically(
-                            targetOffsetY = { 36 },
-                            animationSpec = androidx.compose.animation.core.tween(180)
-                        )
+                    slideOutHorizontally(
+                        targetOffsetX = { it },
+                        animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing)
+                    ) + fadeOut(animationSpec = tween(durationMillis = 350))
                 }
             ) {
                 composable(Screen.Calendar.route) {
