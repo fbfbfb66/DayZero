@@ -38,10 +38,10 @@
 - **Fast Fallback (15s Timeout)**: Reduced the Deno streaming fetch abort timeout in `assistant-turn-v2-stream` from **35 seconds** to **15 seconds**. If Kimi API hangs or suffers from high TTFT, Deno will abort after 15s, triggering immediate client fallback to the non-streaming `assistant-turn-v2` endpoint, saving 20 seconds of empty waiting time.
 - **Kimi Latency Analysis**: Identified that high latency is 100% caused by Kimi (Moonshot API `kimi-k2.6`) response time and network routing between Supabase (outside China) and Moonshot (inside China). Deno edge function execution overhead is negligible (< 2ms).
 - `assistant-turn-v2-stream` (Version 11) is the current primary AI runtime entrypoint. `assistant-turn-v2` (Version 18) remains as a compatibility fallback.
-- Room chat persistence is fully enabled. User messages, AI replies, and cards are fully persistent. 
+- Room chat persistence is fully enabled. User messages, AI replies, and cards are fully persistent.
 - **AI history conversation data foundation (Phase 1) complete**. Local Room now has a `conversations` table and every `ai_chat_messages` row belongs to a non-null `conversationId`. The database migration from version 9 to 10 safely groups the old single chat stream by device-local natural day, creates one legacy conversation per day with a stable UUID, and copies existing messages without changing message text, card payload JSON, card state, or ordering.
 - **AI history UI (Phase 3) is implemented locally**. The AI tab now opens an AI home screen with a large first-message input and a Room-backed history list. Conversation detail is a second-level route that renders only the selected `conversationId` messages and hides the app bottom navigation bar.
-- **Chat cloud runtime sync is partially implemented**. Phase 6B adds Push and Backfill. Phase 6C-1 adds remote Pull transport. Phase 6C-2 adds local Conversation merge. Phase 6C-3 adds local Message/Card merge. Production Chat Pull lifecycle integration, deletion sync/UI, WorkManager-specific chat scheduler changes, UI behavior changes, and account binding are still not implemented.
+- **Chat cloud runtime sync is production-wired and real-device verified through Phase 6D**. Phase 6B adds Push and Backfill. Phase 6C adds remote Pull transport and local Merge. Phase 6D adds production Chat Pull lifecycle integration, Scheduler, Hilt, and Health Reporting, with ownership migration, real-device Pull restore, idempotency, restart stability, and UI/card rendering verified on 2026-06-21. Chat deletion UI, history search, rename, pinning, formal login/account binding, and anonymous identity recovery after uninstall are still not implemented.
 - `show_confirm_card`, its prompt/action/payload contract, action normalization/parsing, multi-meal record writes, optional weight writes, Draft Card edit/confirm/cancel flow, `assistant-turn-v2-stream`, and `assistant-turn-v2` fallback remain unchanged by the conversation data foundation.
 - **AI history local feature (Phase 4) complete**. Date mismatch guarding is now implemented for new `show_confirm_card(food_record)` cards. When a conversation's fixed `conversationDate` differs from the device-local date at card handling time, the client persists and renders a local system guard card before exposing the original record card.
 - **Streaming Context Alignment (Phase 4 Streaming) complete**. Addressed an issue where AI replies did not stream incrementally on the new multi-conversation AI history UI. The transient streaming state is now mapped by `conversationId` and combined purely in memory within the `observeChatMessages` flow in the `AiDraftRepository`, bypassing Room for real-time `reply_delta` display. This ensures the conversational UI instantly updates with partial tokens per session, safely clearing state and merging with the database upon stream completion or fallback.
@@ -54,7 +54,7 @@
 - **Bottom navigation behavior**: AI home, Calendar, and Trends remain top-level pages with the app bottom navigation bar. Conversation detail is a second-level route and does not compose the bottom navigation bar, freeing the bottom space for the chat input. The detail input owns `imePadding()` plus `navigationBarsPadding()` so it follows the keyboard and system gesture area.
 - **First-message flow**: home submit calls `CreateConversationWithFirstMessageUseCase` through `AiRecordViewModel`, navigates to detail on the one-shot creation event, then starts the existing assistant turn for the already-persisted first user message. This prevents duplicate first-message persistence.
 - **Current concurrency policy**: the visible UI remains a single global generation surface. While `isAnalyzing` is true, the home input and detail input are disabled. Users may return to AI home while generation continues; replies are still persisted to the send-time conversation and are visible when reopening it. Multi-conversation simultaneous generation UI is not introduced.
-- Still not implemented: production Chat Pull lifecycle integration, multi-device lifecycle orchestration, history search, delete, rename, pinning, and AI-generated titles.
+- Still not implemented: multi-device lifecycle orchestration, history search, delete, rename, pinning, and AI-generated titles.
 - **Launcher Double Icon Issue Resolved**. Fixed an issue where building/running the debug app installed duplicate launcher icons on the device. The root cause was that `feature/ai-record/src/debug/AndroidManifest.xml` incorrectly declared `androidx.activity.ComponentActivity` with `MAIN` and `LAUNCHER` intent-filters. This has been removed, preserving the registration of the activity for local Compose test rules while preventing duplicate launcher icons.
 
 ## Current Phase Features (Phase 4D-1 Complete)
@@ -99,7 +99,7 @@ Note: Several legacy interfaces/classes still exist in migrated modules for comp
 - Chat card JSON: full `assistantCardsJson` is stored in `ai_chat_messages.assistant_cards` as `jsonb`; null and `[]` are distinct
 - Phase 6A deployment status: applied to Supabase project `sybenxmxnwwtlvkeojtj` via MCP on 2026-06-21. Static schema/RLS/grant/index/trigger verification was read back from the project.
 - Phase 6B RLS probe status: two real anonymous authenticated sessions verified A-owned conversation insert/read/update, B isolation from A rows, B message attach rejection with HTTP 403, and unauthenticated rejection with HTTP 401. The separate `user_id` mutation probe and hard DELETE probe were also verified with a local powershell script using the anon key: cross-user updates and hard deletes returned HTTP 403, and management readbacks by User A confirmed the data remained safely owned by User A. The probe row was tombstoned.
-- Phase 6B Push verification status: Real-device verification of Chat Push has been successfully completed. Verified that new conversations and final messages are successfully pushed. No placeholders or `reply_delta` messages are uploaded to Supabase. Card payload is saved as native JSONB without double-encoding. Card status updates reuse the same message ID without duplicate row generation. After app restart and repeated backfill sync execution, remote table rows remain stable (conversations = 3, messages = 16) with no duplicates. Chat push is triggered automatically in the background by the existing SyncScheduler. Chat Pull is still not implemented.
+- Phase 6B Push verification status: Real-device verification of Chat Push has been successfully completed. Verified that new conversations and final messages are successfully pushed. No placeholders or `reply_delta` messages are uploaded to Supabase. Card payload is saved as native JSONB without double-encoding. Card status updates reuse the same message ID without duplicate row generation. After app restart and repeated backfill sync execution, remote table rows remain stable (conversations = 3, messages = 16) with no duplicates. Chat push is triggered automatically in the background by the existing SyncScheduler. Phase 6D Chat Pull real-device recovery verification is also complete.
 - Primary Edge Function: `assistant-turn-v2-stream` (Version 11, timeout=15s)
 - Fallback Edge Function: `assistant-turn-v2` (Version 18)
 - Retired Edge Function: `ai-assistant-turn` should stay deleted/unused
@@ -121,7 +121,7 @@ Note: Several legacy interfaces/classes still exist in migrated modules for comp
 - Chat sync architecture reference is `docs/CHAT_SYNC_ARCHITECTURE.md`.
 - Current code architecture is now multi-module and Hilt-based. Future changes should respect module boundaries: UI/feature modules must not depend directly on Room DAO, Retrofit services, Supabase gateways, or sync coordinators; domain/use cases must not depend on Compose, Android UI, Room entities, or remote DTOs.
 - Future AI history refinements must keep DayZero's current visual language, rounded corners, spacing, typography, motion, and fresh style. Reuse existing components and theme; do not drop in generic Material sample pages or introduce a mismatched design system.
-- Phase 6D-1 complete: `ChatPullCoordinator` implemented for production lifecycle orchestration, wiring conversation and message pulls sequentially with strict single-flight blocking. True `SyncScheduler` / Hilt wiring pending in Phase 6D-2.
+- Phase 6D-1 complete: `ChatPullCoordinator` implemented for production lifecycle orchestration, wiring conversation and message pulls sequentially with strict single-flight blocking. Phase 6D-2 & 6D-3 complete: True `SyncScheduler` / Hilt wiring, Health reporting, and end-to-end testing are implemented. Real-device Chat Pull verification completed successfully (2026-06-21).
 
 ### Phase 6A Chat Sync Contract
 
@@ -147,7 +147,7 @@ Note: Several legacy interfaces/classes still exist in migrated modules for comp
 - Backfill: `ChatBackfillCoordinator` scans conversations before messages with stable `(createdAt, id)` pagination, persists progress in `ChatBackfillStateStore`, and skips empty assistant placeholders.
 - Synced chat state: fixed conversation date, title, preview, timestamps, tombstones, final user/assistant messages, full assistant card JSON, edited/confirmed/cancelled cards, and date guard state.
 - Unsynced chat state: `reply_delta`, `StreamingState`, `isAnalyzing`, typewriter progress, input drafts, active route/conversation UI state, keyboard/Compose state, and transient network errors.
-- Production Chat Pull lifecycle integration and account recovery remain unimplemented. Formal login remains unimplemented. Uninstall/system clear-data still loses anonymous identity recovery.
+- Formal login remains unimplemented. Uninstall/system clear-data still loses anonymous identity recovery. Account recovery remains unimplemented.
 
 ### Phase 6C-1 Chat Remote Pull Transport
 
@@ -188,17 +188,37 @@ Note: Several legacy interfaces/classes still exist in migrated modules for comp
 - Room Schema Migration Validation: `Migration10to11Test` was updated to perform true schema validation by initializing a real SQLite database file at version 10 (setting tables, indexes, foreign keys, version PRAGMA, and inserting 8 historical test rows), upgrading via Room's databaseBuilder with `MIGRATION_10_11` using `.allowMainThreadQueries()`, and verifying that the database was successfully opened, all rows preserved (user message, assistant message, card-only message, contentJson = null, contentJson = {}, contentJson = [], unknown assistant card fields, multiple messages per conversation), all columns preserved with default new values (`updatedAt = createdAt`, `deletedAt = null`), and indexes/foreign keys exist.
 - Repository Tombstone Race Testing: `RemoteAiDraftRepositoryTombstoneTest` was added in `:app` module to test Streaming final, Fallback final, Card updates, and Active message update behaviors. It verified that updating a locally tombstoned message does not resurrect it (the conditional UPDATE affects 0 rows, so it does not enqueue sync queue tasks or update the conversation summary) while active message updates continue to succeed normally.
 - Chat Sync Backfill Testing: `DayZeroChatSyncBackfillTest` was added to verify `ChatBackfillCoordinator` behavior, including using the persisted `updatedAt`/`deletedAt` timestamps in the sync queue payload (never using current time or `createdAt`), skipping empty assistant placeholders, enqueuing card-only messages, and demonstrating idempotency (re-running backfill coalesces rather than duplicating tasks and leaves payloads identical).
-- Phase boundary: Phase 6D-1 complete (`ChatPullCoordinator` built). Phase 6D-2 (Scheduler / Hilt integration) and 6D-3 (Health Reporting / End-to-End Test) remain pending.
+- Phase boundary: Phase 6D-1, 6D-2, and 6D-3 are complete. Chat Pull is fully integrated with SyncScheduler, Hilt, and Health Reporting, and the full real-device sync/recovery cycle has been validated.
 
-### Phase 6D-1 Chat Pull Production Orchestrator
+### Phase 6D Chat Pull Production Orchestrator & Integration
 - Orchestrator implemented: `ChatPullCoordinator` wraps both `ChatConversationPullCoordinator` and `ChatMessagePullCoordinator` in `:core:sync`.
-- Production running behavior: Still identical to Phase 6C-3 because it is NOT wired to any production trigger.
-- Not integrated: Scheduler, Hilt, Sync Health, and UI are completely untouched.
+- Production running behavior: Chat Pull is fully integrated into `InProcessSyncScheduler` and executes strictly after the daily business pull completes.
 - Execution order: Strict sequential flow. `pullConversations` is executed first; `pullMessages` is executed only if conversations succeed.
 - Error Handling: Errors from either layer are mapped to a sealed `ChatPullResult`. A conversation failure (retryable/fatal) skips message pull. A message failure propagates the error but retains the successful `ChatConversationMergeStats`. Missing parents (`DeferredMissingParent`) are un-recovered within the pull orchestrator and bubble up as a message retryable failure, preventing message cursor advancement.
 - Single-Flight concurrency: Enforced via `Mutex.tryLock()`. Concurrent calls return `ChatPullResult.SkippedAlreadyRunning`.
-- Tests added: `ChatPullCoordinatorTest` using MockK validates sequential execution, failure short-circuiting, success-stat retention, and `Mutex` concurrency locking.
-- Next phase: Phase 6D-2 has not started. Phase 6D-2 will inject `ChatPullCoordinator` into `InProcessSyncScheduler` / Hilt production entry points.
+- Scheduler & Health Integration (Phase 6D-2 & 6D-3): `ChatPullCoordinator` is injected via Hilt into `InProcessSyncScheduler`. `SyncHealthReporter` now tracks `chatPullStatus`, `chatPullLastError`, and `chatPullLastSuccessTime`. `DayZeroViewModel` depends only on clean `SyncScheduler` and `SyncHealthReporter` abstractions, removing raw manual instantiation.
+- Tests added: `ChatPullCoordinatorTest` using MockK validates sequential execution, failure short-circuiting, success-stat retention, and `Mutex` concurrency locking. `DayZeroChatSyncPullIntegrationTest` validates full sequential pull execution, parent-child row persistence, error routing, `DeferredMissingParent` skipping rules, idempotency, tombstone isolation, and health snapshot accuracy with an in-memory database.
+- Next phase: Chat deletion UI, history search, rename/pinning, formal login/account binding, and anonymous identity recovery after uninstall remain future work.
+
+### Phase 6D-2 & 6D-3 Chat Pull Scheduler & Health Integration
+- Scheduler Integration: `ChatPullCoordinator` is now injected into `InProcessSyncScheduler`. It is strictly executed **after** the Daily Pull completes, and only if `pullMode != null` (e.g. not during Push-only sync requests).
+- Production Sync Order: Push -> Backfill -> Chat Backfill -> Push -> Daily Pull -> **Chat Pull**.
+- Exception Handling: Fixed an issue in `InProcessSyncScheduler` where catching a generic `Exception` was swallowing Kotlin Coroutines `CancellationException`. `CancellationException` is now correctly re-thrown, ensuring `activeJob` and `mutex` are properly released upon job cancellation.
+- Sync Health Integration: Created `ChatPullHealthStateStore` backed by `SharedPreferences` to persistently record Chat Pull's `status` and `lastError`.
+- Health Aggregation: `SyncHealthSnapshot` now includes `chatPullStatus` and `chatPullLastError`. `SyncHealthReporter` automatically increments the overall `retryableFailureCount` and `fatalFailureCount` based on the status from `ChatPullHealthStateStore`.
+- Hilt Wiring: Migrated all Chat Pull components (`ChatPullCoordinator`, `ChatConversationPullCoordinator`, `ChatMessagePullCoordinator`, `ChatConversationPullStateStore`, `ChatMessagePullStateStore`, and `ChatPullHealthStateStore`) to use `@Inject constructor` (with `@ApplicationContext` for state stores). Injected `ChatPullHealthStateStore` into `SyncHealthReporter` via `DayZeroHiltModule.kt`. `DayZeroViewModel` correctly depends only on `SyncScheduler` and `SyncHealthReporter` rather than internal coordinators.
+- Tests added: `InProcessSyncSchedulerChatPullTest` to verify that `requestPull` executes Chat Pull while `requestSync` does not. `SyncHealthReporterChatPullTest` to ensure that Retryable and Fatal errors from Chat Pull are accurately aggregated into `SyncHealthSnapshot`.
+- Real-device verification: **SUCCESSFULLY COMPLETED**.
+  - Ownership migration completed for the current physical-device anonymous user.
+  - First ordinary Daily and Chat Pull restored 6 conversations, 37 messages, 2 daily records, 4 meals, 7 food entries, and 2 weight records.
+  - Second Pull was idempotent: Conversation/Message counts and cursors stayed stable, no Push Queue loop was created, and Sync Health stayed successful.
+  - Restart verification passed: identity resolution stayed stable and restored data remained present without startup crash.
+  - Current user tombstone count is 0. The remote database still contains 3 tombstoned conversations belonging to other test users; RLS isolates them from the current user and they do not appear in local UI/DAO results.
+  - UI and card verification passed: confirmed cards and terminal card states render correctly without duplicate records or scroll/runtime crashes.
+  - **connectedDebugAndroidTest incident**: instrumentation deployment previously reset the app sandbox and lost Room/SharedPreferences plus the anonymous Supabase session.
+  - **Red line**: do not run Instrumentation tests on a real device that holds production recovery data.
+  - The actual administrator migration used `session_replication_role = replica` as a one-time recovery shortcut. This must not become the formal migration pattern.
+- Next phase / Constraints: The sync system is fully assembled and real-device verified for Phase 6D. Future steps should focus on Chat deletion UI, history search, rename/pinning, and formal account binding. Formal login and recovery are not implemented. Uninstall after logging in as anonymous will cause data loss.
 
 ### AI History & Conversation Foundation (Phases 1, 2, 3 & 4 Technical Details)
 
@@ -231,7 +251,7 @@ Implemented in **[DayZeroDatabase](file:///D:/Goings/APPProjects/DayZero/core/da
   `UUID.nameUUIDFromBytes("dayzero-legacy-ai-chat-${'$'}date".toByteArray(StandardCharsets.UTF_8)).toString()`
   This prevents duplicate conversations if migration/re-entry happens.
 - **Title and Preview Extrapolations**:
-  - The conversation **title** is extracted from the first user message in that date's group (truncated to a maximum of 32 characters), falling back to a neutral title (e.g., `6月18日的对话`) if no user text is found.
+  - The conversation **title** is extracted from the first user message in that date's group (truncated to a maximum of 32 characters), falling back to a neutral title (e.g., `6月8日的对话`) if no user text is found.
   - The conversation **preview text** is set to the last non-empty message text or `"这条对话包含一张记录卡片"` if it only contains interactive/checkin cards.
 - **Orphan Prevention**: After inserting conversations and creating the new `ai_chat_messages` table with the foreign key constraint, the migration checks that no messages are left with a null/orphaned `conversationId`.
 
@@ -322,7 +342,7 @@ Implemented in **[DayZeroDatabase](file:///D:/Goings/APPProjects/DayZero/core/da
   - `DayZeroDateMismatchGuardTest` covers same-date pass-through, past/future mismatch guard insertion, approve/cancel idempotency, no-network guard decisions, conversation-date food/meal/weight writes after page state changes, and old unwrapped card compatibility.
   - `AiRecordPhase3Test` includes feature-level Compose coverage for pending/approved/cancelled guard rendering.
 - **Cloud sync status**:
-  - Chat/conversation cloud sync is still not implemented.
+  - Chat/conversation cloud sync integration and real-device recovery validation are complete through Phase 6D.
   - Supabase schema, Edge Functions, record sync queue/backfill/pull, and existing food/weight sync remain unchanged.
 
 ## Troubleshooting: Double Application / Launcher Icon Issue
@@ -361,3 +381,15 @@ This configuration caused `ComponentActivity` to register as a launcher activity
   - Final message is persisted once to Room upon final response/completion.
   - Bypasses writing every token to Room database.
   - Stream display is now fully functional and stable.
+
+### Startup Crash Fix (ClassCastException) - 2026-06-21
+- **Problem**: App crashed immediately on startup during Hilt initialization with `java.lang.ClassCastException: com.example.data.sync.SupabaseRemotePullGateway cannot be cast to com.example.data.sync.ChatRemotePullGateway`.
+- **Root Cause**: `DayZeroHiltModule.kt` did not provide `ChatRemotePullGateway` or `SupabaseChatRemotePullGateway`. In `provideChatConversationPullCoordinator` and `provideChatMessagePullCoordinator`, the dependency was declared as `remotePullGateway: RemotePullGateway` and cast as `remotePullGateway as ChatRemotePullGateway`. At runtime, Hilt injected the provided `SupabaseRemotePullGateway` (which only implements `RemotePullGateway`, not `ChatRemotePullGateway`), resulting in a ClassCastException.
+- **Resolution**:
+  - Added a `@Provides` method for `ChatRemotePullGateway` returning a `SupabaseChatRemotePullGateway` instance in `DayZeroHiltModule.kt`.
+  - Updated `provideChatConversationPullCoordinator` and `provideChatMessagePullCoordinator` parameters to request `chatRemotePullGateway: ChatRemotePullGateway` directly and removed the unsafe typecast.
+- **Data Preservation**: Verified that no user data, SharedPreferences, or local Room databases were wiped or modified during the fix.
+- **Verification Results**:
+  - All Gradle compile, build, and unit test tasks (`:app:compileDebugKotlin`, `:app:testDebugUnitTest`, `:core:sync:testDebugUnitTest`, `:app:assembleDebug`, `test`) completed successfully.
+  - Reinstalled debug build using standard `./gradlew :app:installDebug` without data loss.
+  - Verified app launch on real device (`10AE9X0J0Z001SJ`). App launched cleanly without crashing, successfully resolved local anonymous identity, refreshed Supabase auth session, and stayed active.

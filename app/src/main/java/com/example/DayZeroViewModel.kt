@@ -66,27 +66,12 @@ class DayZeroViewModel @Inject constructor(
     private val createConversationWithFirstMessageUseCase: CreateConversationWithFirstMessageUseCase,
     private val conversationRepository: ConversationRepository,
     private val currentDateProvider: CurrentDateProvider,
-    private val syncCoordinator: SyncCoordinator? = null,
-    private val backfillCoordinator: BackfillCoordinator? = null,
-    private val chatBackfillCoordinator: ChatBackfillCoordinator? = null,
-    private val pullCoordinator: PullCoordinator? = null,
-    private val syncHealthReporter: SyncHealthReporter? = null,
+    private val syncScheduler: SyncScheduler,
+    private val syncStatusRepository: SyncStatusRepository? = null,
     private val cloudBackupCleaner: SupabaseCloudBackupCleaner? = null
 ) : ViewModel() {
-    private val effectiveSyncScheduler: SyncScheduler = InProcessSyncScheduler(
-        scope = viewModelScope,
-        syncCoordinator = syncCoordinator,
-        backfillCoordinator = backfillCoordinator,
-        chatBackfillCoordinator = chatBackfillCoordinator,
-        pullCoordinator = pullCoordinator,
-        syncHealthReporter = syncHealthReporter
-    )
-    private val effectiveSyncStatusRepository: SyncStatusRepository? = SyncStatusRepository(
-        syncCoordinator = syncCoordinator,
-        backfillCoordinator = backfillCoordinator,
-        syncHealthReporter = syncHealthReporter,
-        syncScheduler = effectiveSyncScheduler
-    )
+    private val effectiveSyncScheduler: SyncScheduler = syncScheduler
+    private val effectiveSyncStatusRepository: SyncStatusRepository? = syncStatusRepository
 
     private val _uiState = MutableStateFlow(AppState(currentDate = currentDateProvider.currentDate()))
     val uiState: StateFlow<AppState> = _uiState.asStateFlow()

@@ -32,6 +32,8 @@ class InProcessSyncScheduler(
     private val backfillCoordinator: BackfillCoordinator?,
     private val chatBackfillCoordinator: ChatBackfillCoordinator? = null,
     private val pullCoordinator: PullCoordinator? = null,
+    private val chatPullCoordinator: com.example.data.sync.chat.ChatPullCoordinator? = null,
+    private val chatPullHealthStateStore: com.example.data.sync.chat.ChatPullHealthStateStore? = null,
     private val syncHealthReporter: SyncHealthReporter?,
     private val debounceMs: Long = DEFAULT_DEBOUNCE_MS
 ) : SyncScheduler {
@@ -126,8 +128,35 @@ class InProcessSyncScheduler(
                         }
                         null -> Unit
                     }
+                    if (pullMode != null) {
+                        Log.d("DayZeroChatPull", "scheduler step chat pull reason=$reason")
+                        chatPullHealthStateStore?.markRunning()
+                        val chatResult = chatPullCoordinator?.pullAll()
+                        when (chatResult) {
+                            is com.example.data.sync.chat.ChatPullResult.Success -> {
+                                chatPullHealthStateStore?.markCompleted()
+                            }
+                            is com.example.data.sync.chat.ChatPullResult.ConversationRetryableFailure -> {
+                                chatPullHealthStateStore?.markRetryableFailure(chatResult.reason)
+                            }
+                            is com.example.data.sync.chat.ChatPullResult.ConversationFatalFailure -> {
+                                chatPullHealthStateStore?.markFatalFailure(chatResult.reason)
+                            }
+                            is com.example.data.sync.chat.ChatPullResult.MessageRetryableFailure -> {
+                                chatPullHealthStateStore?.markRetryableFailure(chatResult.reason)
+                            }
+                            is com.example.data.sync.chat.ChatPullResult.MessageFatalFailure -> {
+                                chatPullHealthStateStore?.markFatalFailure(chatResult.reason)
+                            }
+                            is com.example.data.sync.chat.ChatPullResult.Skipped,
+                            com.example.data.sync.chat.ChatPullResult.SkippedAlreadyRunning,
+                            null -> Unit
+                        }
+                    }
                     Log.d("DayZeroHealth", "scheduler step health refresh reason=$reason")
                     syncHealthReporter?.logSnapshot()
+                } catch (cancellation: kotlinx.coroutines.CancellationException) {
+                    throw cancellation
                 } catch (error: Exception) {
                     Log.e("DayZeroSync", "scheduler error reason=$reason type=${error::class.java.simpleName}", error)
                 } finally {

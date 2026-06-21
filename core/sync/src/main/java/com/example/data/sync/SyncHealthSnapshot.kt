@@ -31,5 +31,7 @@ data class SyncHealthSnapshot(
     val initialRestoreCompleted: Boolean = false,
     val isRestoring: Boolean = false,
     val queueOldestPendingAt: Long?,
-    val isHealthy: Boolean
+    val isHealthy: Boolean,
+    val chatPullStatus: PullStatus = PullStatus.NOT_STARTED,
+    val chatPullLastError: String? = null
 )

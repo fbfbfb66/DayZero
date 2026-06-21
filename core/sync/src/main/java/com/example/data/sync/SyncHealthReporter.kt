@@ -3,6 +3,7 @@ package com.example.data.sync
 import android.util.Log
 import com.example.data.local.dao.DailyRecordDao
 import com.example.data.local.dao.SyncQueueDao
+import com.example.data.sync.chat.ChatPullHealthStateStore
 import com.example.domain.identity.CurrentIdentityProvider
 
 class SyncHealthReporter(
@@ -10,6 +11,7 @@ class SyncHealthReporter(
     private val identityProvider: CurrentIdentityProvider,
     private val backfillStateStore: BackfillStateStore,
     private val pullStateStore: PullStateStore? = null,
+    private val chatPullHealthStateStore: ChatPullHealthStateStore? = null,
     private val dailyRecordDao: DailyRecordDao,
     private val remoteSyncEnabledProvider: () -> Boolean
 ) {
@@ -17,9 +19,19 @@ class SyncHealthReporter(
         val identity = identityProvider.currentIdentity()
         val backfillState = backfillStateStore.snapshot()
         val pullState = pullStateStore?.snapshot()
+        val chatPullState = chatPullHealthStateStore?.snapshot()
+
+        var retryableFailureCount = syncQueueDao.countByStatus(DayZeroSyncConstants.STATUS_FAILED_RETRYABLE)
+        var fatalFailureCount = syncQueueDao.countByStatus(DayZeroSyncConstants.STATUS_FAILED_FATAL)
+
+        if (chatPullState?.status == PullStatus.FAILED_RETRYABLE) {
+            retryableFailureCount += 1
+        }
+        if (chatPullState?.status == PullStatus.FAILED_FATAL) {
+            fatalFailureCount += 1
+        }
+
         val pendingCount = syncQueueDao.countByStatus(DayZeroSyncConstants.STATUS_PENDING)
-        val retryableFailureCount = syncQueueDao.countByStatus(DayZeroSyncConstants.STATUS_FAILED_RETRYABLE)
-        val fatalFailureCount = syncQueueDao.countByStatus(DayZeroSyncConstants.STATUS_FAILED_FATAL)
         val waitingForAuthCount = syncQueueDao.countByStatus(DayZeroSyncConstants.STATUS_WAITING_FOR_AUTH)
         val remoteSyncEnabled = remoteSyncEnabledProvider()
         val hasRemoteIdentity = identity.canRemoteSync && !identity.remoteUserId.isNullOrBlank()
@@ -70,7 +82,9 @@ class SyncHealthReporter(
                 fatalFailureCount = fatalFailureCount,
                 lastSyncSuccessAt = lastSyncSuccessAt,
                 waitingForAuthCount = waitingForAuthCount
-            )
+            ),
+            chatPullStatus = chatPullState?.status ?: PullStatus.NOT_STARTED,
+            chatPullLastError = chatPullState?.lastError
         )
     }
 
@@ -84,7 +98,8 @@ class SyncHealthReporter(
                 "waitingForAuth=${health.waitingForAuthCount} backfillStatus=${health.backfillStatus.value} " +
                 "pullStatus=${health.pullStatus.value} pulled=${health.pulledCount} pullConflict=${health.pullConflictCount} " +
                 "pullPartial=${health.pullPartialFailureCount} pullMissingParent=${health.pullSkippedMissingParentCount} " +
-                "backfillPendingEstimated=${health.backfillPendingEstimatedCount} isHealthy=${health.isHealthy}"
+                "backfillPendingEstimated=${health.backfillPendingEstimatedCount} chatPullStatus=${health.chatPullStatus.value} " +
+                "isHealthy=${health.isHealthy}"
         )
     }
 

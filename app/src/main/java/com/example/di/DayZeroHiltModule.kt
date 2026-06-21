@@ -22,8 +22,10 @@ import com.example.data.sync.BackfillStateStore
 import com.example.data.sync.LocalFirstSyncCoordinator
 import com.example.data.sync.PullCoordinator
 import com.example.data.sync.PullStateStore
+import com.example.data.sync.ChatRemotePullGateway
 import com.example.data.sync.RemotePullGateway
 import com.example.data.sync.RemoteSyncGateway
+import com.example.data.sync.SupabaseChatRemotePullGateway
 import com.example.data.sync.SupabaseCloudBackupCleaner
 import com.example.data.sync.SupabaseRemotePullGateway
 import com.example.data.sync.SupabaseRemoteSyncGateway
@@ -65,9 +67,19 @@ private annotation class StreamingHttpClient
 @Retention(AnnotationRetention.BINARY)
 private annotation class SyncHttpClient
 
+@Qualifier
+@Retention(AnnotationRetention.BINARY)
+annotation class ApplicationScope
+
 @Module
 @InstallIn(SingletonComponent::class)
 object DayZeroHiltModule {
+    @Provides
+    @Singleton
+    @ApplicationScope
+    fun provideApplicationScope(): kotlinx.coroutines.CoroutineScope {
+        return kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
+    }
     @Provides
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): DayZeroDatabase {
@@ -163,6 +175,15 @@ object DayZeroHiltModule {
         sessionProvider: SupabaseAnonymousIdentityProvider
     ): RemotePullGateway {
         return SupabaseRemotePullGateway(okHttpClient = okHttpClient, sessionProvider = sessionProvider)
+    }
+
+    @Provides
+    @Singleton
+    fun provideChatRemotePullGateway(
+        @SyncHttpClient okHttpClient: OkHttpClient,
+        sessionProvider: SupabaseAnonymousIdentityProvider
+    ): ChatRemotePullGateway {
+        return SupabaseChatRemotePullGateway(okHttpClient = okHttpClient, sessionProvider = sessionProvider)
     }
 
     @Provides
@@ -374,6 +395,7 @@ object DayZeroHiltModule {
         identityProvider: CurrentIdentityProvider,
         backfillStateStore: BackfillStateStore,
         pullStateStore: PullStateStore,
+        chatPullHealthStateStore: com.example.data.sync.chat.ChatPullHealthStateStore,
         dailyRecordDao: DailyRecordDao
     ): SyncHealthReporter {
         return SyncHealthReporter(
@@ -381,8 +403,141 @@ object DayZeroHiltModule {
             identityProvider = identityProvider,
             backfillStateStore = backfillStateStore,
             pullStateStore = pullStateStore,
+            chatPullHealthStateStore = chatPullHealthStateStore,
             dailyRecordDao = dailyRecordDao,
             remoteSyncEnabledProvider = { com.example.data.remote.SupabaseConfig.isConfigured() }
+        )
+    }
+
+    @Provides
+    @Singleton
+    fun provideSyncScheduler(
+        @ApplicationScope scope: kotlinx.coroutines.CoroutineScope,
+        syncCoordinator: SyncCoordinator,
+        backfillCoordinator: BackfillCoordinator,
+        chatBackfillCoordinator: ChatBackfillCoordinator,
+        pullCoordinator: PullCoordinator,
+        chatPullCoordinator: com.example.data.sync.chat.ChatPullCoordinator,
+        chatPullHealthStateStore: com.example.data.sync.chat.ChatPullHealthStateStore,
+        syncHealthReporter: SyncHealthReporter
+    ): com.example.data.sync.SyncScheduler {
+        return com.example.data.sync.InProcessSyncScheduler(
+            scope = scope,
+            syncCoordinator = syncCoordinator,
+            backfillCoordinator = backfillCoordinator,
+            chatBackfillCoordinator = chatBackfillCoordinator,
+            pullCoordinator = pullCoordinator,
+            chatPullCoordinator = chatPullCoordinator,
+            chatPullHealthStateStore = chatPullHealthStateStore,
+            syncHealthReporter = syncHealthReporter
+        )
+    }
+
+    @Provides
+    @Singleton
+    fun provideSyncStatusRepository(
+        syncCoordinator: SyncCoordinator,
+        backfillCoordinator: BackfillCoordinator,
+        syncHealthReporter: SyncHealthReporter,
+        syncScheduler: com.example.data.sync.SyncScheduler
+    ): com.example.data.sync.SyncStatusRepository {
+        return com.example.data.sync.SyncStatusRepository(
+            syncCoordinator = syncCoordinator,
+            backfillCoordinator = backfillCoordinator,
+            syncHealthReporter = syncHealthReporter,
+            syncScheduler = syncScheduler
+        )
+    }
+
+    @Provides
+    @Singleton
+    fun provideChatConversationPullStateStore(@ApplicationContext context: Context): com.example.data.sync.chat.ChatConversationPullStateStore {
+        return com.example.data.sync.chat.ChatConversationPullStateStore(context)
+    }
+
+    @Provides
+    @Singleton
+    fun provideChatMessagePullStateStore(@ApplicationContext context: Context): com.example.data.sync.chat.ChatMessagePullStateStore {
+        return com.example.data.sync.chat.ChatMessagePullStateStore(context)
+    }
+
+    @Provides
+    @Singleton
+    fun provideChatPullHealthStateStore(@ApplicationContext context: Context): com.example.data.sync.chat.ChatPullHealthStateStore {
+        return com.example.data.sync.chat.ChatPullHealthStateStore(context)
+    }
+
+    @Provides
+    @Singleton
+    fun provideChatConversationRemoteMerger(
+        database: DayZeroDatabase,
+        conversationDao: ConversationDao,
+        syncQueueDao: SyncQueueDao
+    ): com.example.data.sync.chat.ChatConversationRemoteMerger {
+        return com.example.data.sync.chat.ChatConversationRemoteMerger(
+            database = database,
+            conversationDao = conversationDao,
+            syncQueueDao = syncQueueDao
+        )
+    }
+
+    @Provides
+    @Singleton
+    fun provideChatMessageRemoteMerger(
+        database: DayZeroDatabase,
+        messageDao: com.example.data.local.dao.AiChatMessageDao,
+        conversationDao: ConversationDao,
+        syncQueueDao: SyncQueueDao
+    ): com.example.data.sync.chat.ChatMessageRemoteMerger {
+        return com.example.data.sync.chat.ChatMessageRemoteMerger(
+            database = database,
+            messageDao = messageDao,
+            conversationDao = conversationDao,
+            syncQueueDao = syncQueueDao
+        )
+    }
+
+    @Provides
+    @Singleton
+    fun provideChatConversationPullCoordinator(
+        identityProvider: CurrentIdentityProvider,
+        chatRemotePullGateway: ChatRemotePullGateway,
+        remoteMerger: com.example.data.sync.chat.ChatConversationRemoteMerger,
+        stateStore: com.example.data.sync.chat.ChatConversationPullStateStore
+    ): com.example.data.sync.chat.ChatConversationPullCoordinator {
+        return com.example.data.sync.chat.ChatConversationPullCoordinator(
+            identityProvider = identityProvider,
+            remotePullGateway = chatRemotePullGateway,
+            remoteMerger = remoteMerger,
+            stateStore = stateStore
+        )
+    }
+
+    @Provides
+    @Singleton
+    fun provideChatMessagePullCoordinator(
+        identityProvider: CurrentIdentityProvider,
+        chatRemotePullGateway: ChatRemotePullGateway,
+        remoteMerger: com.example.data.sync.chat.ChatMessageRemoteMerger,
+        stateStore: com.example.data.sync.chat.ChatMessagePullStateStore
+    ): com.example.data.sync.chat.ChatMessagePullCoordinator {
+        return com.example.data.sync.chat.ChatMessagePullCoordinator(
+            identityProvider = identityProvider,
+            remotePullGateway = chatRemotePullGateway,
+            remoteMerger = remoteMerger,
+            stateStore = stateStore
+        )
+    }
+
+    @Provides
+    @Singleton
+    fun provideChatPullCoordinator(
+        conversationPullCoordinator: com.example.data.sync.chat.ChatConversationPullCoordinator,
+        messagePullCoordinator: com.example.data.sync.chat.ChatMessagePullCoordinator
+    ): com.example.data.sync.chat.ChatPullCoordinator {
+        return com.example.data.sync.chat.ChatPullCoordinator(
+            conversationPullCoordinator = conversationPullCoordinator,
+            messagePullCoordinator = messagePullCoordinator
         )
     }
 }

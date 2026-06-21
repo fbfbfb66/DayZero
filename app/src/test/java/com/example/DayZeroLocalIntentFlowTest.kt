@@ -97,7 +97,15 @@ class DayZeroLocalIntentFlowTest {
             confirmFoodRecordUseCase = ConfirmFoodRecordUseCase(recordRepository),
             createConversationWithFirstMessageUseCase = CreateConversationWithFirstMessageUseCase(aiDraftRepository),
             conversationRepository = InMemoryConversationRepository(),
-            currentDateProvider = FixedCurrentDateProvider(LocalDate.of(2026, 6, 20))
+            currentDateProvider = FixedCurrentDateProvider(LocalDate.of(2026, 6, 20)),
+            syncScheduler = object : com.example.data.sync.SyncScheduler {
+                override fun requestSync(reason: com.example.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
+                override fun requestBackfill(reason: com.example.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
+                override fun requestSyncAndBackfill(reason: com.example.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
+                override fun requestPull(reason: com.example.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
+                override fun requestInitialRestore(reason: com.example.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
+                override fun requestSyncAndPull(reason: com.example.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
+            }
         )
 
         viewModel.sendAiMessage("Weight input: 94kg today")
@@ -134,7 +142,15 @@ class DayZeroLocalIntentFlowTest {
             confirmFoodRecordUseCase = ConfirmFoodRecordUseCase(recordRepository),
             createConversationWithFirstMessageUseCase = CreateConversationWithFirstMessageUseCase(aiDraftRepository),
             conversationRepository = InMemoryConversationRepository(),
-            currentDateProvider = FixedCurrentDateProvider(LocalDate.of(2026, 6, 20))
+            currentDateProvider = FixedCurrentDateProvider(LocalDate.of(2026, 6, 20)),
+            syncScheduler = object : com.example.data.sync.SyncScheduler {
+                override fun requestSync(reason: com.example.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
+                override fun requestBackfill(reason: com.example.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
+                override fun requestSyncAndBackfill(reason: com.example.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
+                override fun requestPull(reason: com.example.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
+                override fun requestInitialRestore(reason: com.example.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
+                override fun requestSyncAndPull(reason: com.example.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
+            }
         )
     }
 

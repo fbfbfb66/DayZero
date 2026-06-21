@@ -1,6 +1,6 @@
 # DayZero Chat Sync Architecture
 
-Phase 6A established the remote schema and client-side data contract for AI conversation sync. Phase 6B adds local enqueue, Chat Push, and historical Chat Backfill. Phase 6C-1 adds pull transport, Phase 6C-2 adds Conversation Merge, and Phase 6C-3 adds Message/Card Merge. Phase 6D-1 implements the `ChatPullCoordinator` orchestrator. Phase 6D-2 (SyncScheduler / Hilt integration), Phase 6D-3 (Health Reporting), chat deletion UI, search, rename, pinning, and login/account binding are still not implemented.
+Phase 6A established the remote schema and client-side data contract for AI conversation sync. Phase 6B adds local enqueue, Chat Push, and historical Chat Backfill. Phase 6C-1 adds pull transport, Phase 6C-2 adds Conversation Merge, and Phase 6C-3 adds Message/Card Merge. Phase 6D-1 implements the `ChatPullCoordinator` orchestrator. Phase 6D-2 (SyncScheduler / Hilt integration) and Phase 6D-3 (Health Reporting) are complete. Chat deletion UI, search, rename, pinning, and login/account binding are still not implemented.
 
 ## Current Runtime Behavior
 
@@ -126,7 +126,7 @@ Message `id`, `conversation_id`, `role`, `message_type`, and `created_at` are im
 
 ## Phase Boundary
 
-Phase 6C-3 implements local Message/Card Merge. Phase 6D-1 implements the `ChatPullCoordinator`. Phase 6D-2 and 6D-3 (production lifecycle wiring and health reporting) are pending. Chat deletion UI, remote hard delete, account binding, or anonymous identity recovery after uninstall are pending.
+Phase 6C-3 implements local Message/Card Merge. Phase 6D-1 implements the `ChatPullCoordinator`. Phase 6D-2 and 6D-3 complete production lifecycle wiring, Scheduler, Hilt, and Health reporting. Real-device Chat Pull verification completed successfully (2026-06-21): ownership migration, first Pull restore, second Pull idempotency, restart stability, and UI/card rendering all verified on physical device. Chat deletion UI, remote hard delete, account binding, or anonymous identity recovery after uninstall are pending.
 
 ## Phase 6C-1 Chat Pull Transport
 
@@ -135,7 +135,7 @@ Phase 6C-1 implements the pure network transport for Chat Pull without integrati
 - **Exact Cursor Precision**: The composite server cursor `(server_updated_at, id)` uses a precise ISO-8601 UTC String instead of epoch milliseconds to completely prevent PostgreSQL microsecond precision truncation. This has been verified via mocked PostgREST tests to preserve sub-millisecond differences (e.g. `.123001` vs `.123456`) and correctly paginate without duplicate records or skipping.
 - **Parsing Tolerance**: `assistant_cards` JSONB content is natively retained via raw JSON string extraction without Moshi mapping, preserving all current and future nested fields.
 - **Identity Refresh Lifecycle**: Chat Pull accurately integrates with the Supabase identity lifecycle. For 401/403 HTTP errors, the gateway attempts exactly one controlled `forceRefreshSession` before mapping to an identity or schema fatal failure. Temporary refresh errors (e.g., network timeouts) are treated as `RetryableFailure`, and permanent refresh rejection directly maps to `FatalFailure`.
-- **Zero Local Mutations**: This phase reads strictly from the server. It still does not write to Room, does not implement conflict merge logic, does not push the formal `PullStateStore` cursor, and does not run inside the production `PullCoordinator`. 
+- **Zero Local Mutations**: This phase reads strictly from the server. It still does not write to Room, does not implement conflict merge logic, does not push the formal `PullStateStore` cursor, and does not run inside the production `PullCoordinator`.
 
 The next phase remains Phase 6C-2: Conversation Merge.
 
@@ -317,4 +317,28 @@ Executed on 2026-06-21 with `JAVA_HOME = C:\Program Files\Android\Android Studio
 - `./gradlew :core:sync:testDebugUnitTest --rerun-tasks`: SUCCESS, ChatPullCoordinatorTest passed with Log mocked.
 - `./gradlew :app:testDebugUnitTest :app:assembleDebug --rerun-tasks`: SUCCESS.
 
-Phase 6D-2 (Scheduler / Hilt integration) and Phase 6D-3 (Health Reporting / End-to-End Test) are next.
+Phase 6D-2 and 6D-3 are now fully implemented and integrated.
+
+## Phase 6D-2 & 6D-3 Scheduler, Hilt & Health Integration
+
+Phase 6D-2 and 6D-3 complete the local assembly of the Chat Pull pipeline by integrating it into the production `InProcessSyncScheduler` and `SyncHealthReporter`.
+
+### Scheduler Wiring
+- `ChatPullCoordinator` executes strictly after the Daily Pull phase.
+- Only sync requests with an active `pullMode` (e.g. `APP_START`, `MANUAL_RESTORE`) trigger Chat Pull.
+- `CancellationException` handles coroutine lifecycle correctly without being swallowed by generic `Exception` catch blocks, ensuring state/mutex release.
+
+### Health Reporting
+- `ChatPullHealthStateStore` (backed by `SharedPreferences`) tracks Chat Pull status independently.
+- `SyncHealthReporter` automatically reads the Chat Pull state when generating `SyncHealthSnapshot`.
+- `retryableFailureCount` and `fatalFailureCount` correctly incorporate Chat Pull errors.
+- Successful executions automatically clear old errors and restore a successful status.
+
+### Dependency Injection (Hilt)
+- All coordinators, state stores, and the health store are configured via `@Inject constructor` and Hilt modules.
+- `DayZeroViewModel` now depends on the clean `SyncScheduler` and `SyncHealthReporter` abstractions, removing raw manual instantiation.
+
+### Regression & Verification
+- `DayZeroChatSyncPullIntegrationTest` validates full sequential pull execution, parent-child row persistence, error routing, `DeferredMissingParent` skipping rules, health snapshot accuracy, and database stability with an in-memory database.
+- Real-device recovery validation completed on 2026-06-21 after administrator ownership migration. Ordinary App Pull restored 6 conversations, 37 messages, 2 daily records, 4 meals, 7 food entries, and 2 weight records. The second Pull was idempotent, cursors did not move backward, no Push Queue loop was created, restart identity/data stability passed, and confirmed card UI rendering was verified. Current-user tombstones are 0; 3 remote tombstoned conversations owned by other test users remain isolated by RLS. The one-time administrator migration used `session_replication_role = replica`; this must not become the formal migration pattern.
+- Formal login/account binding, anonymous identity recovery after uninstall, Chat deletion UI, remote hard delete, history search, rename, and pinning remain future work.
