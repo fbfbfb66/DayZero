@@ -1,10 +1,12 @@
-import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import "jsr:@supabase/functions-js@2/edge-runtime.d.ts";
+import { normalizeActions } from "./normalization.ts";
 
 const MOONSHOT_API_URL = "https://api.moonshot.cn/v1/chat/completions";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
@@ -22,26 +24,34 @@ Deno.serve(async (req) => {
   try {
     const moonshotApiKey = Deno.env.get("MOONSHOT_API_KEY");
     if (!moonshotApiKey) {
-      return jsonResponse({ error: "Internal Server Error (Missing MOONSHOT_API_KEY)" }, 500);
+      return jsonResponse({
+        error: "Internal Server Error (Missing MOONSHOT_API_KEY)",
+      }, 500);
     }
 
     const body = await req.json();
     const requestParsedAt = performance.now();
     const traceId = typeof body.traceId === "string" ? body.traceId : null;
-    const userText = typeof body.userText === "string" ? body.userText.trim() : "";
+    const userText = typeof body.userText === "string"
+      ? body.userText.trim()
+      : "";
     if (!userText) {
       return jsonResponse({ error: "Missing userText" }, 400);
     }
 
     console.log(
-      `[AssistantTurnV2] start traceId=${traceId ?? "none"} userTextLength=${userText.length}`,
+      `[AssistantTurnV2] start traceId=${
+        traceId ?? "none"
+      } userTextLength=${userText.length}`,
     );
 
     const promptBuildStartedAt = performance.now();
-    const promptVersion = "compact_v2_timing";
+    const promptVersion = "compact_v3_timing";
     const promptCacheKey = normalizePromptCacheKey(body.promptCacheKey);
     const recentContext = buildRecentContext(body.recentMessages);
-    const turnType = typeof body.turnType === "string" ? body.turnType.trim() : "user_message";
+    const turnType = typeof body.turnType === "string"
+      ? body.turnType.trim()
+      : "user_message";
     const interactionResult = body.interactionResult;
 
     const systemPrompt = buildSystemPrompt();
@@ -78,7 +88,9 @@ Deno.serve(async (req) => {
     const kimiResponseReceivedAt = performance.now();
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({ message: "Unknown error" }));
+      const errorData = await response.json().catch(() => ({
+        message: "Unknown error",
+      }));
       return jsonResponse(
         {
           error: "Kimi API Request Failed",
@@ -93,42 +105,55 @@ Deno.serve(async (req) => {
     const kimiResult = await response.json();
     const kimiJsonParsedAt = performance.now();
     const content = kimiResult?.choices?.[0]?.message?.content;
-    
+
     console.log(`[AssistantTurnV2] Kimi raw response: ${content}`);
 
     if (typeof content !== "string" || content.trim().length === 0) {
       return jsonResponse({ error: "Kimi returned empty content" }, 502);
     }
 
-    let parsed: any;
+    let parsed: Record<string, unknown>;
     try {
-      parsed = JSON.parse(content);
+      parsed = JSON.parse(content) as Record<string, unknown>;
     } catch (_error) {
       return jsonResponse({ error: "Failed to parse Kimi JSON" }, 502);
     }
 
     const protocolValidationStartedAt = performance.now();
-    const compactJsonUsed = typeof parsed.r === "string" || Array.isArray(parsed.a);
-    const reply = (typeof parsed.r === "string" ? parsed.r : parsed.reply)?.trim?.() ?? "";
+    const compactJsonUsed = typeof parsed.r === "string" ||
+      Array.isArray(parsed.a);
+    const rawReply = typeof parsed.r === "string" ? parsed.r : parsed.reply;
+    const reply = typeof rawReply === "string" ? rawReply.trim() : "";
     const actions = Array.isArray(parsed.a)
       ? parsed.a
       : Array.isArray(parsed.actions)
-        ? parsed.actions
-        : [];
+      ? parsed.actions
+      : [];
 
     if (!reply) {
       return jsonResponse({ error: "Kimi returned blank reply" }, 502);
     }
 
     let fallbackOriginalText = userText;
-    if (body.interactionResult && typeof body.interactionResult === "object" && typeof body.interactionResult.originalText === "string" && body.interactionResult.originalText.trim().length > 0) {
+    if (
+      body.interactionResult && typeof body.interactionResult === "object" &&
+      typeof body.interactionResult.originalText === "string" &&
+      body.interactionResult.originalText.trim().length > 0
+    ) {
       fallbackOriginalText = body.interactionResult.originalText.trim();
     }
-    normalizeActions(actions, body.date ?? "", fallbackOriginalText, body.todayRecord);
+    normalizeActions(
+      actions,
+      body.date ?? "",
+      fallbackOriginalText,
+      body.todayRecord,
+    );
     validateActions(actions);
     const protocolValidatedAt = performance.now();
 
-    console.log(`[AssistantTurnV2] success replyLength=${reply.length} actionsCount=${actions.length}`);
+    console.log(
+      `[AssistantTurnV2] success replyLength=${reply.length} actionsCount=${actions.length}`,
+    );
     return jsonResponse({
       reply,
       actions,
@@ -140,7 +165,9 @@ Deno.serve(async (req) => {
         promptBuildMs: round(promptBuiltAt - promptBuildStartedAt),
         kimiRequestMs: round(kimiResponseReceivedAt - kimiRequestStartedAt),
         kimiJsonParseMs: round(kimiJsonParsedAt - kimiJsonParseStartedAt),
-        protocolValidationMs: round(protocolValidatedAt - protocolValidationStartedAt),
+        protocolValidationMs: round(
+          protocolValidatedAt - protocolValidationStartedAt,
+        ),
         promptChars: systemPrompt.length + userContent.length,
         outputJsonChars: content.length,
         compactJsonUsed,
@@ -182,8 +209,9 @@ DayZero 是一个帮助用户轻松记录饮食、理解热量、稳定减脂的
    核心规则：输出时只需包含 "type" (或 "t") 即可，如 {"t": "ask_missing_info_card"}。绝不能输出 payload (或 p) 等其他任何 UI 字段（如 title, message, options, field, originalText），系统会自动填充。
 3. show_confirm_card
    用途：展示用户准备录入的饮食草稿。
-   payload 结构：{"confirmType": "food_record", "meals": [{"mealType": "lunch", "items": [{"name": "螺蛳粉", "amountText": "1份", "calories": 600}]}]}
+   payload 结构：{"confirmType": "food_record", "meals": [{"mealType": "lunch", "items": [{"name": "螺蛳粉", "amountText": "1份", "calories": 600, "carbohydratesG": 85, "proteinG": 15, "fatG": 22, "fiberG": 6}]}]}
    - 热量由你来进行粗略估算，且 calorieConfidence 设为 "estimated"。
+   - 每个 item 的 carbohydratesG/proteinG/fatG/fiberG 均表示该 item 当前 amountText 对应份量的估算克数；无法可靠估算时填 null，未知不得用 0 代替；carbohydratesG 为包含 fiberG 的总碳水。
    - 如果用户没有提到体重，weightKg 返回 null。
    - 重要：不要重复生成已经录入在 AlreadyRecorded 中的食物。你的卡片（show_confirm_card）应该只包含当前对话中新提到、待确认录入的食物。
 4. debug_show_choice_card
@@ -218,13 +246,15 @@ function formatTodayRecord(todayRecord: unknown): string {
       const type = String(m.mealType ?? "");
       const foods = Array.isArray(m.foods)
         ? m.foods
-            .map((f) => {
-              if (!f || typeof f !== "object") return "";
-              const food = f as Record<string, unknown>;
-              return `${String(food.name ?? "")}(${String(food.quantity ?? "1份")}, ${Number(food.estimatedCalories ?? 0)}kcal)`;
-            })
-            .filter(Boolean)
-            .join(", ")
+          .map((f) => {
+            if (!f || typeof f !== "object") return "";
+            const food = f as Record<string, unknown>;
+            return `${String(food.name ?? "")}(${
+              String(food.quantity ?? "1份")
+            }, ${Number(food.estimatedCalories ?? 0)}kcal)`;
+          })
+          .filter(Boolean)
+          .join(", ")
         : "";
       return foods ? `- ${type}: ${foods}` : "";
     })
@@ -248,11 +278,16 @@ ${formatTodayRecord(input.todayRecord)}
 TurnType:${input.turnType}
 `;
 
-  if (input.turnType === "interaction_result" && input.interactionResult && typeof input.interactionResult === "object") {
+  if (
+    input.turnType === "interaction_result" && input.interactionResult &&
+    typeof input.interactionResult === "object"
+  ) {
     const result = input.interactionResult as Record<string, unknown>;
     content += `CardAction:${String(result.actionType ?? "")}
 InteractionId:${String(result.interactionId ?? "")}
-Selected:${String(result.selectedOptionId ?? "")}/${String(result.selectedOptionLabel ?? "")}
+Selected:${String(result.selectedOptionId ?? "")}/${
+      String(result.selectedOptionLabel ?? "")
+    }
 Field:${String(result.field ?? "")}
 OriginalText:${String(result.originalText ?? "")}
 ConfirmType:${String(result.confirmType ?? "")}
@@ -271,9 +306,13 @@ function buildRecentContext(messages: unknown): string {
   return messages
     .slice(-6)
     .map((message) => {
-      const item = message && typeof message === "object" ? message as Record<string, unknown> : {};
+      const item = message && typeof message === "object"
+        ? message as Record<string, unknown>
+        : {};
       const role = typeof item.role === "string" ? item.role : "Unknown";
-      const text = typeof item.text === "string" ? item.text.trim().slice(0, 160) : "";
+      const text = typeof item.text === "string"
+        ? item.text.trim().slice(0, 160)
+        : "";
       return text ? `${role}:${text}` : "";
     })
     .filter(Boolean)
@@ -282,122 +321,14 @@ function buildRecentContext(messages: unknown): string {
 
 function normalizePromptCacheKey(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
-  const normalized = value.trim().replace(/[^a-zA-Z0-9_.:-]/g, "_").slice(0, 120);
+  const normalized = value.trim().replace(/[^a-zA-Z0-9_.:-]/g, "_").slice(
+    0,
+    120,
+  );
   return normalized.length > 0 ? normalized : undefined;
 }
 
-function generateId(prefix: string): string {
-  return `${prefix}_${Math.random().toString(36).substring(2, 10)}`;
-}
-
-function getMealLabel(type: string): string {
-  switch (type) {
-    case "breakfast": return "早餐";
-    case "lunch": return "午餐";
-    case "dinner": return "晚餐";
-    case "snack": return "加餐";
-    default: return type || "";
-  }
-}
-
-function normalizeActions(actions: any[], date: string, originalText: string, todayRecord?: any) {
-  for (const action of actions) {
-    if (!action || typeof action !== "object") continue;
-
-    // Map compact fields t -> type, p -> payload if present
-    if (action.t && !action.type) {
-      action.type = action.t;
-    }
-    if (action.p && !action.payload) {
-      action.payload = action.p;
-    }
-
-    if (action.type === "ask_record_intent_card") {
-      if (!action.interactionId && !action.id) action.interactionId = generateId("record_intent");
-      if (!action.payload) action.payload = {};
-      action.payload.title = action.payload.title || "需要帮你记录吗？";
-      action.payload.message = action.payload.message || "我看到你提到了刚吃/喝的内容，要不要把它录入今天？";
-      action.payload.originalText = action.payload.originalText || originalText;
-      if (!action.payload.options) {
-        action.payload.options = [
-          { id: "record", label: "帮我记录" },
-          { id: "chat_only", label: "只是聊聊" },
-          { id: "not_now", label: "先不用" }
-        ];
-      }
-    } else if (action.type === "ask_missing_info_card") {
-      if (!action.interactionId && !action.id) action.interactionId = generateId("missing_info");
-      if (!action.payload) action.payload = {};
-      action.payload.title = action.payload.title || "补充一下餐次";
-      action.payload.message = action.payload.message || "这次饮食算在哪一餐呀？";
-      action.payload.field = action.payload.field || action.field || "mealType";
-      action.payload.originalText = action.payload.originalText || originalText;
-      if (!action.payload.options) {
-        action.payload.options = [
-          { id: "breakfast", label: "早餐" },
-          { id: "lunch", label: "午餐" },
-          { id: "dinner", label: "晚餐" },
-          { id: "snack", label: "加餐" }
-        ];
-      }
-    } else if (action.type === "show_confirm_card") {
-      if (!action.id && !action.interactionId) action.id = generateId("confirm");
-      if (!action.payload) action.payload = {};
-      action.payload.confirmType = "food_record";
-      action.payload.title = action.payload.title || "今日记录草稿";
-      action.payload.message = action.payload.message || "我先帮你估算了一版，你可以修改后再确认。";
-      action.payload.date = action.payload.date || date;
-      
-      if (action.payload.weightKg === undefined || action.payload.weightKg === null) {
-        const existingWeight = todayRecord && typeof todayRecord === "object" ? todayRecord.weightKg : null;
-        action.payload.weightKg = (action.weightKg !== undefined && action.weightKg !== null)
-          ? action.weightKg 
-          : (existingWeight !== undefined && existingWeight !== null ? existingWeight : null);
-      }
-      
-      // Handle legacy mealType + items compact format
-      if (!Array.isArray(action.payload.meals)) {
-         let meals = action.payload.meals || action.meals || [];
-         if (meals.length === 0 && (action.mealType || action.payload.mealType)) {
-             const fallbackItems = action.items || action.payload.items || [];
-             if (Array.isArray(fallbackItems) && fallbackItems.length > 0) {
-                 const typeToUse = action.mealType || action.payload.mealType;
-                 meals = [{
-                     mealType: typeToUse,
-                     mealLabel: getMealLabel(typeToUse),
-                     items: fallbackItems
-                 }];
-             }
-         }
-         action.payload.meals = meals;
-      }
-      
-      // Calculate totals and normalize items
-      let totalCals = 0;
-      for (const meal of action.payload.meals) {
-          meal.mealLabel = meal.mealLabel || getMealLabel(meal.mealType);
-          let subtotal = 0;
-          if (!Array.isArray(meal.items)) meal.items = [];
-          for (const item of meal.items) {
-             if (!item.id) item.id = generateId("item");
-             if (item.calorieConfidence === undefined) item.calorieConfidence = "estimated";
-             if (typeof item.calories !== "number") item.calories = 0;
-             subtotal += item.calories;
-          }
-          meal.subtotalCalories = meal.subtotalCalories !== undefined ? meal.subtotalCalories : subtotal;
-          totalCals += meal.subtotalCalories;
-      }
-      action.payload.totalCalories = action.payload.totalCalories !== undefined ? action.payload.totalCalories : totalCals;
-
-      if (!action.payload.buttons) {
-        action.payload.buttons = [
-          { id: "confirm", label: "确认记录" },
-          { id: "cancel", label: "先不记录" }
-        ];
-      }
-    }
-  }
-}
+// Helper functions moved to normalization.ts
 
 function validateActions(actions: unknown[]) {
   const allowed = new Set([
@@ -408,7 +339,9 @@ function validateActions(actions: unknown[]) {
   ]);
 
   for (const action of actions) {
-    if (!action || typeof action !== "object") throw new Error("Invalid action");
+    if (!action || typeof action !== "object") {
+      throw new Error("Invalid action");
+    }
     const type = (action as Record<string, unknown>).type;
     if (typeof type !== "string" || !allowed.has(type)) {
       throw new Error(`Unsupported action type: ${String(type)}`);

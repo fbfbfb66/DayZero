@@ -36,6 +36,7 @@ data class FoodEntryRemoteDto(
     val proteinG: Float?,
     val carbsG: Float?,
     val fatG: Float?,
+    val fiberG: Float?,
     val confidence: Float?,
     val source: String?,
     val createdAt: Long,

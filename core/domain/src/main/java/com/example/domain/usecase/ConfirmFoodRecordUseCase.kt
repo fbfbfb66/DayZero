@@ -27,7 +27,11 @@ class ConfirmFoodRecordUseCase(
                     name = item.name,
                     quantity = item.amountText ?: "1份",
                     estimatedCalories = item.calories,
-                    confidence = item.calorieConfidence
+                    confidence = item.calorieConfidence,
+                    carbohydratesG = item.carbohydratesG,
+                    proteinG = item.proteinG,
+                    fatG = item.fatG,
+                    fiberG = item.fiberG
                 )
             }
 

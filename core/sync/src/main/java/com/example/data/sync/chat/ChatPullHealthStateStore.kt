@@ -47,6 +47,10 @@ class ChatPullHealthStateStore(context: Context) {
             .apply()
     }
 
+    fun resetForRemoteUserChange() {
+        preferences.edit().clear().commit()
+    }
+
     private fun android.content.SharedPreferences.readLongOrNull(key: String): Long? {
         return if (contains(key)) getLong(key, 0L) else null
     }

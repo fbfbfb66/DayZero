@@ -2,8 +2,10 @@ package com.example.di
 
 import android.content.Context
 import com.example.data.identity.CompositeIdentityProvider
+import com.example.data.identity.FixedDevelopmentAccountCredentialsProvider
 import com.example.data.identity.LocalIdentityProvider
-import com.example.data.identity.SupabaseAnonymousIdentityProvider
+import com.example.data.identity.SupabaseAuthSessionProvider
+import com.example.data.identity.SupabaseFixedPasswordIdentityProvider
 import com.example.data.local.dao.AiChatMessageDao
 import com.example.data.local.dao.ConversationDao
 import com.example.data.local.dao.DailyRecordDao
@@ -25,6 +27,8 @@ import com.example.data.sync.PullStateStore
 import com.example.data.sync.ChatRemotePullGateway
 import com.example.data.sync.RemotePullGateway
 import com.example.data.sync.RemoteSyncGateway
+import com.example.data.sync.RemoteIdentityBindingCoordinator
+import com.example.data.sync.RemoteIdentityBindingStateStore
 import com.example.data.sync.SupabaseChatRemotePullGateway
 import com.example.data.sync.SupabaseCloudBackupCleaner
 import com.example.data.sync.SupabaseRemotePullGateway
@@ -112,15 +116,23 @@ object DayZeroHiltModule {
 
     @Provides
     @Singleton
+    fun provideFixedDevelopmentAccountCredentialsProvider(): FixedDevelopmentAccountCredentialsProvider {
+        return FixedDevelopmentAccountCredentialsProvider()
+    }
+
+    @Provides
+    @Singleton
     fun provideSupabaseIdentityProvider(
         @ApplicationContext context: Context,
         localIdentityProvider: LocalIdentityProvider,
-        @SyncHttpClient okHttpClient: OkHttpClient
-    ): SupabaseAnonymousIdentityProvider {
-        return SupabaseAnonymousIdentityProvider(
+        @SyncHttpClient okHttpClient: OkHttpClient,
+        credentialsProvider: FixedDevelopmentAccountCredentialsProvider
+    ): SupabaseFixedPasswordIdentityProvider {
+        return SupabaseFixedPasswordIdentityProvider(
             context = context,
             localIdentityProvider = localIdentityProvider,
-            okHttpClient = okHttpClient
+            okHttpClient = okHttpClient,
+            credentialsProvider = credentialsProvider
         )
     }
 
@@ -128,12 +140,20 @@ object DayZeroHiltModule {
     @Singleton
     fun provideCurrentIdentityProvider(
         localIdentityProvider: LocalIdentityProvider,
-        supabaseIdentityProvider: SupabaseAnonymousIdentityProvider
+        supabaseIdentityProvider: SupabaseFixedPasswordIdentityProvider
     ): CurrentIdentityProvider {
         return CompositeIdentityProvider(
             localIdentityProvider = localIdentityProvider,
             remoteIdentityProvider = supabaseIdentityProvider
         )
+    }
+
+    @Provides
+    @Singleton
+    fun provideSupabaseAuthSessionProvider(
+        supabaseIdentityProvider: SupabaseFixedPasswordIdentityProvider
+    ): SupabaseAuthSessionProvider {
+        return supabaseIdentityProvider
     }
 
     @Provides
@@ -163,7 +183,7 @@ object DayZeroHiltModule {
     @Singleton
     fun provideRemoteSyncGateway(
         @SyncHttpClient okHttpClient: OkHttpClient,
-        sessionProvider: SupabaseAnonymousIdentityProvider
+        sessionProvider: SupabaseAuthSessionProvider
     ): RemoteSyncGateway {
         return SupabaseRemoteSyncGateway(okHttpClient = okHttpClient, sessionProvider = sessionProvider)
     }
@@ -172,7 +192,7 @@ object DayZeroHiltModule {
     @Singleton
     fun provideRemotePullGateway(
         @SyncHttpClient okHttpClient: OkHttpClient,
-        sessionProvider: SupabaseAnonymousIdentityProvider
+        sessionProvider: SupabaseAuthSessionProvider
     ): RemotePullGateway {
         return SupabaseRemotePullGateway(okHttpClient = okHttpClient, sessionProvider = sessionProvider)
     }
@@ -181,7 +201,7 @@ object DayZeroHiltModule {
     @Singleton
     fun provideChatRemotePullGateway(
         @SyncHttpClient okHttpClient: OkHttpClient,
-        sessionProvider: SupabaseAnonymousIdentityProvider
+        sessionProvider: SupabaseAuthSessionProvider
     ): ChatRemotePullGateway {
         return SupabaseChatRemotePullGateway(okHttpClient = okHttpClient, sessionProvider = sessionProvider)
     }
@@ -190,7 +210,7 @@ object DayZeroHiltModule {
     @Singleton
     fun provideCloudBackupCleaner(
         @SyncHttpClient okHttpClient: OkHttpClient,
-        sessionProvider: SupabaseAnonymousIdentityProvider
+        sessionProvider: SupabaseAuthSessionProvider
     ): SupabaseCloudBackupCleaner {
         return SupabaseCloudBackupCleaner(okHttpClient = okHttpClient, sessionProvider = sessionProvider)
     }
@@ -334,6 +354,36 @@ object DayZeroHiltModule {
 
     @Provides
     @Singleton
+    fun provideRemoteIdentityBindingStateStore(@ApplicationContext context: Context): RemoteIdentityBindingStateStore {
+        return RemoteIdentityBindingStateStore(context)
+    }
+
+    @Provides
+    @Singleton
+    fun provideRemoteIdentityBindingCoordinator(
+        identityProvider: CurrentIdentityProvider,
+        bindingStateStore: RemoteIdentityBindingStateStore,
+        backfillStateStore: BackfillStateStore,
+        pullStateStore: PullStateStore,
+        chatBackfillStateStore: ChatBackfillStateStore,
+        chatConversationPullStateStore: com.example.data.sync.chat.ChatConversationPullStateStore,
+        chatMessagePullStateStore: com.example.data.sync.chat.ChatMessagePullStateStore,
+        chatPullHealthStateStore: com.example.data.sync.chat.ChatPullHealthStateStore
+    ): RemoteIdentityBindingCoordinator {
+        return RemoteIdentityBindingCoordinator(
+            identityProvider = identityProvider,
+            bindingStateStore = bindingStateStore,
+            backfillStateStore = backfillStateStore,
+            pullStateStore = pullStateStore,
+            chatBackfillStateStore = chatBackfillStateStore,
+            chatConversationPullStateStore = chatConversationPullStateStore,
+            chatMessagePullStateStore = chatMessagePullStateStore,
+            chatPullHealthStateStore = chatPullHealthStateStore
+        )
+    }
+
+    @Provides
+    @Singleton
     fun provideChatSyncQueueWriter(syncQueueDao: SyncQueueDao): ChatSyncQueueWriter {
         return ChatSyncQueueWriter(syncQueueDao)
     }
@@ -419,6 +469,7 @@ object DayZeroHiltModule {
         pullCoordinator: PullCoordinator,
         chatPullCoordinator: com.example.data.sync.chat.ChatPullCoordinator,
         chatPullHealthStateStore: com.example.data.sync.chat.ChatPullHealthStateStore,
+        remoteIdentityBindingCoordinator: RemoteIdentityBindingCoordinator,
         syncHealthReporter: SyncHealthReporter
     ): com.example.data.sync.SyncScheduler {
         return com.example.data.sync.InProcessSyncScheduler(
@@ -429,6 +480,7 @@ object DayZeroHiltModule {
             pullCoordinator = pullCoordinator,
             chatPullCoordinator = chatPullCoordinator,
             chatPullHealthStateStore = chatPullHealthStateStore,
+            remoteIdentityBindingCoordinator = remoteIdentityBindingCoordinator,
             syncHealthReporter = syncHealthReporter
         )
     }

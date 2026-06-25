@@ -122,18 +122,14 @@ interface SyncQueueDao {
           AND entityType = :entityType
           AND entityLocalId = :entityLocalId
           AND operation = :operation
-          AND (
-            status IN ('PENDING', 'PROCESSING', 'FAILED_RETRYABLE', 'WAITING_FOR_AUTH')
-            OR (status = 'DONE' AND updatedAt >= :localUpdatedAt)
-          )
+          AND status IN ('PENDING', 'PROCESSING', 'FAILED_RETRYABLE', 'WAITING_FOR_AUTH')
         """
     )
     suspend fun countBlockingDuplicate(
         ownerLocalId: String,
         entityType: String,
         entityLocalId: String,
-        operation: String,
-        localUpdatedAt: Long
+        operation: String
     ): Int
 
     @Query(

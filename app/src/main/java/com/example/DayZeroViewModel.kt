@@ -579,6 +579,24 @@ class DayZeroViewModel @Inject constructor(
         }
     }
 
+    fun updateFoodDraftCard(
+        interactionId: String,
+        weightKg: Double?,
+        meals: List<com.example.domain.model.ai.assistant.ConfirmCardMeal>
+    ) {
+        if (interactionId.isBlank()) return
+        viewModelScope.launch {
+            updateCardState(
+                interactionId = interactionId,
+                newState = null,
+                updatedWeightKg = weightKg,
+                hasUpdatedWeightKg = true,
+                updatedMeals = meals,
+                markResolved = false
+            )
+        }
+    }
+
     private suspend fun updateDateMismatchGuardState(guardId: String, newState: String) {
         val targetMessage = aiDraftRepository.findMessageByAssistantCardId(guardId) ?: return
         var changed = false
@@ -796,6 +814,7 @@ class DayZeroViewModel @Inject constructor(
                         interactionId = interactionId,
                         newState = "confirmed",
                         updatedWeightKg = payloadSummary?.weightKg,
+                        hasUpdatedWeightKg = payloadSummary != null,
                         updatedMeals = payloadSummary?.meals
                     )
                     latencyLogger.mark(traceId, "room_confirm_card_state_update_complete")
@@ -838,26 +857,28 @@ class DayZeroViewModel @Inject constructor(
 
     private suspend fun updateCardState(
         interactionId: String,
-        newState: String,
+        newState: String?,
         updatedWeightKg: Double? = null,
-        updatedMeals: List<com.example.domain.model.ai.assistant.ConfirmCardMeal>? = null
+        hasUpdatedWeightKg: Boolean = false,
+        updatedMeals: List<com.example.domain.model.ai.assistant.ConfirmCardMeal>? = null,
+        markResolved: Boolean = true
     ) {
         val targetMessage = aiDraftRepository.findMessageByAssistantCardId(interactionId)
         if (targetMessage != null) {
             val updatedCards = targetMessage.assistantCards.map { card ->
                 if (card.id == interactionId && card is ShowConfirmCardPayload) {
                     card.copy(
-                        state = newState,
-                        resolved = true,
-                        weightKg = updatedWeightKg ?: card.weightKg,
+                        state = newState ?: card.state,
+                        resolved = if (markResolved) true else card.resolved,
+                        weightKg = if (hasUpdatedWeightKg) updatedWeightKg else card.weightKg,
                         meals = updatedMeals ?: card.meals
                     )
                 } else if (card is DateMismatchGuardCardPayload && card.pendingOriginalCard.id == interactionId) {
                     card.copy(
                         pendingOriginalCard = card.pendingOriginalCard.copy(
-                            state = newState,
-                            resolved = true,
-                            weightKg = updatedWeightKg ?: card.pendingOriginalCard.weightKg,
+                            state = newState ?: card.pendingOriginalCard.state,
+                            resolved = if (markResolved) true else card.pendingOriginalCard.resolved,
+                            weightKg = if (hasUpdatedWeightKg) updatedWeightKg else card.pendingOriginalCard.weightKg,
                             meals = updatedMeals ?: card.pendingOriginalCard.meals
                         )
                     )
@@ -866,7 +887,11 @@ class DayZeroViewModel @Inject constructor(
                 }
             }
             aiDraftRepository.updateChatMessage(targetMessage.copy(assistantCards = updatedCards))
-            Log.d("DayZeroAiV2", "confirm card state updated $newState")
+            if (newState != null) {
+                Log.d("DayZeroAiV2", "confirm card state updated $newState")
+            } else {
+                Log.d("DayZeroAiV2", "confirm card draft updated")
+            }
         }
     }
 

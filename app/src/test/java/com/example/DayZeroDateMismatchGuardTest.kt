@@ -35,6 +35,7 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -197,6 +198,109 @@ class DayZeroDateMismatchGuardTest {
         assertEquals(LocalDate.of(2026, 6, 18), fixture.recordRepository.records.value.single().date)
     }
 
+    @Test
+    fun draftUpdatePersistsEditedNutritionNullsBeforeConfirm() = runTest(mainDispatcherRule.testDispatcher) {
+        val fixture = Fixture(currentDate = LocalDate.of(2026, 6, 20))
+        fixture.insertConversation("conversation", LocalDate.of(2026, 6, 20))
+        fixture.viewModel.startAssistantTurnForExistingUserMessage("conversation", "record lunch")
+        advanceUntilIdle()
+
+        val editedMeals = fixture.confirmCard.meals!!.map { meal ->
+            meal.copy(
+                items = meal.items.map { item ->
+                    item.copy(
+                        name = "brown rice",
+                        carbohydratesG = null,
+                        proteinG = null,
+                        fatG = null,
+                        fiberG = null
+                    )
+                }
+            )
+        }
+        fixture.viewModel.updateFoodDraftCard(
+            interactionId = fixture.confirmCard.id,
+            weightKg = null,
+            meals = editedMeals
+        )
+        advanceUntilIdle()
+
+        val card = fixture.assistantCards("conversation").single() as ShowConfirmCardPayload
+        val storedItem = card.meals!!.single().items.single()
+        assertEquals("brown rice", storedItem.name)
+        assertNull(storedItem.carbohydratesG)
+        assertNull(storedItem.proteinG)
+        assertNull(storedItem.fatG)
+        assertNull(storedItem.fiberG)
+
+        fixture.viewModel.sendInteractionResult(
+            interactionId = fixture.confirmCard.id,
+            actionType = "show_confirm_card",
+            optionId = "confirm",
+            optionLabel = "confirm",
+            confirmType = "food_record",
+            payloadSummary = PayloadSummary(
+                originalText = "rice",
+                weightKg = null,
+                meals = editedMeals
+            )
+        )
+        advanceUntilIdle()
+
+        val savedFood = fixture.recordRepository.records.value.single().meals.single().foods.single()
+        assertEquals("brown rice", savedFood.name)
+        assertNull(savedFood.carbohydratesG)
+        assertNull(savedFood.proteinG)
+        assertNull(savedFood.fatG)
+        assertNull(savedFood.fiberG)
+        val confirmedCard = fixture.assistantCards("conversation").first() as ShowConfirmCardPayload
+        assertEquals("confirmed", confirmedCard.state)
+        assertNull(confirmedCard.meals!!.single().items.single().fiberG)
+    }
+
+    @Test
+    fun approvedGuardDraftUpdatePersistsInsidePendingOriginalCard() = runTest(mainDispatcherRule.testDispatcher) {
+        val fixture = Fixture(currentDate = LocalDate.of(2026, 6, 20))
+        fixture.insertConversation("conversation", LocalDate.of(2026, 6, 18))
+        fixture.viewModel.startAssistantTurnForExistingUserMessage("conversation", "record lunch")
+        advanceUntilIdle()
+        val guardId = (fixture.assistantCards("conversation").single() as DateMismatchGuardCardPayload).id
+        fixture.viewModel.handleDateMismatchGuardResult(guardId, approved = true)
+        advanceUntilIdle()
+
+        val editedMeals = fixture.confirmCard.meals!!.map { meal ->
+            meal.copy(items = meal.items.map { it.copy(amountText = "2 bowls", carbohydratesG = null, proteinG = null, fatG = null, fiberG = null) })
+        }
+        fixture.viewModel.updateFoodDraftCard(
+            interactionId = fixture.confirmCard.id,
+            weightKg = 70.0,
+            meals = editedMeals
+        )
+        advanceUntilIdle()
+
+        val guard = fixture.assistantCards("conversation").single() as DateMismatchGuardCardPayload
+        val nestedItem = guard.pendingOriginalCard.meals!!.single().items.single()
+        assertEquals("2 bowls", nestedItem.amountText)
+        assertNull(nestedItem.carbohydratesG)
+        assertNull(nestedItem.proteinG)
+        assertNull(nestedItem.fatG)
+        assertNull(nestedItem.fiberG)
+
+        fixture.viewModel.sendInteractionResult(
+            interactionId = fixture.confirmCard.id,
+            actionType = "show_confirm_card",
+            optionId = "cancel",
+            optionLabel = "cancel",
+            confirmType = "food_record",
+            payloadSummary = PayloadSummary(originalText = "rice", weightKg = 70.0, meals = editedMeals)
+        )
+        advanceUntilIdle()
+
+        val cancelledGuard = fixture.assistantCards("conversation").single() as DateMismatchGuardCardPayload
+        assertEquals("cancelled", cancelledGuard.pendingOriginalCard.state)
+        assertNull(cancelledGuard.pendingOriginalCard.meals!!.single().items.single().fiberG)
+    }
+
     private class Fixture(currentDate: LocalDate) {
         val aiDraftRepository = FakeAiDraftRepository()
         val conversationRepository = InMemoryConversationRepository()
@@ -337,7 +441,11 @@ class DayZeroDateMismatchGuardTest {
                         name = "rice",
                         amountText = "1 bowl",
                         calories = 300,
-                        calorieConfidence = "medium"
+                        calorieConfidence = "medium",
+                        carbohydratesG = 85f,
+                        proteinG = 15f,
+                        fatG = 22f,
+                        fiberG = 6f
                     )
                 )
             )

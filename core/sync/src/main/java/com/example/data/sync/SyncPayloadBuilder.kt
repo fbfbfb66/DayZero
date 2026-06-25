@@ -43,6 +43,10 @@ class SyncPayloadBuilder {
             .put("quantity", food.quantity)
             .put("estimatedCalories", food.estimatedCalories)
             .put("confidence", food.confidence)
+            .put("carbsG", food.carbohydratesG?.toDouble() ?: JSONObject.NULL)
+            .put("proteinG", food.proteinG?.toDouble() ?: JSONObject.NULL)
+            .put("fatG", food.fatG?.toDouble() ?: JSONObject.NULL)
+            .put("fiberG", food.fiberG?.toDouble() ?: JSONObject.NULL)
             .put("schemaVersion", 1)
     }
 

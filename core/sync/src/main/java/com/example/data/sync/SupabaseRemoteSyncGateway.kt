@@ -265,6 +265,7 @@ class SupabaseRemoteSyncGateway(
             .putNullable("protein_g", payload.body.optNullableNumber("proteinG"))
             .putNullable("carbs_g", payload.body.optNullableNumber("carbsG"))
             .putNullable("fat_g", payload.body.optNullableNumber("fatG"))
+            .putNullable("fiber_g", payload.body.optNullableNumber("fiberG"))
             .putNullable("confidence", payload.body.optNullableNumber("confidence"))
             .putNullable("source", payload.body.optNullableString("source") ?: "confirm_card")
     }

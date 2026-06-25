@@ -82,6 +82,7 @@ import com.example.domain.model.AppState
 import com.example.domain.model.ai.AiChatMessage
 import com.example.domain.model.ai.ChatRole
 import com.example.domain.model.ai.Conversation
+import com.example.domain.model.ai.assistant.ConfirmCardMeal
 import com.example.domain.model.ai.assistant.PayloadSummary
 import com.example.ui.theme.BorderNormal
 import com.example.ui.theme.BrandGreen
@@ -132,6 +133,8 @@ interface AiRecordActionHandler {
     )
 
     fun handleDateMismatchGuardResult(guardId: String, approved: Boolean)
+
+    fun updateFoodDraftCard(interactionId: String, weightKg: Double?, meals: List<ConfirmCardMeal>)
 
     fun clearChatMessages()
     fun clearLocalRecords()

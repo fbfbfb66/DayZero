@@ -143,7 +143,11 @@ class AssistantTurnV2ResponseMapper {
                 name = item.name.required(),
                 amountText = item.amountText,
                 calories = item.calories ?: throw ProtocolException("协议错误"),
-                calorieConfidence = item.calorieConfidence.required()
+                calorieConfidence = item.calorieConfidence.required(),
+                carbohydratesG = item.carbohydratesG,
+                proteinG = item.proteinG,
+                fatG = item.fatG,
+                fiberG = item.fiberG
             )
         } ?: emptyList()
 
@@ -158,7 +162,11 @@ class AssistantTurnV2ResponseMapper {
                         name = item.name.required(),
                         amountText = item.amountText,
                         calories = item.calories ?: throw ProtocolException("协议错误"),
-                        calorieConfidence = item.calorieConfidence.required()
+                        calorieConfidence = item.calorieConfidence.required(),
+                        carbohydratesG = item.carbohydratesG,
+                        proteinG = item.proteinG,
+                        fatG = item.fatG,
+                        fiberG = item.fiberG
                     )
                 }
             )

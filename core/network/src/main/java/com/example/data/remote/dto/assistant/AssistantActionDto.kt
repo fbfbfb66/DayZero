@@ -40,7 +40,11 @@ data class AssistantActionItemDto(
     val name: String? = null,
     val amountText: String? = null,
     val calories: Int? = null,
-    val calorieConfidence: String? = null
+    val calorieConfidence: String? = null,
+    val carbohydratesG: Float? = null,
+    val proteinG: Float? = null,
+    val fatG: Float? = null,
+    val fiberG: Float? = null
 )
 
 @JsonClass(generateAdapter = true)

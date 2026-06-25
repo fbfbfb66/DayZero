@@ -62,7 +62,11 @@ data class ConfirmCardItemDto(
     val name: String,
     val amountText: String? = null,
     val calories: Int,
-    val calorieConfidence: String
+    val calorieConfidence: String,
+    val carbohydratesG: Float? = null,
+    val proteinG: Float? = null,
+    val fatG: Float? = null,
+    val fiberG: Float? = null
 )
 
 @JsonClass(generateAdapter = true)

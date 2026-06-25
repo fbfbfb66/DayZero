@@ -6,6 +6,7 @@ This document is the DB-SYNC-11A verification checklist for the remote sync sche
 
 The app expects these public tables:
 
+- `user_profiles`
 - `daily_records`
 - `meals`
 - `food_entries`
@@ -17,6 +18,7 @@ The current canonical migration source of truth is:
 
 - `supabase/migrations/20260619023000_dayzero_core_records_schema.sql`
 - `supabase/migrations/20260621060000_dayzero_ai_chat_sync_schema.sql` for Phase 6A chat schema
+- `supabase/migrations/20260625090000_dayzero_user_profiles.sql` for non-anonymous Auth profile metadata
 
 The older `20260618120000_dayzero_core_records.sql` file is a historical design draft and does not define the current canonical field names.
 
@@ -171,11 +173,17 @@ The server cursor for chat is `server_updated_at`, not business `updated_at`. Fu
 
 ## Auth Configuration
 
-DayZero currently relies on Supabase Anonymous Sign-Ins for invisible remote identity. In the Supabase Dashboard for project `sybenxmxnwwtlvkeojtj`, enable:
+DayZero no longer uses Supabase Anonymous Sign-Ins in the production Android sync path. Development builds use a configured fixed non-anonymous email/password Auth user through `SupabaseFixedPasswordIdentityProvider`.
 
-- Authentication -> Providers -> Anonymous Sign-Ins
+Required debug-only local configuration is supplied through environment variables or ignored `local.properties`:
 
-If this is disabled, `auth/v1/signup` returns `anonymous_provider_disabled`, the app remains local-first, and remote push/pull is skipped or delayed. This is an Auth project setting, not a SQL migration setting.
+- `DAYZERO_FIXED_AUTH_EMAIL`
+- `DAYZERO_FIXED_AUTH_PASSWORD`
+- `DAYZERO_FIXED_AUTH_USER_ID`
+
+Release builds intentionally receive empty fixed credentials and fail closed until the formal login system exists. Do not enable or rely on anonymous sign-up fallback. Do not commit real fixed credentials to source, XML, resources, docs, migrations, snapshots, tracked properties, or logs.
+
+`public.user_profiles` stores application-side user metadata only. Credentials remain in Supabase Auth. The profile table excludes anonymous Auth users through the migration backfill and Auth trigger.
 
 ## Sync Semantics
 

@@ -98,6 +98,10 @@ class PullStateStore(context: Context) {
             .apply()
     }
 
+    fun resetForRemoteUserChange() {
+        preferences.edit().clear().commit()
+    }
+
     private fun android.content.SharedPreferences.Editor.applyStats(stats: PullStats?): android.content.SharedPreferences.Editor {
         if (stats == null) return this
         return putInt(KEY_PULLED_DAILY, stats.pulledDailyRecordCount)

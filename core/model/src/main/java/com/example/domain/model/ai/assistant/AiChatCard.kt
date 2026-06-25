@@ -154,7 +154,11 @@ data class ConfirmCardItem(
     val name: String,
     val amountText: String?,
     val calories: Int,
-    val calorieConfidence: String
+    val calorieConfidence: String,
+    val carbohydratesG: Float? = null,
+    val proteinG: Float? = null,
+    val fatG: Float? = null,
+    val fiberG: Float? = null
 )
 
 data class ConfirmCardOption(

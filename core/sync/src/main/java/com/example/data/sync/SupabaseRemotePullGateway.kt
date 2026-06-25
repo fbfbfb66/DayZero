@@ -201,6 +201,7 @@ class SupabaseRemotePullGateway(
             proteinG = json.optNullableDouble("protein_g")?.toFloat(),
             carbsG = json.optNullableDouble("carbs_g")?.toFloat(),
             fatG = json.optNullableDouble("fat_g")?.toFloat(),
+            fiberG = json.optNullableDouble("fiber_g")?.toFloat(),
             confidence = json.optNullableDouble("confidence")?.toFloat(),
             source = json.optNullableString("source"),
             createdAt = parseRemoteTime(json.optString("created_at")),

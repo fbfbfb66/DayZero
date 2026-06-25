@@ -16,6 +16,9 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.io.IOException
 
+@Deprecated(
+    message = "Historical anonymous auth adapter. Production Hilt wiring uses SupabaseFixedPasswordIdentityProvider."
+)
 class SupabaseAnonymousIdentityProvider(
     context: Context,
     private val localIdentityProvider: CurrentIdentityProvider,

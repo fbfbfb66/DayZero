@@ -95,7 +95,13 @@ class BackfillCoordinator(
                     localOwnerId = entity.ownerLocalId.takeUnless { it == "local_uninitialized" || it.isBlank() }
                         ?: identity.localOwnerId
                 )
-                stats = enqueueRecord(entity, record, recordIdentity, stats)
+                stats = enqueueRecord(
+                    entity = entity,
+                    record = record,
+                    identity = recordIdentity,
+                    currentStats = stats,
+                    skipAlreadySyncedDailyRecord = alreadyCompleted
+                )
             }
 
             val reachedBatchLimit = stats.enqueuedCount >= taskBatchLimit
@@ -126,11 +132,11 @@ class BackfillCoordinator(
         entity: DailyRecordEntity,
         record: DailyRecord,
         identity: AppIdentity,
-        currentStats: BackfillStats
+        currentStats: BackfillStats,
+        skipAlreadySyncedDailyRecord: Boolean
     ): BackfillStats {
         var stats = currentStats
         val now = System.currentTimeMillis()
-        val localUpdatedAt = entity.updatedAt
 
         entity.deletedAt?.let { deletedAt ->
             return enqueueIfMissing(
@@ -144,12 +150,11 @@ class BackfillCoordinator(
                     updatedAt = now,
                     ownerLocalId = identity.localOwnerId
                 ),
-                localUpdatedAt = localUpdatedAt,
                 stats = stats
             )
         }
 
-        if (isDailyRecordAlreadySynced(entity)) {
+        if (skipAlreadySyncedDailyRecord && isDailyRecordAlreadySynced(entity)) {
             Log.d(LOG_PREFIX, "enqueue skipped already synced entityType=daily_record clientId=${record.id}")
             stats = stats.copy(skippedAlreadySyncedCount = stats.skippedAlreadySyncedCount + 1)
         } else {
@@ -164,7 +169,6 @@ class BackfillCoordinator(
                     updatedAt = now,
                     ownerLocalId = identity.localOwnerId
                 ),
-                localUpdatedAt = localUpdatedAt,
                 stats = stats
             )
         }
@@ -182,7 +186,6 @@ class BackfillCoordinator(
                     updatedAt = now,
                     ownerLocalId = identity.localOwnerId
                 ),
-                localUpdatedAt = localUpdatedAt,
                 stats = stats
             )
 
@@ -199,7 +202,6 @@ class BackfillCoordinator(
                         updatedAt = now,
                         ownerLocalId = identity.localOwnerId
                     ),
-                    localUpdatedAt = localUpdatedAt,
                     stats = stats
                 )
             }
@@ -218,7 +220,6 @@ class BackfillCoordinator(
                         updatedAt = now,
                         ownerLocalId = identity.localOwnerId
                     ),
-                    localUpdatedAt = localUpdatedAt,
                     stats = stats
                 )
             }
@@ -229,7 +230,6 @@ class BackfillCoordinator(
 
     private suspend fun enqueueIfMissing(
         item: SyncQueueEntity,
-        localUpdatedAt: Long,
         stats: BackfillStats
     ): BackfillStats {
         Log.d(LOG_PREFIX, "enqueue start entityType=${item.entityType} clientId=${item.entityLocalId}")
@@ -237,8 +237,7 @@ class BackfillCoordinator(
             ownerLocalId = item.ownerLocalId,
             entityType = item.entityType,
             entityLocalId = item.entityLocalId,
-            operation = item.operation,
-            localUpdatedAt = localUpdatedAt
+            operation = item.operation
         )
         if (existing > 0) {
             Log.d(LOG_PREFIX, "enqueue skipped duplicate entityType=${item.entityType} clientId=${item.entityLocalId}")

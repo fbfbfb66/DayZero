@@ -14,6 +14,22 @@ fun readEnvValue(name: String): String {
   return line.substringAfter("=").trim().trim('"')
 }
 
+fun readLocalProperty(name: String): String {
+  val file = rootProject.file("local.properties")
+  if (!file.exists()) return ""
+  val line = file.readLines().asSequence()
+    .map { it.trim() }
+    .firstOrNull { it.startsWith("$name=") }
+    ?: return ""
+  return line.substringAfter("=").trim().trim('"')
+}
+
+fun readSecretValue(name: String): String {
+  return System.getenv(name)?.takeIf { it.isNotBlank() }
+    ?: readLocalProperty(name).takeIf { it.isNotBlank() }
+    ?: ""
+}
+
 fun quoted(value: String): String = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
 android {
@@ -24,6 +40,19 @@ android {
     minSdk = 24
     buildConfigField("String", "SUPABASE_URL", quoted(readEnvValue("SUPABASE_URL")))
     buildConfigField("String", "SUPABASE_ANON_KEY", quoted(readEnvValue("SUPABASE_ANON_KEY")))
+  }
+
+  buildTypes {
+    debug {
+      buildConfigField("String", "DAYZERO_FIXED_AUTH_EMAIL", quoted(readSecretValue("DAYZERO_FIXED_AUTH_EMAIL")))
+      buildConfigField("String", "DAYZERO_FIXED_AUTH_PASSWORD", quoted(readSecretValue("DAYZERO_FIXED_AUTH_PASSWORD")))
+      buildConfigField("String", "DAYZERO_FIXED_AUTH_USER_ID", quoted(readSecretValue("DAYZERO_FIXED_AUTH_USER_ID")))
+    }
+    release {
+      buildConfigField("String", "DAYZERO_FIXED_AUTH_EMAIL", quoted(""))
+      buildConfigField("String", "DAYZERO_FIXED_AUTH_PASSWORD", quoted(""))
+      buildConfigField("String", "DAYZERO_FIXED_AUTH_USER_ID", quoted(""))
+    }
   }
 
   buildFeatures {

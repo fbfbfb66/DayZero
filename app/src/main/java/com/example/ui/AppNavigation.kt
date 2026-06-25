@@ -50,6 +50,7 @@ import androidx.navigation.navArgument
 import com.example.DayZeroViewModel
 import com.example.UiEvent
 import com.example.domain.model.ai.AiChatMessage
+import com.example.domain.model.ai.assistant.ConfirmCardMeal
 import com.example.domain.model.ai.assistant.PayloadSummary
 import com.example.ui.components.feedback.SuccessConfirmOverlay
 import com.example.ui.screens.AiConversationScreen
@@ -131,6 +132,14 @@ fun MainApp() {
 
             override fun handleDateMismatchGuardResult(guardId: String, approved: Boolean) {
                 viewModel.handleDateMismatchGuardResult(guardId = guardId, approved = approved)
+            }
+
+            override fun updateFoodDraftCard(interactionId: String, weightKg: Double?, meals: List<ConfirmCardMeal>) {
+                viewModel.updateFoodDraftCard(
+                    interactionId = interactionId,
+                    weightKg = weightKg,
+                    meals = meals
+                )
             }
 
             override fun clearChatMessages() {

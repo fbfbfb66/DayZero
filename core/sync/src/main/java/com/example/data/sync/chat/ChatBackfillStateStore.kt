@@ -106,6 +106,10 @@ class ChatBackfillStateStore(context: Context) {
         editor.apply()
     }
 
+    fun resetForRemoteUserChange() {
+        preferences.edit().clear().commit()
+    }
+
     private fun putStats(editor: android.content.SharedPreferences.Editor, stats: ChatBackfillStats): android.content.SharedPreferences.Editor {
         return editor
             .putInt(KEY_SCANNED_CONVERSATION_COUNT, stats.scannedConversationCount)

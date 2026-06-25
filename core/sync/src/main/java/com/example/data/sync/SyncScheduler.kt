@@ -35,10 +35,13 @@ class InProcessSyncScheduler(
     private val chatPullCoordinator: com.example.data.sync.chat.ChatPullCoordinator? = null,
     private val chatPullHealthStateStore: com.example.data.sync.chat.ChatPullHealthStateStore? = null,
     private val syncHealthReporter: SyncHealthReporter?,
-    private val debounceMs: Long = DEFAULT_DEBOUNCE_MS
+    private val debounceMs: Long = DEFAULT_DEBOUNCE_MS,
+    private val remoteIdentityBindingCoordinator: RemoteIdentityBindingCoordinator? = null
 ) : SyncScheduler {
     private val lock = Any()
     private var activeJob: Job? = null
+    private var activeRequest: ScheduledRequest? = null
+    private var pendingRequest: ScheduledRequest? = null
 
     override fun requestSync(reason: SyncTriggerReason): Job? {
         return request(reason = reason, runBackfill = false, runSync = true)
@@ -70,9 +73,22 @@ class InProcessSyncScheduler(
         runSync: Boolean,
         pullMode: PullMode? = null
     ): Job? {
+        val requested = ScheduledRequest(
+            reason = reason,
+            runBackfill = runBackfill,
+            runSync = runSync,
+            pullMode = pullMode
+        )
         synchronized(lock) {
             activeJob?.takeIf { it.isActive }?.let { job ->
-                Log.d("DayZeroSync", "scheduler skipped already running reason=$reason")
+                val alreadyCovered = activeRequest?.covers(requested) == true ||
+                    pendingRequest?.covers(requested) == true
+                if (!alreadyCovered) {
+                    pendingRequest = pendingRequest?.merge(requested) ?: requested
+                    Log.d("DayZeroSync", "scheduler queued follow-up reason=$reason")
+                } else {
+                    Log.d("DayZeroSync", "scheduler skipped already covered reason=$reason")
+                }
                 return job
             }
 
@@ -81,6 +97,11 @@ class InProcessSyncScheduler(
                     Log.d("DayZeroSync", "scheduler request reason=$reason backfill=$runBackfill sync=$runSync pull=$pullMode")
                     if (reason != SyncTriggerReason.MANUAL && debounceMs > 0L) {
                         delay(debounceMs)
+                    }
+                    remoteIdentityBindingCoordinator?.ensureRemoteUserBound()?.let { changed ->
+                        if (changed) {
+                            Log.w("DayZeroIdentityBind", "scheduler reset remote-scoped sync metadata reason=$reason")
+                        }
                     }
                     if (runSync) {
                         Log.d("DayZeroSync", "scheduler step push pending reason=$reason")
@@ -160,15 +181,63 @@ class InProcessSyncScheduler(
                 } catch (error: Exception) {
                     Log.e("DayZeroSync", "scheduler error reason=$reason type=${error::class.java.simpleName}", error)
                 } finally {
+                    var followUp: ScheduledRequest? = null
                     synchronized(lock) {
                         if (activeJob === this.coroutineContext[Job]) {
                             activeJob = null
+                            activeRequest = null
+                            followUp = pendingRequest
+                            pendingRequest = null
                         }
+                    }
+                    followUp?.let {
+                        Log.d("DayZeroSync", "scheduler starting queued follow-up reason=${it.reason}")
+                        request(
+                            reason = it.reason,
+                            runBackfill = it.runBackfill,
+                            runSync = it.runSync,
+                            pullMode = it.pullMode
+                        )
                     }
                 }
             }
             activeJob = job
+            activeRequest = requested
             return job
+        }
+    }
+
+    private data class ScheduledRequest(
+        val reason: SyncTriggerReason,
+        val runBackfill: Boolean,
+        val runSync: Boolean,
+        val pullMode: PullMode?
+    ) {
+        fun covers(other: ScheduledRequest): Boolean {
+            return (!other.runBackfill || runBackfill) &&
+                (!other.runSync || runSync) &&
+                (other.pullMode == null || pullMode == other.pullMode)
+        }
+
+        fun merge(other: ScheduledRequest): ScheduledRequest {
+            return ScheduledRequest(
+                reason = other.reason,
+                runBackfill = runBackfill || other.runBackfill,
+                runSync = runSync || other.runSync,
+                pullMode = mergePullMode(pullMode, other.pullMode)
+            )
+        }
+
+        private fun mergePullMode(current: PullMode?, next: PullMode?): PullMode? {
+            return when {
+                current == PullMode.MANUAL_RESTORE_CHECK || next == PullMode.MANUAL_RESTORE_CHECK ->
+                    PullMode.MANUAL_RESTORE_CHECK
+                current == PullMode.INITIAL_RESTORE || next == PullMode.INITIAL_RESTORE ->
+                    PullMode.INITIAL_RESTORE
+                current == PullMode.INCREMENTAL || next == PullMode.INCREMENTAL ->
+                    PullMode.INCREMENTAL
+                else -> null
+            }
         }
     }
 

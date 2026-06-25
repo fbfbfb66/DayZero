@@ -41,7 +41,11 @@ class AiAssistantRemoteMapper {
                                     name = item.name,
                                     amountText = item.amountText,
                                     calories = item.calories,
-                                    calorieConfidence = item.calorieConfidence
+                                    calorieConfidence = item.calorieConfidence,
+                                    carbohydratesG = item.carbohydratesG,
+                                    proteinG = item.proteinG,
+                                    fatG = item.fatG,
+                                    fiberG = item.fiberG
                                 )
                             }
                         )
@@ -165,7 +169,11 @@ class AiAssistantRemoteMapper {
                         name = it.name,
                         amountText = it.amountText,
                         calories = it.calories,
-                        calorieConfidence = it.calorieConfidence
+                        calorieConfidence = it.calorieConfidence,
+                        carbohydratesG = it.carbohydratesG,
+                        proteinG = it.proteinG,
+                        fatG = it.fatG,
+                        fiberG = it.fiberG
                     )
                 } ?: emptyList(),
                 date = dto.date,
@@ -182,7 +190,11 @@ class AiAssistantRemoteMapper {
                                 name = it.name,
                                 amountText = it.amountText,
                                 calories = it.calories,
-                                calorieConfidence = it.calorieConfidence
+                                calorieConfidence = it.calorieConfidence,
+                                carbohydratesG = it.carbohydratesG,
+                                proteinG = it.proteinG,
+                                fatG = it.fatG,
+                                fiberG = it.fiberG
                             )
                         }
                     )
@@ -333,7 +345,11 @@ class AiAssistantRemoteMapper {
                         name = it.name,
                         amountText = it.amountText,
                         calories = it.calories,
-                        calorieConfidence = it.calorieConfidence
+                        calorieConfidence = it.calorieConfidence,
+                        carbohydratesG = it.carbohydratesG,
+                        proteinG = it.proteinG,
+                        fatG = it.fatG,
+                        fiberG = it.fiberG
                     )
                 },
                 date = card.date,
@@ -350,7 +366,11 @@ class AiAssistantRemoteMapper {
                                 name = it.name,
                                 amountText = it.amountText,
                                 calories = it.calories,
-                                calorieConfidence = it.calorieConfidence
+                                calorieConfidence = it.calorieConfidence,
+                                carbohydratesG = it.carbohydratesG,
+                                proteinG = it.proteinG,
+                                fatG = it.fatG,
+                                fiberG = it.fiberG
                             )
                         }
                     )

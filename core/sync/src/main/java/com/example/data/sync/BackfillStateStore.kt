@@ -77,6 +77,10 @@ class BackfillStateStore(context: Context) {
         markRetryableFailure(error)
     }
 
+    fun resetForRemoteUserChange() {
+        preferences.edit().clear().commit()
+    }
+
     private fun putStats(editor: android.content.SharedPreferences.Editor, stats: BackfillStats) {
         editor
             .putInt(KEY_SCANNED_DAILY_RECORD_COUNT, stats.scannedDailyRecordCount)

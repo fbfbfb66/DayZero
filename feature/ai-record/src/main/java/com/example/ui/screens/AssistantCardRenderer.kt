@@ -149,6 +149,13 @@ private fun RenderShowConfirmCard(
                 confirmType = "food_record",
                 payloadSummary = payloadSummary
             )
+        },
+        onDraftChanged = { interactionId, weightKg, meals ->
+            actionHandler.updateFoodDraftCard(
+                interactionId = interactionId,
+                weightKg = weightKg,
+                meals = meals
+            )
         }
     )
 }

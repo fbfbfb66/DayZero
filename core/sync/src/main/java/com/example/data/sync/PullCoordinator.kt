@@ -264,7 +264,11 @@ class PullCoordinator(
                                 name = food.name,
                                 quantity = food.amountText ?: food.grams?.let { "${it}g" } ?: "1",
                                 estimatedCalories = food.calories?.toInt() ?: 0,
-                                confidence = food.confidence?.toString() ?: "unknown"
+                                confidence = food.confidence?.toString() ?: "unknown",
+                                carbohydratesG = food.carbsG,
+                                proteinG = food.proteinG,
+                                fatG = food.fatG,
+                                fiberG = food.fiberG
                             )
                         }
                 )

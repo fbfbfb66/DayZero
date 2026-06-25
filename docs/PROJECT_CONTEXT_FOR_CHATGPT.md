@@ -18,15 +18,16 @@
 - **AI Record UI Decoupled**. AI Record screens no longer receive `DayZeroViewModel` directly. They use `AiRecordViewModel` for conversation history/detail state and an `AiRecordActionHandler` bridge for existing send/card/confirm actions. AI business card dispatch stays in `AssistantCardRenderer`, so new card types should be added there instead of expanding the main screen body.
 - **Build Verification After Refactor**: `./gradlew :app:assembleDebug :app:testDebugUnitTest` and `./gradlew test` pass after the module split and Hilt migration.
 - **Local-First Sync Architecture (Phase 5) implemented**. Established local-first sync foundation for daily records, meals, food entries, and weight records using Room as the local source of truth.
-- **Identity Layer & Anonymous Auth**: Added `CurrentIdentityProvider` and `CompositeIdentityProvider`. Implemented `SupabaseAnonymousIdentityProvider` which logs in anonymously and holds a `SupabaseAuthSession` so data can be synced to Supabase without requiring user manual login.
+- **Identity Layer & Fixed Development Auth**: Added `CurrentIdentityProvider` and `CompositeIdentityProvider`. The current Hilt production path wires `SupabaseFixedPasswordIdentityProvider` with `FixedDevelopmentAccountCredentialsProvider`, exposes it as `SupabaseAuthSessionProvider`, and rejects anonymous or unexpected-user stored sessions. `SupabaseAnonymousIdentityProvider` remains in source/history but is not the current Hilt-provided remote identity path.
 - **Supabase Remote Sync Gateway**: Added `SupabaseRemoteSyncGateway` which maps queued `SyncPayload` items and pushes them to Supabase via REST/PostgREST. Gracefully falls back to `NoopRemoteSyncGateway` if Supabase config is missing.
 - **Remote Pull Implementation & Sync Lifecycle**: Added `PullCoordinator`, `PullStateStore`, and `SupabaseRemotePullGateway` to fetch updates from Supabase. Defined a strict manual sync order (Push -> Backfill -> Push -> Pull) and added comprehensive pull failure/recovery mechanisms, completing the two-way sync loop.
 - **Supabase remote sync lifecycle & stability fixed**. Existing anonymous sessions now refresh with `/auth/v1/token?grant_type=refresh_token` before expiry instead of creating a new anonymous user. Refresh token rotation is persisted as a complete token pair. Temporary refresh failures pause sync without signup, and permanent refresh rejection blocks cloud sync instead of silently switching to a new `user_id`.
+- **Fixed Development Account Migration (2026-06-25)**. Added `user_profiles` for non-anonymous Supabase Auth users, fixed development email/password credentials, and `RemoteIdentityBindingCoordinator` so local sync/backfill/pull cursors reset when the bound remote user changes.
 - **Debug Installation & Data Preservation Verified**: Verified that standard Android Studio deployments (`:app:installDebug`) safely preserve `SharedPreferences` (holding `local_owner_id`) and the Room database. A new safe script `scripts/install-debug-preserve-data.ps1` was added to standardize local installation without wiping data.
 - **Data Persistence & Sync Recovery Verified**:
   - Overwriting installs preserve both local Room records and the Supabase `user_id`.
   - When a user explicitly clears local business records using the in-app debug menu (preserving identity), the `PullCoordinator` successfully restores the Calendar data from the Supabase backend.
-  - As expected by the anonymous auth architecture, fully uninstalling the app or clearing storage via system settings permanently deletes the `local_owner_id`. A new anonymous `user_id` will be generated upon next launch, leaving the previous remote data orphaned. This is a known, expected limitation and will require a full account binding system in the future.
+  - Historical anonymous-auth limitation: fully uninstalling the app or clearing storage via system settings permanently deleted the `local_owner_id`; under the current fixed development auth path, the remote Supabase user is expected to remain the configured fixed account when credentials are available.
 - **Supabase Schema Verification**: Added `docs/SUPABASE_SCHEMA_VERIFICATION.md` as the definitive checklist for the remote sync schema, RLS policies, and idempotency requirements.
 - **UI Integration for Sync Status Completed**: Added `SyncStatusRepository` and UI components (`ui/sync/`) to observe and display the `SyncHealthSnapshot`. Integrated sync status indicators into `AiRecordScreen` and `TrendsScreen`. Also updated `SupabaseRemoteSyncGateway` to handle remote deletions.
 - **Backfill & Sync Health Completed**: Fully implemented `BackfillCoordinator`, `BackfillStateStore`, and `SyncHealthReporter`. The system can now automatically discover unsynced historical records (`DailyRecordDao.getUnsyncedRecords`) and enqueue them, ensuring complete local-to-remote data consistency. Comprehensive testing added via `DayZeroSyncBackfillTest`.
@@ -37,7 +38,7 @@
 - **Weight Pre-population**: Configured the server-side normalization wrapper `normalizeActions()` to read `todayRecord` from the database and pre-populate `action.payload.weightKg` with the existing weight record in the database if the AI does not output a new weight.
 - **Fast Fallback (15s Timeout)**: Reduced the Deno streaming fetch abort timeout in `assistant-turn-v2-stream` from **35 seconds** to **15 seconds**. If Kimi API hangs or suffers from high TTFT, Deno will abort after 15s, triggering immediate client fallback to the non-streaming `assistant-turn-v2` endpoint, saving 20 seconds of empty waiting time.
 - **Kimi Latency Analysis**: Identified that high latency is 100% caused by Kimi (Moonshot API `kimi-k2.6`) response time and network routing between Supabase (outside China) and Moonshot (inside China). Deno edge function execution overhead is negligible (< 2ms).
-- `assistant-turn-v2-stream` (Version 11) is the current primary AI runtime entrypoint. `assistant-turn-v2` (Version 18) remains as a compatibility fallback.
+- `assistant-turn-v2-stream` (Version 12) is the current primary AI runtime entrypoint. `assistant-turn-v2` (Version 21) remains as a compatibility fallback.
 - Room chat persistence is fully enabled. User messages, AI replies, and cards are fully persistent.
 - **AI history conversation data foundation (Phase 1) complete**. Local Room now has a `conversations` table and every `ai_chat_messages` row belongs to a non-null `conversationId`. The database migration from version 9 to 10 safely groups the old single chat stream by device-local natural day, creates one legacy conversation per day with a stable UUID, and copies existing messages without changing message text, card payload JSON, card state, or ordering.
 - **AI history UI (Phase 3) is implemented locally**. The AI tab now opens an AI home screen with a large first-message input and a Room-backed history list. Conversation detail is a second-level route that renders only the selected `conversationId` messages and hides the app bottom navigation bar.
@@ -100,11 +101,12 @@ Note: Several legacy interfaces/classes still exist in migrated modules for comp
 - Phase 6A deployment status: applied to Supabase project `sybenxmxnwwtlvkeojtj` via MCP on 2026-06-21. Static schema/RLS/grant/index/trigger verification was read back from the project.
 - Phase 6B RLS probe status: two real anonymous authenticated sessions verified A-owned conversation insert/read/update, B isolation from A rows, B message attach rejection with HTTP 403, and unauthenticated rejection with HTTP 401. The separate `user_id` mutation probe and hard DELETE probe were also verified with a local powershell script using the anon key: cross-user updates and hard deletes returned HTTP 403, and management readbacks by User A confirmed the data remained safely owned by User A. The probe row was tombstoned.
 - Phase 6B Push verification status: Real-device verification of Chat Push has been successfully completed. Verified that new conversations and final messages are successfully pushed. No placeholders or `reply_delta` messages are uploaded to Supabase. Card payload is saved as native JSONB without double-encoding. Card status updates reuse the same message ID without duplicate row generation. After app restart and repeated backfill sync execution, remote table rows remain stable (conversations = 3, messages = 16) with no duplicates. Chat push is triggered automatically in the background by the existing SyncScheduler. Phase 6D Chat Pull real-device recovery verification is also complete.
-- Primary Edge Function: `assistant-turn-v2-stream` (Version 11, timeout=15s)
-- Fallback Edge Function: `assistant-turn-v2` (Version 18)
+- Primary Edge Function: `assistant-turn-v2-stream` (Version 12, timeout=15s)
+- Fallback Edge Function: `assistant-turn-v2` (Version 21)
 - Retired Edge Function: `ai-assistant-turn` should stay deleted/unused
 - Remote status: `ACTIVE`
-- Stream prompt version: `stream_compact_v1`
+- Remote current prompt versions: `assistant-turn-v2-stream` uses `stream_compact_v2`; `assistant-turn-v2` uses `compact_v3_timing`.
+- The 2026-06-26 nutrition Edge Function deployment is complete. There is no longer a local-only pending Edge Function prompt version for these two functions.
 - `verify_jwt=false`
 
 ## Sync Architecture
@@ -450,3 +452,210 @@ This configuration caused `ComponentActivity` to register as a launcher activity
 - Remote Supabase tables and RLS policies were left unchanged.
 - Physical device data and anonymous session states were fully preserved (no `connectedDebugAndroidTest` or `adb uninstall` was run on the connected device).
 - Normal recovery can be manually verified using a safe overwrite install.
+
+---
+
+## Phase A: Nutrition Capsule Data Link & Sync (2026-06-26)
+
+### 2. 领域层与 Card DTO 的扩展
+- **[FoodEntry](file:///D:/Goings/APPProjects/DayZero/core/model/src/main/java/com/example/domain/model/FoodEntry.kt)** 包含 `carbohydratesG`, `proteinG`, `fatG`, `fiberG` (Float? = null)。
+- **[ConfirmCardItem](file:///D:/Goings/APPProjects/DayZero/core/model/src/main/java/com/example/domain/model/ai/assistant/AiChatCard.kt)** 新增上述四个字段。
+- **[ConfirmCardItemDto](file:///D:/Goings/APPProjects/DayZero/core/network/src/main/java/com/example/data/remote/dto/assistant/AiChatCardDto.kt)** 及 **[AssistantActionItemDto](file:///D:/Goings/APPProjects/DayZero/core/network/src/main/java/com/example/data/remote/dto/assistant/AssistantActionDto.kt)** 补充上述四个字段，使用 Moshi 进行序列化。
+- **[AssistantTurnV2ResponseMapper](file:///D:/Goings/APPProjects/DayZero/core/network/src/main/java/com/example/data/remote/mapper/AssistantTurnV2ResponseMapper.kt)** 及 **[AiAssistantRemoteMapper](file:///D:/Goings/APPProjects/DayZero/core/network/src/main/java/com/example/data/remote/mapper/AiAssistantRemoteMapper.kt)** 完整实现双向往返映射。
+  - 历史 Card JSON 缺少营养字段时，正常解析得到 `null`，不崩溃且不转为 0。
+  - `date_mismatch_guard_card` 中嵌套的 `pendingOriginalCard` 能对称传输并不丢营养字段。
+
+### 3. 本地 mealsJson 存储与兼容性
+- **存储方案**: 本地 Room 保持不变，不需要 Room Migration 且未改变 Database version，没有独立的本地 meals/food_entries/weight_records Room 表。
+- **Room counts 说明**: 文档历史中的 `daily_records=3, meals=6, food_entries=9, weight_records=3` 并非 Room 中独立表行数。`daily_records` 指 Room 中记录实体行数，其余是指业务对象在 `mealsJson` 中的计数、Backfill 扫描任务计数或远端 Supabase 数据库表行数。
+- **mealsJson 兼容**: 借助 Moshi，新/旧 `mealsJson` 反序列化为 `FoodEntry` 时能对未知键得到 `null`，保存时正常序列化并保留 0 与 null 的独立语义。
+
+### 4. 同步对称性 (Sync Payload, Push, Pull & Backfill)
+- **[SyncPayloadBuilder](file:///D:/Goings/APPProjects/DayZero/core/sync/src/main/java/com/example/data/sync/SyncPayloadBuilder.kt)**: `foodPayload` 输出 `carbsG`, `proteinG`, `fatG`, `fiberG`，显式支持 `null -> JSONObject.NULL`，确保能够被客户端清空及修改。
+- **[SupabaseRemoteSyncGateway](file:///D:/Goings/APPProjects/DayZero/core/sync/src/main/java/com/example/data/sync/SupabaseRemoteSyncGateway.kt)**: `foodEntryBody` 新增 `fiber_g` 列的写入，向 Supabase 发送 Push 请求时，值保留 null/0/正数。
+- **[SupabaseRemotePullGateway](file:///D:/Goings/APPProjects/DayZero/core/sync/src/main/java/com/example/data/sync/SupabaseRemotePullGateway.kt)**: `FoodEntryRemoteDto` 增加 `fiberG` 字段；`foodEntryFromJson` 在从 JSON 解析时，读取 `fiber_g` 并支持缺失字段兼容 (返回 null)。
+- **[PullCoordinator](file:///D:/Goings/APPProjects/DayZero/core/sync/src/main/java/com/example/data/sync/PullCoordinator.kt)**: `buildMeals` 在构造 `FoodEntry` 领域模型时，成功映射 remote 的四个营养字段，实现了 Pull 流程的数据流补齐。
+- **Backfill**: 因为 Backfill 调用 `foodPayload`，更新 `SyncPayloadBuilder` 后，历史营养字段和 null 属性会自动加入 Backfill 流程，实现了同步对称。
+
+### 5. Supabase 变更已于 2026-06-26 成功部署并验证
+- **Migration SQL**: 成功在项目 `sybenxmxnwwtlvkeojtj` 部署了 [20260626001000_add_food_entries_fiber_g.sql](file:///D:/Goings/APPProjects/DayZero/supabase/migrations/20260626001000_add_food_entries_fiber_g.sql)（使用 Supabase MCP `apply_migration` 工具），在 `public.food_entries` 中增加了 `fiber_g numeric null` 列。
+- **Verification SQL**: 执行了 [20260626001000_verify_food_entries_nutrition.sql](file:///D:/Goings/APPProjects/DayZero/supabase/verification/20260626001000_verify_food_entries_nutrition.sql)，包含对列、类型、空值和既有 RLS 等安全策略的只读检验，所有项目均通过。
+- **数据与安全一致性**: 既有 9 行数据的 `fiber_g` 初始化为 null，其他字段保持不变；表的 RLS、4 项所有权策略、唯一约束、外键、5 个索引及表权限等均保持一致，且行数、孤儿行、重复行或跨用户数据均未发生任何异常。
+
+### 6. 测试与验证结果
+- **新增的单元测试**:
+  - `DailyRecordMapperTest`: 验证旧 JSON 不含键、新 JSON round-trip 以及更新时 null 不混淆的兼容性。
+  - `SyncPayloadBuilderTest`: 验证 null/0/正数分别映射为 JSON null、数值 0 和正数的准确性。
+  - `SupabaseFoodRemoteGatewayTest`: 验证 Push 网关映射和 Pull 网关解析（包括缺失 `fiber_g` 列时的向后兼容性）。
+  - `AiAssistantRemoteMapperTest`: 验证 ConfirmCardItem 序列化往返、历史 card 兼容、action 响应解析以及 date mismatch 嵌套卡片。
+  - `ConfirmFoodRecordUseCaseTest`: 验证 payload 确认时营养克数能正确写入最终的领域模型。
+- **测试执行情况**:
+  - JVM 单元测试均已成功执行并全部通过 (177 Actionable tasks executed, BUILD SUCCESSFUL)。
+
+### 7. 部署与环境声明
+- **“本阶段未发生 Room Schema 变化，未提升 Database version。Supabase 变更（新增 fiber_g 列）已于 2026-06-26 成功部署并验证。现在客户端 Schema 兼容阻塞已解除。Edge Function 营养字段版本已完成远端部署和烟雾验收。”**
+- 数据契约阻断负数、NaN 和 Infinity；完整输入 normalization 已经在 Edge Function 远端代码中通过 `normalizeActions` 校验并实现。UI 渲染、编辑失效规则、计算器已完全实现，胶囊和动画于 Phase C2 最终实现。
+
+---
+
+## Edge Function & AI Prompt Nutrition Capsule Changes (2026-06-26)
+
+### 1. 本地 Edge Function 外科式修改
+- **Prompt 升级**：同时修改了 `assistant-turn-v2-stream` 与 `assistant-turn-v2` 的系统 Prompt：
+  - 更新 `show_confirm_card` 的 JSON 示例，将营养克数 `carbohydratesG: 85, proteinG: 15, fatG: 22, fiberG: 6` 追加至 item 示例中。
+  - 在热量和 `calorieConfidence` 说明后追加了一行精确的语义说明，明确指示字段克数对应 `amountText` 份量、不可靠时用 `null`、碳水包含纤维、且未知不得用 `0` 代替。
+- **Prompt 版本升级**：
+  - `assistant-turn-v2-stream` 的 `promptVersion` 从 `stream_compact_v1` 递增为 `stream_compact_v2`。
+  - `assistant-turn-v2` 的 `promptVersion` 从 `compact_v2_timing` 递增为 `compact_v3_timing`。
+
+### 2. Normalization 模块抽离与数值净化
+- **[normalization.ts](file:///D:/Goings/APPProjects/DayZero/supabase/functions/assistant-turn-v2-stream/normalization.ts)**: 新增独立的归一化 TS 模块，将 `generateId`、`getMealLabel` 和 `normalizeActions` 抽离，减少 `index.ts` 冗余，方便 Deno 单体测试直接导入。
+- **纯数值净化函数**：新增了 `normalizeNullableNonNegativeNumber` 辅助函数，严格实现：
+  - 正数、小数、0 保留。
+  - `null`/缺失/`undefined` 补齐为 `null`。
+  - 负数、`NaN`、`Infinity`/`-Infinity` 净化为 `null`。
+  - 字符串数字等其他类型一律净化为 `null`（不做隐式转换）。
+- 在 `normalizeActions` 对 `meals[].items[]` 进行就地遍历修改，对其四个营养字段套用净化函数。
+
+### 3. Deno 单元测试覆盖
+- **[normalization_test.ts](file:///D:/Goings/APPProjects/DayZero/supabase/functions/assistant-turn-v2-stream/normalization_test.ts)**: 编写了 Deno 规格 of 单元测试：
+  - 覆盖了辅助函数的数值边界（正数、小数、0、负数、`NaN`、`Infinity`、字符串数字等非数字类型）。
+  - 覆盖了 `normalizeActions` 包含营养字段、全 null、缺失、旧版卡片无营养字段、非 `show_confirm_card` 卡片豁免、体重预填等全部 16 种边界情形。
+
+### 4. 部署与环境状态
+- **Edge Function 部署状态**：2026-06-26 已在 Supabase 项目 `sybenxmxnwwtlvkeojtj` 使用 Supabase MCP 按顺序部署并验证营养字段版本：先部署 fallback `assistant-turn-v2`，再部署 primary streaming `assistant-turn-v2-stream`。
+  - `assistant-turn-v2`: 当前远端 Version 21 / `compact_v3_timing` / `ACTIVE` / `verify_jwt=false`。
+  - `assistant-turn-v2-stream`: 当前远端 Version 12 / `stream_compact_v2` / `ACTIVE` / `verify_jwt=false`，stream timeout 仍为 15 秒。
+  - 本次任务未发生客户端架构变化，未发生数据库 Schema 变化，未修改 secrets。
+- **回滚源码保存**：部署前已真实保存当前远端回滚源码到 `%LOCALAPPDATA%\Temp\dayzero-edge-rollback-20260626-020433\`。
+  - `assistant-turn-v2-version-20-index.ts`: 19444 bytes, SHA-256 `F80255EFECAF6E4536B97F1AD3E9E373F33A0822F35B18B6819261020A218304`。
+  - `assistant-turn-v2-stream-version-11-index.ts`: 22970 bytes, SHA-256 `B8BF404CE780616712E69556DB72EC07C0F38DE991EB1AEBB631D80FE44196D8`。
+  - 同目录还包含 `rollback-manifest.txt` 与 `sha256.txt`。
+- **远端烟雾验收**：fallback 普通聊天 2/2 HTTP 200，`reply` 为字符串，`actions` 为数组，`debugTiming.promptVersion=compact_v3_timing`。fallback 基线输入 `午餐吃了一碗螺蛳粉和一个鸡蛋，帮我记录一下。` 第 1 次获得 `show_confirm_card`，2 个 item 均包含 `carbohydratesG/proteinG/fatG/fiberG`，字段类型均为非负有限 number 或 null，`mealType/subtotalCalories/totalCalories/weightKg/confirmType/name/amountText/calories/calorieConfidence` 正常。
+- **Streaming 远端烟雾验收**：普通聊天获得 2 次成功 SSE 样本，事件顺序为 `status -> reply_delta* -> final -> debug_timing -> done`，final 只出现一次，`debugTiming.promptVersion=stream_compact_v2`。另有 1 次普通聊天样本返回 SSE `error: The signal has been aborted`，发生在 15 秒 timeout 保护内，未伴随 5xx 或模块加载错误。streaming 基线输入第 1 次获得 `show_confirm_card`，final action 中 2 个 item 均包含四个营养字段，字段类型均为非负有限 number 或 null，且 action 未提前出现在 `reply_delta` 中。部署后 fallback 复测 HTTP 200。
+- **Schema 对称性**：fallback 与 streaming 的远端 action/schema 字段名称一致；营养字段契约一致，不要求两次模型调用产生相同估算数值。
+- **日志与安全状态**：Supabase Edge Function 日志中本轮相关部署后调用均为 HTTP 200，未发现 import/module error、TypeError、normalization 异常、secrets 缺失或持续 5xx。烟雾测试只调用 Edge Function 返回结构，未确认客户端卡片，未写入 `food_entries`、`daily_records`、聊天数据库或 `user_profiles`。
+- **Deno 环境状态**：2026-06-26 已用官方 Windows 用户级安装脚本安装 Deno 到 `%USERPROFILE%\.deno\bin\deno.exe`，并在本地执行 Edge Function 格式、lint、类型检查和 normalization 单元测试验收。
+- **部署失败后恢复确认 (2026-06-26)**：通过 Supabase MCP 只读读取确认当前 `assistant-turn-v2` Version 20 状态为 `ACTIVE`、`verify_jwt=false`、源码为旧版 `compact_v2_timing` 形态，不含 `normalization.ts` import、营养字段或 `compact_v3_timing` 残留。旧版 fallback 健康采样显示普通聊天 2/2 返回 HTTP 200 且 `actions=[]`；明确记录请求 `午餐吃了一碗螺蛳粉和一个鸡蛋，帮我记录一下。` 5/5 返回 `show_confirm_card`；历史设计输入 `我今天中午吃了螺蛳粉` 先返回 `ask_record_intent_card`，随后按真实 `interaction_result` 选择“帮我记录”返回 `show_confirm_card`。上轮 90 秒超时未复现。
+- **actions=[] 调查结论**：上轮 Version 19 三次远端日志均为 HTTP 200，无 import/module/TypeError/5xx 证据。Version 19 两次饮食烟雾请求与真实 Android fallback 请求不同：手工请求显式包含多个 `null` 字段、空 `todayRecord`、`promptCacheKey` 和“请直接生成记录确认卡”测试话术；真实 fallback DTO 通常不发送 `promptCacheKey`，null 字段由 Moshi 省略，`todayRecord` 无记录时为 null/省略，且 user flow 可能先出 `ask_record_intent_card` 再经 `interaction_result` 出确认卡。现有日志未暴露 Kimi raw content，无法证明 `actions=[]` 最早出现在 raw model、JSON 解析、校验或 normalization 哪一层；目前没有证据证明营养 Prompt、函数抽离或 normalization 导致代码回归。下一次部署验收应以确定性检查为主：remote module startup、HTTP 200、协议合法、promptVersion 正确、无 import/TypeError/5xx，以及一旦 action 存在则营养字段经过 normalization；自然语言是否单次出 `show_confirm_card` 属于非确定性采样，不应作为唯一部署门槛。
+- **本轮环境声明**：本次重新部署与验收未修改 Prompt、未修改营养字段语义、未修改 normalization 规则、未修改客户端代码、未修改数据库 Schema、未修改 secrets、未安装或运行 APK、未执行真机操作。
+- **真机/UI 状态**：APK 未重新安装运行，未进行真机 UI/卡片编辑/计算器/动画验证。
+
+---
+
+## Phase C1: Nutrition Capsule Client Logic & Functional UI (2026-06-26)
+
+### 1. 计算逻辑
+- 新增 `NutritionCapsuleCalculator`，位置：`core/ui/src/main/java/com/example/ui/components/ai/NutritionCapsuleCalculator.kt`。
+- 胶囊按整张 `show_confirm_card` 的 `payload.meals[].items[]` 汇总，不从 `calories` 反推营养。
+- `carbohydratesG` 表示包含 `fiberG` 的总碳水；展示用净碳水：
+  - `totalCarbohydratesG = sum(items.carbohydratesG)`
+  - `totalProteinG = sum(items.proteinG)`
+  - `totalFatG = sum(items.fatG)`
+  - `totalFiberG = sum(items.fiberG)`
+  - `netCarbohydratesG = max(totalCarbohydratesG - totalFiberG, 0)`
+- 胶囊四段固定为：净碳水、蛋白质、脂肪、膳食纤维。比例按克数计算：
+  - `componentRatio = componentGrams / (netCarbohydratesG + totalProteinG + totalFatG + totalFiberG)`
+  - 不使用 4/4/9 热量换算，不使用热量加权。
+
+### 2. 显示/隐藏规则
+- 只有卡片至少有一个食物 item、每个当前 item 的四个营养字段都非 null、有限且非负，并且四项展示总和大于 0 时，才显示整块营养胶囊。
+- 任意 item 缺失字段、字段为 null、负数、NaN、Infinity、空 meals/items、历史卡片完全无营养字段，或四项展示总和为 0 时，整块胶囊完全隐藏，不显示残缺版本、空壳或“暂无数据”。
+- 明确的 0 是合法值；若其他字段使总和大于 0，0 值组成不会导致崩溃。`fiberG > carbohydratesG` 时净碳水 clamp 为 0。
+
+### 3. 编辑失效与持久化
+- `FoodDraftConfirmCard` 的食物编辑现在通过 `NutritionCapsuleCalculator.applyFoodEdit(...)` 判断真实变化。
+- 当某个 item 的 `name`、`amountText` 或 `calories` 发生真实变化时，仅该 item 的 `carbohydratesG/proteinG/fatG/fiberG` 被置为 null；其他 item 的营养值保留。
+- 保存相同的 `name/amountText/calories` 不会使营养失效；`mealType`、meal label、`weightKg`、卡片状态切换、guard 状态变化不会使营养失效。
+- 新增 item 使用 `NutritionCapsuleCalculator.newItem(...)`，四个营养字段默认为 null，因此胶囊会隐藏；删除 item 后按剩余 item 重新计算，剩余 item 全部完整时胶囊可重新显示。
+- `FoodDraftConfirmCard` 新增 `onDraftChanged` callback，编辑、删除、新增和体重保存会立即写回同一张卡片的数据源。`DayZeroViewModel.updateFoodDraftCard(...)` 复用现有 `aiDraftRepository.updateChatMessage(...)` 路径更新 `assistantCardsJson`，不创建第二套 Compose-only 状态源。
+- 普通 `show_confirm_card` 和 `date_mismatch_guard_card.pendingOriginalCard` 都由同一更新路径处理。guard approved 后展示原卡片时，编辑失效规则正常生效；guard cancelled 不写入食物记录；confirmed/cancelled 状态切换不会恢复旧营养值。
+- `ConfirmFoodRecordUseCase` 接收到的是编辑后的 `PayloadSummary.meals`：未失效的营养值保留，已失效的字段为 null，并最终写入 `FoodEntry`。
+
+### 4. 基础功能型 UI
+- `FoodDraftConfirmCard` 在食物列表之后、确认/取消操作之前显示整卡级营养胶囊。
+- UI 包含标题“营养构成”、一条横向圆角分段条、四项名称与克数。克数整数不显示小数，小数最多 1 位。
+- 使用现有 DayZero 主题色、圆角、间距和字体；仅在组件内部新增少量语义色，不引入第三方 UI 依赖，不做高级动画。
+- 胶囊带有合并语义 `contentDescription`；0 比例 segment 不传入非法 weight，避免小屏和 0 值场景崩溃。
+
+### 5. 修改文件与测试
+- 修改文件：
+  - `core/ui/src/main/java/com/example/ui/components/ai/FoodDraftConfirmCard.kt`
+  - `core/ui/src/main/java/com/example/ui/components/ai/NutritionCapsuleCalculator.kt`
+  - `core/ui/build.gradle.kts`
+  - `feature/ai-record/src/main/java/com/example/ui/screens/AiRecordScreen.kt`
+  - `feature/ai-record/src/main/java/com/example/ui/screens/AssistantCardRenderer.kt`
+  - `app/src/main/java/com/example/ui/AppNavigation.kt`
+  - `app/src/main/java/com/example/DayZeroViewModel.kt`
+  - `core/ui/src/test/java/com/example/ui/components/ai/NutritionCapsuleCalculatorTest.kt`
+  - `feature/ai-record/src/test/java/com/example/ui/screens/AiRecordPhase3Test.kt`
+  - `app/src/test/java/com/example/DayZeroDateMismatchGuardTest.kt`
+  - `app/src/test/java/com/example/ConfirmFoodRecordUseCaseTest.kt`
+  - `core/network/src/test/java/com/example/data/remote/mapper/AiAssistantRemoteMapperTest.kt`
+  - `docs/PROJECT_CONTEXT_FOR_CHATGPT.md`
+- 测试覆盖：
+  - 纯计算：单 item、多 meal 多 item、总碳水含纤维、净碳水 clamp、null/负数/NaN/Infinity/空 items 隐藏、0 合法、比例和约等于 1。
+  - 编辑失效：name/amountText/calories 真实变化只清空目标 item；相同值保存不失效；mealType/weightKg 不失效；新增 item 默认 null；删除不完整 item 后剩余完整 item 可显示。
+  - 持久化/兼容：Card JSON round-trip 保留 0/null 区分；历史卡缺营养字段不崩溃；`pendingOriginalCard` 保留并可写回 null；`ConfirmFoodRecordUseCase` 写入编辑后的 null；confirmed/cancelled 不恢复旧值。
+  - UI：完整营养数据时胶囊存在，任意 item 缺营养时胶囊不存在，0 值 segment 不崩溃，确认/取消、weight 与食物编辑入口仍存在。
+- 执行结果：
+  - `.\gradlew.bat :core:model:testDebugUnitTest`：当前项目不存在该任务，改用实际存在的 `:core:model:test`。
+  - `.\gradlew.bat :core:model:test :core:ui:testDebugUnitTest :feature:ai-record:testDebugUnitTest :core:network:testDebugUnitTest :app:testDebugUnitTest :app:assembleDebug test --continue`：BUILD SUCCESSFUL。
+
+### 6. 边界声明
+- 本次任务未修改 Edge Function、AI Prompt、Supabase、数据库 Schema、secrets 或同步契约。
+- 本次任务未进行 uninstall、pm clear 或 connectedDebugAndroidTest，保留了真机沙盒。
+- 本次任务未执行 Git commit/push/reset/clean。
+
+---
+
+## Phase C2: Nutrition Capsule Final Visual Polishing & Real-Device Validation (2026-06-26)
+
+### 1. 最终视觉结构与低饱和语义色
+- **标题行**: 左侧“营养构成”（使用现有二级标题/Label风格，中粗加重，保持适当上下间隙），右侧补充弱化的小字体“按克数占比”，整体布局清爽、克制，融入现有卡片。
+- **圆角胶囊分段条**: 高度 14dp，两端完整圆角 clip，背景使用浅灰色轨道 `SurfaceSecondary`。各分段使用非常细微的 1dp 间隔线（与卡片背景色 `MaterialTheme.colorScheme.surface` 融合），避免白色粗缝。四段固定按“净碳水”、“蛋白质”、“脂肪”、“膳食纤维”排列，0 值段完全不绘制（不设置 weight），极小正比例安全兜底（> 0.0001f）。
+- **2x2 营养数据区**: 避免小屏拥挤，使用 2x2 自适应网格。每项包含：小色点（圆形 clip）、名称（小字、低饱和色）、以及“克数 · 百分比”（粗体中性色，例如 `25g · 42%`）。支持系统字体大小放大与横向安全自适应。
+- **低饱和语义色**:
+  - 净碳水: 燕麦色/暖米黄 (浅色 `0xFFDECBB7` / 深色 `0xFFE5D4C0`)
+  - 蛋白质: 鼠尾草绿 (浅色 `0xFFA5BBA3` / 深色 `0xFFB1C2B0`)
+  - 脂肪: 杏色/浅陶土 (浅色 `0xFFDCA18A` / 深色 `0xFFE2B29F`)
+  - 膳食纤维: 灰紫/雾蓝紫 (浅色 `0xFF9E8FA9` / 深色 `0xFFB5A8C2`)
+  整体区分明显且色调和谐，与 DayZero 既有 Theme 完全统一，不包含任何游戏 HUD 健身色、霓虹或粗重边框。
+
+### 2. 轻量克制动画实现
+- **组件显隐动画**: 首次显示满足条件时淡入并向下展开 (fadeIn + expandVertically, 240ms)；因编辑失效/添加不完整 item 导致数据不全时，淡出并向上收起 (fadeOut + shrinkVertically, 180ms)。使用 remembered 的 `lastNonNullSummary` 在淡出收起时暂存最后一次有效数据，防止瞬间变空或闪烁。
+- **分段条比例动画**: 首次出现时，比例从 0 平滑延伸至目标比例，时长 400ms 并加入 FastOutSlowInEasing；四段按 index × 30ms 进行轻微错开延迟（最大 stagger 延时 90ms，不超过 100ms），无任何弹簧回弹。编辑或数值变化时，平滑从旧比例过渡至新比例，不瞬间跳变，不重置为 0。动画状态纯粹由 UI 局部 remember，不写入持久化层，以 `card.id` 作为稳定 key 避免重组重复从 0 伸展。
+- **数值变化动画**: 克数与百分比采用轻量淡入淡出 (`Crossfade`, 200ms) 过渡新旧字符串值，无字符抖动或复杂翻牌。
+
+### 3. 可访问性 (A11y) 与布局安全
+- **合并 TalkBack 语义**: 在 `NutritionCapsule` 的最外层 Column 上使用 `.semantics(mergeDescendants = true) { contentDescription = "..." }`，合并四项营养素的克数与占比百分比（如“营养构成：净碳水 25克，占比 42%；蛋白质 20克，占比 33%…”），同时剥夺子色点和标签的独立 TalkBack 焦点，提升无障碍朗读流畅度。
+- **布局溢出保护**: 采用 2x2 Grid 及无 maxLines 的换行机制，确保系统字体放大或长文案时不横向拉伸或溢出。
+
+### 4. 测试与验证结果
+- **执行命令**: `$env:JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'; .\gradlew.bat :core:ui:testDebugUnitTest :feature:ai-record:testDebugUnitTest :app:testDebugUnitTest`
+- **执行结果**: `BUILD SUCCESSFUL`。所有 15 个测试全部通过。
+- **新增 Compose 交互与动画测试**:
+  - `foodConfirmCardShowsNutritionCapsuleWhenAllItemsAreComplete`: 验证完整数据时标题、占比文字、4 项营养标签、克数占比均正确渲染，并断言合并的 contentDescription 完全匹配。
+  - `foodConfirmCardHandlesFiberGreaterThanCarbsNetCarbsClamp`: 验证当纤维 > 碳水时，净碳水被正确 clamp 为 0g 且显示 `0g · 0%`。
+  - `foodConfirmCardHidesOnEditInvalidate`: 验证点击编辑食物并修改参数确认后，数据被置空，`AnimatedVisibility` 收起且 capsule 节点在布局中最终为 0 个。
+  - `foodConfirmCardShowsOnDeleteIncompleteItem`: 验证在包含不完整食物记录时，胶囊不显示；点击删除不完整食物项后，剩余完全项触发重新满足显示条件，胶囊重新自然展现。
+  - 现有确认/取消/编辑/体重控件在所有测试中均被完好保留且能正确匹配。
+
+### 5. 安全真机安装与运行
+- **检测设备**: `adb devices` 输出 `10AE9X0J0Z001SJ device`（真机连接正常）。
+- **安全覆盖安装**: 执行 `$env:PATH += ";C:\Users\Goings\AppData\Local\Android\Sdk\platform-tools"; $env:JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'; powershell -ExecutionPolicy Bypass -File scripts/install-debug-preserve-data.ps1`，成功编译并使用覆盖安装将 APK 推送至手机，未触发 `uninstall`，未进行 `pm clear`，完全保留了本地 Room 沙盒数据库和 anonymous 登录凭证。
+- **启动验证**: 覆盖安装完成后，App 由 `am start` 成功吊起启动，启动过程及主 Activity 运转平稳，Logcat 中没有任何 DayZero/MainActivity 相关 ClassCastException、IllegalArgumentException、Compose 运行时崩溃或 Fatal Error。
+- **无自动化写操作**: 整个构建部署过程未在真机上自动调用 API click 确认或增删真实数据，保障用户线上/测试沙盒的真实业务记录原封不动。
+
+### 6. 人工视觉验收要点 (供用户执行)
+1. 输入“午餐吃了一碗螺蛳粉和一个鸡蛋，帮我记录一下。”，检查是否显示卡片，并且“营养构成”以中粗字重呈现、右侧小字“按克数占比”弱化显示。
+2. 观察圆角分段条是否在 400ms 内优雅分段伸展，每段之间是否有精细 1dp 间隔（无粗缝）。
+3. 检查 2x2 网格中，净碳水、蛋白质、脂肪、膳星纤维的克数与四舍五入百分比（如 `25g · 42%`）是否美观对齐，颜色是否呈低饱和燕麦色、鼠尾草绿、柔杏色与雾蓝紫。
+4. 点击编辑食物更改名字或克数，查看胶囊是否平滑向上淡出收缩并最终完全不占位置；点击删除缺失营养的食物，查看胶囊是否又平滑向下展开伸展。
+5. 开启 TalkBack，用手指触摸卡片“营养构成”区域，检查是否一次性合并朗读所有四项营养素的具体克数和占比，并且小色点与单行字不会被重复聚焦。
+
+
+## Phase C3: Nutrition Capsule Entry Animations & Progress Rings (2026-06-26)
+- **Real Entry Animations**: Fixed missing entry animations. The `AnimatedVisibility` now triggers effectively upon initial component creation by using a `startVisibilityAnim` state delayed by `LaunchedEffect`. Added a horizontal sweep reveal animation to the top segment bar using `drawWithContent { clipRect(...) }` masking, keeping exact original proportions. Added `animateFloatAsState` to animate numbers (from `0g` to actual grams) and circle progress with appropriate staggering delays (160ms initial delay).
+- **NutritionPercentageRing Component**: Removed the inline `·` separator and plain percentage text. Created a custom `NutritionPercentageRing` component using Compose `Canvas`. Draws a neutral background track color mapped to the theme (light/dark support) and an active sweep colored arc (`-90` degrees start). `clampedProgress` ensures valid ranges, preserving 0% and 100% boundary safety. The percentage text is centered directly inside the ring.
+- **Unit Tests Updated**: Modified Phase C3 test files to verify independent text nodes (`25g` and `42%`) rather than the removed string concat format (`25g · 42%`). Added a Compose animation clock-based test `foodConfirmCardAnimatesNutritionGramsAndRatios` to guarantee values explicitly animate from `0g` and `0%` to final state. All tests passing, ensuring no regression on edge function logic, DTOs, calculation mapping, or sync paths.

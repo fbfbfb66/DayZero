@@ -6,6 +6,9 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -26,6 +29,7 @@ import com.example.domain.model.ai.assistant.ConfirmCardOption
 import com.example.domain.model.ai.assistant.DateMismatchGuardCardPayload
 import com.example.domain.model.ai.assistant.PayloadSummary
 import com.example.domain.model.ai.assistant.ShowConfirmCardPayload
+import com.example.ui.components.ai.FoodDraftConfirmCardTestTags
 import com.example.domain.repository.AiDraftRepository
 import com.example.domain.repository.ConversationRepository
 import com.example.domain.usecase.CreateConversationWithFirstMessageUseCase
@@ -268,10 +272,205 @@ class AiRecordPhase3Test {
         assertEquals(listOf("guard-1" to true), guardEvents)
 
         composeRule.runOnIdle { visibleCard.value = pendingGuard.copy(state = "approved") }
-        composeRule.onNodeWithText("Confirm").assertIsDisplayed()
+        composeRule.onAllNodesWithTag(FoodDraftConfirmCardTestTags.ConfirmButton).assertCountEquals(1)
 
         composeRule.runOnIdle { visibleCard.value = pendingGuard.copy(state = "cancelled") }
         composeRule.onNodeWithText("已取消，本次内容未记录").assertIsDisplayed()
+    }
+
+    @Test
+    fun foodConfirmCardShowsNutritionCapsuleWhenAllItemsAreComplete() {
+        composeRule.setContent {
+            MyApplicationTheme {
+                AssistantCardRenderer(
+                    card = showConfirmCardWithNutrition(),
+                    actionHandler = NoOpActionHandler
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag(FoodDraftConfirmCardTestTags.NutritionCapsule).assertIsDisplayed()
+        composeRule.onAllNodesWithTag(FoodDraftConfirmCardTestTags.WeightSection).assertCountEquals(1)
+        composeRule.onAllNodesWithTag(FoodDraftConfirmCardTestTags.ConfirmButton).assertCountEquals(1)
+        composeRule.onAllNodesWithTag(FoodDraftConfirmCardTestTags.EditFoodButton).assertCountEquals(1)
+
+        // 1. Verify title and label exist
+        composeRule.onNodeWithText("营养构成").assertIsDisplayed()
+        composeRule.onNodeWithText("按克数占比").assertIsDisplayed()
+
+        // 2. Verify all item labels exist
+        composeRule.onNodeWithText("净碳水").assertIsDisplayed()
+        composeRule.onNodeWithText("蛋白质").assertIsDisplayed()
+        composeRule.onNodeWithText("脂肪").assertIsDisplayed()
+        composeRule.onNodeWithText("膳食纤维").assertIsDisplayed()
+
+        // 3. Verify percentages and grams are calculated and formatted correctly
+        // total = (30 - 5) + 20 + 10 + 5 = 60
+        // net carbs = 25g (42%), protein = 20g (33%), fat = 10g (17%), fiber = 5g (8%)
+        composeRule.onNodeWithText("25g").assertIsDisplayed()
+        composeRule.onNodeWithText("42%").assertIsDisplayed()
+        composeRule.onNodeWithText("20g").assertIsDisplayed()
+        composeRule.onNodeWithText("33%").assertIsDisplayed()
+        composeRule.onNodeWithText("10g").assertIsDisplayed()
+        composeRule.onNodeWithText("17%").assertIsDisplayed()
+        composeRule.onNodeWithText("5g").assertIsDisplayed()
+        composeRule.onNodeWithText("8%").assertIsDisplayed()
+
+        // 4. Verify contentDescription contains four items semantics
+        composeRule.onNodeWithContentDescription("营养构成：净碳水 25克，占比 42%；蛋白质 20克，占比 33%；脂肪 10克，占比 17%；膳食纤维 5克，占比 8%。").assertIsDisplayed()
+    }
+
+    @Test
+    fun foodConfirmCardHidesNutritionCapsuleWhenAnyItemIsMissingNutrition() {
+        val card = showConfirmCardWithNutrition(
+            item = nutritionItem().copy(carbohydratesG = null)
+        )
+
+        composeRule.setContent {
+            MyApplicationTheme {
+                AssistantCardRenderer(card = card, actionHandler = NoOpActionHandler)
+            }
+        }
+
+        composeRule.onAllNodesWithTag(FoodDraftConfirmCardTestTags.NutritionCapsule).assertCountEquals(0)
+        composeRule.onAllNodesWithTag(FoodDraftConfirmCardTestTags.ConfirmButton).assertCountEquals(1)
+    }
+
+    @Test
+    fun foodConfirmCardHandlesZeroRatioSegmentsWithoutCrashing() {
+        val card = showConfirmCardWithNutrition(
+            item = nutritionItem(
+                carbs = 0f,
+                protein = 10f,
+                fat = 0f,
+                fiber = 0f
+            )
+        )
+
+        composeRule.setContent {
+            MyApplicationTheme {
+                AssistantCardRenderer(card = card, actionHandler = NoOpActionHandler)
+            }
+        }
+
+        composeRule.onNodeWithTag(FoodDraftConfirmCardTestTags.NutritionCapsule).assertIsDisplayed()
+        composeRule.onAllNodesWithTag(FoodDraftConfirmCardTestTags.ConfirmButton).assertCountEquals(1)
+    }
+
+    @Test
+    fun foodConfirmCardHandlesFiberGreaterThanCarbsNetCarbsClamp() {
+        val card = showConfirmCardWithNutrition(
+            item = nutritionItem(
+                carbs = 2f,
+                protein = 10f,
+                fat = 5f,
+                fiber = 6f
+            )
+        )
+
+        composeRule.setContent {
+            MyApplicationTheme {
+                AssistantCardRenderer(card = card, actionHandler = NoOpActionHandler)
+            }
+        }
+
+        composeRule.onNodeWithTag(FoodDraftConfirmCardTestTags.NutritionCapsule).assertIsDisplayed()
+        // Net carbs should display 0g and 0% because 2 - 6 is clamped to 0.
+        composeRule.onNodeWithText("0g").assertIsDisplayed()
+        composeRule.onNodeWithText("0%").assertIsDisplayed()
+    }
+
+    @Test
+    fun foodConfirmCardHidesOnEditInvalidate() {
+        val card = showConfirmCardWithNutrition()
+
+        composeRule.setContent {
+            MyApplicationTheme {
+                AssistantCardRenderer(card = card, actionHandler = NoOpActionHandler)
+            }
+        }
+
+        composeRule.onNodeWithTag(FoodDraftConfirmCardTestTags.NutritionCapsule).assertIsDisplayed()
+
+        // Open edit dialog
+        composeRule.onAllNodesWithTag(FoodDraftConfirmCardTestTags.EditFoodButton)[0].performClick()
+        composeRule.waitForIdle()
+
+        // Modify the food name to trigger invalidation
+        composeRule.onNode(hasText("rice") and hasSetTextAction()).performTextInput(" edited")
+        composeRule.onNodeWithText("确定").performClick()
+        composeRule.waitForIdle()
+
+        // Nutrition capsule should eventually be hidden
+        composeRule.onAllNodesWithTag(FoodDraftConfirmCardTestTags.NutritionCapsule).assertCountEquals(0)
+    }
+
+    @Test
+    fun foodConfirmCardShowsOnDeleteIncompleteItem() {
+        val complete = nutritionItem().copy(id = "item-complete")
+        val incomplete = nutritionItem().copy(id = "item-incomplete", carbohydratesG = null)
+        val card = showConfirmCardWithNutrition().copy(
+            meals = listOf(
+                ConfirmCardMeal(
+                    mealType = "lunch",
+                    mealLabel = "Lunch",
+                    subtotalCalories = 600,
+                    items = listOf(complete, incomplete)
+                )
+            )
+        )
+
+        composeRule.setContent {
+            MyApplicationTheme {
+                AssistantCardRenderer(card = card, actionHandler = NoOpActionHandler)
+            }
+        }
+
+        // Initially capsule is hidden
+        composeRule.onAllNodesWithTag(FoodDraftConfirmCardTestTags.NutritionCapsule).assertCountEquals(0)
+
+        // Delete the incomplete item
+        composeRule.onAllNodesWithTag(FoodDraftConfirmCardTestTags.DeleteFoodButton)[1].performClick()
+        composeRule.waitForIdle()
+
+        // Capsule should now be displayed
+        composeRule.onNodeWithTag(FoodDraftConfirmCardTestTags.NutritionCapsule).assertIsDisplayed()
+    }
+
+    @Test
+    fun foodConfirmCardAnimatesNutritionGramsAndRatios() {
+        composeRule.mainClock.autoAdvance = false
+
+        composeRule.setContent {
+            MyApplicationTheme {
+                AssistantCardRenderer(
+                    card = showConfirmCardWithNutrition(),
+                    actionHandler = NoOpActionHandler
+                )
+            }
+        }
+
+        // Trigger LaunchedEffect for AnimatedVisibility wrapper
+        composeRule.mainClock.advanceTimeByFrame()
+        composeRule.mainClock.advanceTimeByFrame() // allow side-effects to run
+        
+        // Advance time to allow expandVertically to give the container some height (>0)
+        // so assertIsDisplayed() doesn't fail due to 0-size bounds
+        composeRule.mainClock.advanceTimeBy(100)
+
+        // At start of the numbers animation (delay is 160ms+), ring percentage should still be 0
+        // Grams should be immediately displayed
+        composeRule.onNodeWithText("25g").assertIsDisplayed()
+        composeRule.onNodeWithText("0%").assertIsDisplayed()
+
+        // Advance to end
+        composeRule.mainClock.advanceTimeBy(5000)
+        composeRule.mainClock.autoAdvance = true
+        composeRule.waitForIdle()
+
+        // Verify final state
+        composeRule.onNodeWithText("25g").assertIsDisplayed()
+        composeRule.onNodeWithText("42%").assertIsDisplayed()
     }
 
     private fun createViewModel(savedStateHandle: SavedStateHandle = SavedStateHandle()): AiRecordViewModel {
@@ -426,7 +625,12 @@ private class InMemoryAiDraftRepository(
     }
 
     override suspend fun findMessageByAssistantCardId(cardId: String): AiChatMessage? {
-        return messages.value.find { message -> message.assistantCards.any { it.id == cardId } }
+        return messages.value.find { message ->
+            message.assistantCards.any {
+                it.id == cardId ||
+                    (it is DateMismatchGuardCardPayload && it.pendingOriginalCard.id == cardId)
+            }
+        }
     }
 
     override suspend fun insertChatMessage(message: AiChatMessage) {
@@ -476,6 +680,12 @@ private object NoOpActionHandler : AiRecordActionHandler {
 
     override fun handleDateMismatchGuardResult(guardId: String, approved: Boolean) = Unit
 
+    override fun updateFoodDraftCard(
+        interactionId: String,
+        weightKg: Double?,
+        meals: List<ConfirmCardMeal>
+    ) = Unit
+
     override fun clearChatMessages() = Unit
     override fun clearLocalRecords() = Unit
     override fun clearAllData() = Unit
@@ -513,5 +723,51 @@ private fun showConfirmCard(): ShowConfirmCardPayload {
             ConfirmCardOption("cancel", "Cancel"),
             ConfirmCardOption("confirm", "Confirm")
         )
+    )
+}
+
+private fun showConfirmCardWithNutrition(
+    item: ConfirmCardItem = nutritionItem()
+): ShowConfirmCardPayload {
+    val meal = ConfirmCardMeal(
+        mealType = "lunch",
+        mealLabel = "Lunch",
+        subtotalCalories = item.calories,
+        items = listOf(item)
+    )
+    return ShowConfirmCardPayload(
+        id = "confirm-card",
+        confirmType = "food_record",
+        title = "Confirm",
+        message = "Confirm food",
+        originalText = "rice",
+        mealType = null,
+        items = emptyList(),
+        weightKg = 72.5,
+        totalCalories = item.calories,
+        meals = listOf(meal),
+        buttons = listOf(
+            ConfirmCardOption("cancel", "Cancel"),
+            ConfirmCardOption("confirm", "Confirm")
+        )
+    )
+}
+
+private fun nutritionItem(
+    carbs: Float? = 30f,
+    protein: Float? = 20f,
+    fat: Float? = 10f,
+    fiber: Float? = 5f
+): ConfirmCardItem {
+    return ConfirmCardItem(
+        id = "item-1",
+        name = "rice",
+        amountText = "1 bowl",
+        calories = 300,
+        calorieConfidence = "estimated",
+        carbohydratesG = carbs,
+        proteinG = protein,
+        fatG = fat,
+        fiberG = fiber
     )
 }

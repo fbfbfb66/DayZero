@@ -105,6 +105,28 @@ class DayZeroSyncBackfillTest {
     }
 
     @Test
+    fun backfillAfterRemoteUserResetReenqueuesSyncedDailyRecordParent() = runTest {
+        val syncedToPreviousRemoteUser = mapper.toEntity(
+            domain = sampleConfirmedRecord(),
+            ownerLocalId = LOCAL_OWNER_ID
+        ).copy(
+            remoteId = "previous-remote-record",
+            syncStatus = DayZeroSyncConstants.STATUS_SYNCED,
+            lastSyncedAt = 2_000L,
+            updatedAt = 1_000L
+        )
+        database.dailyRecordDao().upsertRecord(syncedToPreviousRemoteUser)
+        val coordinator = createBackfillCoordinator(canRemoteSync = true)
+
+        val stats = coordinator.enqueueInitialBackfillIfNeeded()
+        val tasks = database.syncQueueDao().getPending()
+
+        assertEquals(4, stats.enqueuedCount)
+        assertEquals(1, tasks.count { it.operation == DayZeroSyncConstants.OP_UPSERT_DAILY_RECORD })
+        assertEquals(4, tasks.size)
+    }
+
+    @Test
     fun backfillWaitsForAuthWithoutEnqueueingOrFailing() = runTest {
         database.dailyRecordDao().upsertRecord(
             mapper.toEntity(
@@ -508,6 +530,193 @@ class DayZeroSyncBackfillTest {
         assertEquals(0, database.dailyRecordDao().countBusinessRecordsIncludingDeleted())
     }
 
+    @Test
+    fun backfillEnqueuesFoodsWithNutritionPayloadCorrectly() = runTest {
+        val record = DailyRecord(
+            id = "record-nutrition",
+            date = LocalDate.of(2026, 6, 26),
+            status = RecordStatus.Confirmed,
+            meals = listOf(
+                MealEntry(
+                    id = "meal-nutrition",
+                    mealType = MealType.Lunch,
+                    foods = listOf(
+                        FoodEntry(
+                            id = "food-nutrition",
+                            name = "鸡胸肉",
+                            quantity = "100g",
+                            estimatedCalories = 165,
+                            confidence = "high",
+                            carbohydratesG = 30f,
+                            proteinG = 12f,
+                            fatG = 8f,
+                            fiberG = 4f
+                        )
+                    )
+                )
+            ),
+            weightKg = 70.0f
+        )
+        database.dailyRecordDao().upsertRecord(mapper.toEntity(record, LOCAL_OWNER_ID))
+        val coordinator = createBackfillCoordinator(canRemoteSync = true)
+
+        val stats = coordinator.enqueueInitialBackfillIfNeeded()
+        assertEquals(4, stats.enqueuedCount)
+
+        val pending = database.syncQueueDao().getPending()
+        val foodTask = pending.first { it.entityType == "food_entry" && it.entityLocalId == "food-nutrition" }
+        val payload = JSONObject(foodTask.payloadJson)
+
+        assertEquals(30.0, payload.getDouble("carbsG"), 0.001)
+        assertEquals(12.0, payload.getDouble("proteinG"), 0.001)
+        assertEquals(8.0, payload.getDouble("fatG"), 0.001)
+        assertEquals(4.0, payload.getDouble("fiberG"), 0.001)
+    }
+
+    @Test
+    fun backfillEnqueuesFoodsWithNullNutritionPayloadCorrectly() = runTest {
+        val record = DailyRecord(
+            id = "record-null-nutrition",
+            date = LocalDate.of(2026, 6, 26),
+            status = RecordStatus.Confirmed,
+            meals = listOf(
+                MealEntry(
+                    id = "meal-null-nutrition",
+                    mealType = MealType.Lunch,
+                    foods = listOf(
+                        FoodEntry(
+                            id = "food-null-nutrition",
+                            name = "苹果",
+                            quantity = "1个",
+                            estimatedCalories = 80,
+                            confidence = "high",
+                            carbohydratesG = null,
+                            proteinG = null,
+                            fatG = null,
+                            fiberG = null
+                        )
+                    )
+                )
+            ),
+            weightKg = 70.0f
+        )
+        database.dailyRecordDao().upsertRecord(mapper.toEntity(record, LOCAL_OWNER_ID))
+        val coordinator = createBackfillCoordinator(canRemoteSync = true)
+
+        val stats = coordinator.enqueueInitialBackfillIfNeeded()
+        assertEquals(4, stats.enqueuedCount)
+
+        val pending = database.syncQueueDao().getPending()
+        val foodTask = pending.first { it.entityType == "food_entry" && it.entityLocalId == "food-null-nutrition" }
+        val payload = JSONObject(foodTask.payloadJson)
+
+        assertTrue(payload.has("carbsG"))
+        assertTrue(payload.has("proteinG"))
+        assertTrue(payload.has("fatG"))
+        assertTrue(payload.has("fiberG"))
+
+        assertTrue(payload.isNull("carbsG"))
+        assertTrue(payload.isNull("proteinG"))
+        assertTrue(payload.isNull("fatG"))
+        assertTrue(payload.isNull("fiberG"))
+    }
+
+    @Test
+    fun backfillEnqueuesFoodsWithZeroNutritionPayloadCorrectly() = runTest {
+        val record = DailyRecord(
+            id = "record-zero-nutrition",
+            date = LocalDate.of(2026, 6, 26),
+            status = RecordStatus.Confirmed,
+            meals = listOf(
+                MealEntry(
+                    id = "meal-zero-nutrition",
+                    mealType = MealType.Lunch,
+                    foods = listOf(
+                        FoodEntry(
+                            id = "food-zero-nutrition",
+                            name = "水",
+                            quantity = "500ml",
+                            estimatedCalories = 0,
+                            confidence = "high",
+                            carbohydratesG = 0f,
+                            proteinG = 0f,
+                            fatG = 0f,
+                            fiberG = 0f
+                        )
+                    )
+                )
+            ),
+            weightKg = 70.0f
+        )
+        database.dailyRecordDao().upsertRecord(mapper.toEntity(record, LOCAL_OWNER_ID))
+        val coordinator = createBackfillCoordinator(canRemoteSync = true)
+
+        val stats = coordinator.enqueueInitialBackfillIfNeeded()
+        assertEquals(4, stats.enqueuedCount)
+
+        val pending = database.syncQueueDao().getPending()
+        val foodTask = pending.first { it.entityType == "food_entry" && it.entityLocalId == "food-zero-nutrition" }
+        val payload = JSONObject(foodTask.payloadJson)
+
+        assertEquals(0.0, payload.getDouble("carbsG"), 0.001)
+        assertEquals(0.0, payload.getDouble("proteinG"), 0.001)
+        assertEquals(0.0, payload.getDouble("fatG"), 0.001)
+        assertEquals(0.0, payload.getDouble("fiberG"), 0.001)
+    }
+
+    @Test
+    fun backfillConsecutiveRunsDoesNotDuplicateOrChangeOrder() = runTest {
+        val record = DailyRecord(
+            id = "record-consecutive",
+            date = LocalDate.of(2026, 6, 26),
+            status = RecordStatus.Confirmed,
+            meals = listOf(
+                MealEntry(
+                    id = "meal-consecutive",
+                    mealType = MealType.Lunch,
+                    foods = listOf(
+                        FoodEntry(
+                            id = "food-consecutive",
+                            name = "egg",
+                            quantity = "1",
+                            estimatedCalories = 70,
+                            confidence = "high"
+                        )
+                    )
+                )
+            ),
+            weightKg = 70.0f
+        )
+        database.dailyRecordDao().upsertRecord(mapper.toEntity(record, LOCAL_OWNER_ID))
+        val coordinator = createBackfillCoordinator(canRemoteSync = true)
+
+        // First run
+        val firstStats = coordinator.enqueueInitialBackfillIfNeeded()
+        assertEquals(4, firstStats.enqueuedCount)
+        assertEquals(4, database.syncQueueDao().getPendingCount())
+
+        // Save tasks to verify order and payload
+        val firstTasks = database.syncQueueDao().getPending()
+        val firstPayloads = firstTasks.map { it.payloadJson }
+
+        // Second consecutive run
+        val secondStats = coordinator.enqueueInitialBackfillIfNeeded()
+        assertEquals(0, secondStats.enqueuedCount)
+        assertEquals(4, database.syncQueueDao().getPendingCount()) // No duplicate pending tasks
+
+        val secondTasks = database.syncQueueDao().getPending()
+        val secondPayloads = secondTasks.map { it.payloadJson }
+
+        // Verify payloads are identical
+        assertEquals(firstPayloads, secondPayloads)
+
+        // Verify parent-first ordering: daily_record -> meal -> food_entry -> weight_record
+        assertEquals("daily_record", firstTasks[0].entityType)
+        assertEquals("meal", firstTasks[1].entityType)
+        assertEquals("food_entry", firstTasks[2].entityType)
+        assertEquals("weight_record", firstTasks[3].entityType)
+    }
+
     private fun createBackfillCoordinator(
         canRemoteSync: Boolean,
         stateStore: BackfillStateStore = BackfillStateStore(context)
@@ -615,6 +824,7 @@ class DayZeroSyncBackfillTest {
             proteinG = null,
             carbsG = null,
             fatG = null,
+            fiberG = null,
             confidence = null,
             source = "confirm_card",
             createdAt = 1_200L,

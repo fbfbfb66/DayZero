@@ -285,6 +285,31 @@ class InProcessSyncSchedulerChatPullTest {
     }
 
     @Test
+    fun `Concurrent broader request runs once after active request completes`() = runTest {
+        val testScope = this
+        val sync = mockk<SyncCoordinator> {
+            coEvery { runOnce() } coAnswers {
+                delay(1000)
+                Unit
+            }
+        }
+        val backfill = mockk<BackfillCoordinator>(relaxed = true)
+        val scheduler = createScheduler(
+            testScope,
+            syncCoordinator = sync,
+            backfillCoordinator = backfill
+        )
+
+        scheduler.requestSync(SyncTriggerReason.MANUAL)
+        scheduler.requestSyncAndBackfill(SyncTriggerReason.MANUAL)
+
+        testScope.advanceUntilIdle()
+
+        coVerify(exactly = 3) { sync.runOnce() }
+        coVerify(exactly = 1) { backfill.enqueueMissingRecords() }
+    }
+
+    @Test
     fun `Failure allows next request to run`() = runTest {
         val testScope = this
         val chatPull = mockk<ChatPullCoordinator> {

@@ -14,4 +14,6 @@ sealed class SupabaseAuthSessionStatus {
     data class RefreshTemporaryFailure(val reason: String) : SupabaseAuthSessionStatus()
     data class RefreshPermanentlyRejected(val reason: String) : SupabaseAuthSessionStatus()
     data class AnonymousSignUpSucceeded(val userId: String) : SupabaseAuthSessionStatus()
+    data class PasswordSignInSucceeded(val userId: String) : SupabaseAuthSessionStatus()
+    data class StoredSessionRejected(val reason: String) : SupabaseAuthSessionStatus()
 }
