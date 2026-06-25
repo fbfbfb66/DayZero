@@ -285,23 +285,27 @@ fun SimpleLineChart(data: List<ChartDataPoint>, modifier: Modifier = Modifier, l
                 )
             }
 
+            val lineX = width * progress
+            val growRangePx = 24.dp.toPx()
             data.forEachIndexed { index, point ->
                 val x = index * stepX
                 val y = height - ((point.value - base) / range * height).coerceIn(0f, height)
                 val isSelected = selectedIndex == index
                 
-                if (index.toFloat() / data.size <= progress) {
+                val scale = ((lineX - (x - growRangePx)) / growRangePx).coerceIn(0f, 1f)
+                
+                if (scale > 0f) {
                     drawCircle(
                         color = if (isSelected) Color.White else lineColor,
-                        radius = (if (isSelected) 6.dp else 4.dp).toPx(),
+                        radius = (if (isSelected) 6.dp else 4.dp).toPx() * scale,
                         center = Offset(x, y)
                     )
                     if (isSelected) {
                         drawCircle(
                             color = lineColor,
-                            radius = 6.dp.toPx(),
+                            radius = 6.dp.toPx() * scale,
                             center = Offset(x, y),
-                            style = Stroke(width = 2.dp.toPx())
+                            style = Stroke(width = 2.dp.toPx() * scale)
                         )
                     }
                 }

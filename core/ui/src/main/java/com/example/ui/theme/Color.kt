@@ -4,6 +4,7 @@ import androidx.compose.ui.graphics.Color
 
 val BrandGreen = Color(0xFF88A68B)
 val LightGreen = Color(0xFFE8F5E9)
+val BrandRed = Color(0xFFE27D60)
 
 val WarmBackground = Color(0xFFFAF9F6)
 val CardBackground = Color(0xFFFFFFFF)

@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
@@ -61,12 +62,14 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import com.example.domain.model.AppState
+import com.example.domain.model.DailyRecord
 import com.example.domain.model.MealEntry
 import com.example.domain.model.RecordStatus
 import com.example.domain.model.formatWeightKg
 import com.example.ui.theme.CardBackground
 import com.example.ui.theme.LightGreen
 import com.example.ui.theme.BrandGreen
+import com.example.ui.theme.BrandRed
 import com.example.ui.theme.BorderNormal
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
@@ -158,7 +161,7 @@ fun CalendarScreen(uiState: AppState, onNavigateToAi: () -> Unit) {
                         Icon(
                             Icons.Default.LocalFireDepartment, 
                             contentDescription = "Streak", 
-                            tint = Color(0xFFE27D60), 
+                            tint = BrandRed, 
                             modifier = Modifier.size(14.dp)
                         )
                         Spacer(modifier = Modifier.width(4.dp))
@@ -204,6 +207,7 @@ fun CalendarScreen(uiState: AppState, onNavigateToAi: () -> Unit) {
                                     val date = yearMonth.atDay(dayNum)
                                     val hasRecord = confirmedRecords.any { it.date == date }
                                     val isSelected = date == selectedDate
+                                    val isToday = date == uiState.currentDate
                                     
                                     val backgroundColor = when {
                                         isSelected -> BrandGreen
@@ -212,8 +216,14 @@ fun CalendarScreen(uiState: AppState, onNavigateToAi: () -> Unit) {
                                     }
                                     val textColor = when {
                                         isSelected -> Color.White
+                                        isToday -> BrandRed
                                         hasRecord -> BrandGreen
                                         else -> TextPrimary
+                                    }
+                                    val borderModifier = if (isToday && !isSelected) {
+                                        Modifier.border(1.5.dp, BrandRed, CircleShape)
+                                    } else {
+                                        Modifier
                                     }
 
                                     Box(
@@ -222,6 +232,7 @@ fun CalendarScreen(uiState: AppState, onNavigateToAi: () -> Unit) {
                                             .size(40.dp)
                                             .clip(CircleShape)
                                             .background(backgroundColor)
+                                            .then(borderModifier)
                                             .clickable { selectedDate = date }
                                     ) {
                                         Column(
@@ -261,18 +272,23 @@ fun CalendarScreen(uiState: AppState, onNavigateToAi: () -> Unit) {
             Spacer(modifier = Modifier.height(24.dp))
 
             // Summary Section
+            val summaryState = remember(selectedDate, recordForSelectedDate) {
+                SummaryState(selectedDate, recordForSelectedDate)
+            }
             androidx.compose.animation.AnimatedContent(
-                targetState = recordForSelectedDate,
+                targetState = summaryState,
                 label = "DailySummaryAnimation",
                 transitionSpec = {
                     fadeIn(animationSpec = tween(300)) + slideInVertically(initialOffsetY = { 20 }) togetherWith fadeOut(animationSpec = tween(300))
                 }
-            ) { targetRecord ->
+            ) { state ->
+                val targetRecord = state.record
+                val stateDate = state.date
                 if (targetRecord == null) {
                     val today = uiState.currentDate
                     val tipText = when {
-                        selectedDate.isBefore(today) -> "当时没有记录哦。"
-                        selectedDate.isAfter(today) -> "我在这里等你"
+                        stateDate.isBefore(today) -> "当时没有记录哦。"
+                        stateDate.isAfter(today) -> "我在这里等你"
                         else -> "今天还没有记录，告诉 AI 你吃了什么吧。"
                     }
                     Column(
@@ -284,7 +300,7 @@ fun CalendarScreen(uiState: AppState, onNavigateToAi: () -> Unit) {
                             color = TextSecondary,
                             textAlign = TextAlign.Center
                         )
-                        if (selectedDate == today) {
+                        if (stateDate == today) {
                             Spacer(modifier = Modifier.height(16.dp))
                             Button(
                                 onClick = onNavigateToAi,
@@ -399,11 +415,16 @@ fun ExpandableMealItem(meal: MealEntry) {
                             .padding(vertical = 4.dp),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text("${food.name} (${food.quantity})", color = TextSecondary, fontSize = 12.sp)
-                        Text("${food.estimatedCalories} kcal", color = com.example.ui.theme.TextTertiary, fontSize = 12.sp)
+                        Text(food.name + " (" + food.quantity + ")", color = TextSecondary, fontSize = 12.sp)
+                        Text(food.estimatedCalories.toString() + " kcal", color = com.example.ui.theme.TextTertiary, fontSize = 12.sp)
                     }
                 }
             }
         }
     }
 }
+
+private data class SummaryState(
+    val date: LocalDate,
+    val record: DailyRecord?
+)
