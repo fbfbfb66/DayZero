@@ -54,6 +54,7 @@ import com.example.domain.model.ai.assistant.ConfirmCardMeal
 import com.example.domain.model.ai.assistant.PayloadSummary
 import com.example.ui.components.feedback.SuccessConfirmOverlay
 import com.example.ui.screens.AiConversationScreen
+import com.example.ui.screens.CameraScreen
 import com.example.ui.screens.AiRecordActionHandler
 import com.example.ui.screens.AiRecordConversationEvent
 import com.example.ui.screens.AiRecordHomeScreen
@@ -92,16 +93,17 @@ fun MainApp() {
     val syncStatusUiState by viewModel.syncStatusUiState.collectAsState()
     val aiRecordActionHandler = remember(viewModel) {
         object : AiRecordActionHandler {
-            override fun sendAiMessage(text: String) {
-                viewModel.sendAiMessage(text)
-            }
+            override fun sendAiMessage(text: String): Boolean = viewModel.sendAiMessage(text)
 
-            override fun sendAiMessage(conversationId: String, text: String) {
+            override fun sendAiMessage(conversationId: String, text: String): Boolean =
                 viewModel.sendAiMessage(conversationId, text)
-            }
 
             override fun startAssistantTurnForExistingUserMessage(conversationId: String, text: String) {
                 viewModel.startAssistantTurnForExistingUserMessage(conversationId, text)
+            }
+
+            override fun startVisionAssistantTurnForExistingUserMessage(conversationId: String, userMessageId: String) {
+                viewModel.startVisionAssistantTurnForExistingUserMessage(conversationId, userMessageId)
             }
 
             override fun setActiveConversationId(conversationId: String?) {
@@ -170,7 +172,8 @@ fun MainApp() {
     val currentDestination = navBackStackEntry?.destination
     val currentRoute = currentDestination?.route
     val isAiConversationRoute = currentRoute == AI_CONVERSATION_ROUTE
-    val showBottomBar = !isAiConversationRoute
+    val isAiCameraRoute = currentRoute?.startsWith("ai_camera/") == true
+    val showBottomBar = !isAiConversationRoute && !isAiCameraRoute
 
     LaunchedEffect(Unit) {
         viewModel.uiEvents.collectLatest { event ->
@@ -198,6 +201,13 @@ fun MainApp() {
                     viewModel.startAssistantTurnForExistingUserMessage(
                         conversationId = event.conversationId,
                         text = event.firstMessageText
+                    )
+                }
+
+                is AiRecordConversationEvent.MediaMessageCommitted -> {
+                    viewModel.startVisionAssistantTurnForExistingUserMessage(
+                        conversationId = event.conversationId,
+                        userMessageId = event.userMessageId
                     )
                 }
             }
@@ -336,11 +346,34 @@ fun MainApp() {
                         detailState = aiRecordUiState.detail,
                         appState = uiState,
                         actionHandler = aiRecordActionHandler,
+                        events = aiRecordViewModel.events,
                         onBack = {
                             navController.navigate(Screen.AiRecord.route) {
                                 popUpTo(Screen.AiRecord.route) { inclusive = false }
                                 launchSingleTop = true
                             }
+                        },
+                        onImportPhotos = aiRecordViewModel::importPhotos,
+                        onRemoveAttachment = aiRecordViewModel::removeDraftAttachment,
+                        onRetryAttachment = aiRecordViewModel::retryDraftAttachment,
+                        onNavigateToCamera = { id ->
+                            navController.navigate("ai_camera/$id")
+                        },
+                        onSetPickerOpen = aiRecordViewModel::setPickerOpen,
+                        onSubmitMediaMessage = aiRecordViewModel::submitMediaMessage,
+                        onClearDetailError = { aiRecordViewModel.setDetailError(null) }
+                    )
+                }
+                composable(
+                    route = "ai_camera/{conversationId}",
+                    arguments = listOf(navArgument("conversationId") { type = NavType.StringType })
+                ) { entry ->
+                    val conversationId = entry.arguments?.getString("conversationId").orEmpty()
+                    CameraScreen(
+                        conversationId = conversationId,
+                        viewModel = aiRecordViewModel,
+                        onBack = {
+                            navController.popBackStack()
                         }
                     )
                 }

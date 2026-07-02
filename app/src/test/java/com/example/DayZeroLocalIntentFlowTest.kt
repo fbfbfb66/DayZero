@@ -84,6 +84,7 @@ class DayZeroLocalIntentFlowTest {
 
     @Test
     fun assistantTurnFailureShowsErrorWithoutFallback() = runTest(mainDispatcherRule.testDispatcher) {
+        val conversationRepository = InMemoryConversationRepository()
         val viewModel = DayZeroViewModel(
             recordRepository = recordRepository,
             aiDraftRepository = aiDraftRepository,
@@ -94,9 +95,9 @@ class DayZeroLocalIntentFlowTest {
             },
             latencyLogger = createLatencyLogger(),
             clearLocalDataUseCase = ClearLocalDataUseCase(recordRepository, aiDraftRepository),
-            confirmFoodRecordUseCase = ConfirmFoodRecordUseCase(recordRepository),
+            confirmFoodCardUseCase = testConfirmFoodCardUseCase(aiDraftRepository, conversationRepository, recordRepository),
             createConversationWithFirstMessageUseCase = CreateConversationWithFirstMessageUseCase(aiDraftRepository),
-            conversationRepository = InMemoryConversationRepository(),
+            conversationRepository = conversationRepository,
             currentDateProvider = FixedCurrentDateProvider(LocalDate.of(2026, 6, 20)),
             syncScheduler = object : com.example.data.sync.SyncScheduler {
                 override fun requestSync(reason: com.example.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
@@ -105,7 +106,11 @@ class DayZeroLocalIntentFlowTest {
                 override fun requestPull(reason: com.example.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
                 override fun requestInitialRestore(reason: com.example.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
                 override fun requestSyncAndPull(reason: com.example.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
-            }
+            },
+            visionAssistantTurnOrchestrator = com.example.assistant.fakeVisionAssistantTurnOrchestrator(
+                ApplicationProvider.getApplicationContext()
+            ),
+            networkAvailabilityProvider = com.example.domain.network.NetworkAvailabilityProvider { true }
         )
 
         viewModel.sendAiMessage("Weight input: 94kg today")
@@ -123,6 +128,7 @@ class DayZeroLocalIntentFlowTest {
     }
 
     private fun createViewModel(assistantReply: String): DayZeroViewModel {
+        val conversationRepository = InMemoryConversationRepository()
         return DayZeroViewModel(
             recordRepository = recordRepository,
             aiDraftRepository = aiDraftRepository,
@@ -139,9 +145,9 @@ class DayZeroLocalIntentFlowTest {
             },
             latencyLogger = createLatencyLogger(),
             clearLocalDataUseCase = ClearLocalDataUseCase(recordRepository, aiDraftRepository),
-            confirmFoodRecordUseCase = ConfirmFoodRecordUseCase(recordRepository),
+            confirmFoodCardUseCase = testConfirmFoodCardUseCase(aiDraftRepository, conversationRepository, recordRepository),
             createConversationWithFirstMessageUseCase = CreateConversationWithFirstMessageUseCase(aiDraftRepository),
-            conversationRepository = InMemoryConversationRepository(),
+            conversationRepository = conversationRepository,
             currentDateProvider = FixedCurrentDateProvider(LocalDate.of(2026, 6, 20)),
             syncScheduler = object : com.example.data.sync.SyncScheduler {
                 override fun requestSync(reason: com.example.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
@@ -150,7 +156,11 @@ class DayZeroLocalIntentFlowTest {
                 override fun requestPull(reason: com.example.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
                 override fun requestInitialRestore(reason: com.example.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
                 override fun requestSyncAndPull(reason: com.example.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
-            }
+            },
+            visionAssistantTurnOrchestrator = com.example.assistant.fakeVisionAssistantTurnOrchestrator(
+                ApplicationProvider.getApplicationContext()
+            ),
+            networkAvailabilityProvider = com.example.domain.network.NetworkAvailabilityProvider { true }
         )
     }
 

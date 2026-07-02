@@ -5,10 +5,25 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.domain.model.ai.AiChatMessage
 import com.example.domain.model.ai.Conversation
+import com.example.domain.model.media.MediaAsset
+import com.example.domain.model.media.MediaLifecycleState
+import com.example.domain.model.media.ImportLocalMediaRequest
+import com.example.domain.model.media.LocalMediaInput
+import com.example.domain.model.media.MediaSource
+import com.example.domain.usecase.CreateConversationWithFirstMessageUseCase
+import com.example.domain.usecase.ObserveConversationMediaUseCase
+import com.example.domain.usecase.ImportLocalMediaUseCase
+import com.example.domain.usecase.RetryLocalMediaImportUseCase
+import com.example.domain.usecase.DiscardStagedMediaUseCase
+import com.example.domain.usecase.SendUserMessageWithMediaUseCase
+import com.example.domain.identity.CurrentIdentityProvider
+import com.example.domain.model.ai.SendUserMessageWithMediaRequest
+import com.example.domain.network.NetworkAvailabilityProvider
+import com.example.domain.model.ai.SendUserMessageWithMediaResult
 import com.example.domain.repository.AiDraftRepository
 import com.example.domain.repository.ConversationRepository
-import com.example.domain.usecase.CreateConversationWithFirstMessageUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,7 +39,23 @@ import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.util.UUID
 import javax.inject.Inject
+
+data class AttachmentImportFailure(
+    val mediaId: String,
+    val errorCode: String
+)
+
+data class ConversationAttachmentDraftState(
+    val conversationId: String,
+    val attachmentIds: List<String> = emptyList(),
+    val assets: List<MediaAsset> = emptyList(),
+    val importingCount: Int = 0,
+    val failures: List<AttachmentImportFailure> = emptyList(),
+    val isPickerOpen: Boolean = false,
+    val isCameraOpening: Boolean = false
+)
 
 data class AiConversationHistoryState(
     val conversations: List<Conversation> = emptyList(),
@@ -38,9 +69,12 @@ data class AiConversationHistoryState(
 data class AiConversationDetailState(
     val currentConversation: Conversation? = null,
     val messages: List<AiChatMessage> = emptyList(),
+    val messagesWithMedia: List<MessageWithMedia> = emptyList(),
     val isSending: Boolean = false,
     val isStreaming: Boolean = false,
-    val errorMessage: String? = null
+    val isSubmitting: Boolean = false,
+    val errorMessage: String? = null,
+    val draftState: ConversationAttachmentDraftState? = null
 )
 
 data class AiRecordConversationUiState(
@@ -53,7 +87,18 @@ sealed interface AiRecordConversationEvent {
         val conversationId: String,
         val firstMessageText: String
     ) : AiRecordConversationEvent
+
+    /**
+     * Emitted after the local media transaction successfully commits.
+     * Listeners (AppNavigation) should start the Vision assistant turn for the
+     * persisted user message and must not re-send the user message.
+     */
+    data class MediaMessageCommitted(
+        val conversationId: String,
+        val userMessageId: String
+    ) : AiRecordConversationEvent
 }
+
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 @HiltViewModel
@@ -61,6 +106,13 @@ class AiRecordViewModel @Inject constructor(
     private val conversationRepository: ConversationRepository,
     private val aiDraftRepository: AiDraftRepository,
     private val createConversationWithFirstMessageUseCase: CreateConversationWithFirstMessageUseCase,
+    private val observeConversationMediaUseCase: ObserveConversationMediaUseCase,
+    private val importLocalMediaUseCase: ImportLocalMediaUseCase,
+    private val retryLocalMediaImportUseCase: RetryLocalMediaImportUseCase,
+    private val discardStagedMediaUseCase: DiscardStagedMediaUseCase,
+    private val sendUserMessageWithMediaUseCase: SendUserMessageWithMediaUseCase,
+    private val currentIdentityProvider: CurrentIdentityProvider,
+    private val networkAvailabilityProvider: NetworkAvailabilityProvider,
     private val savedStateHandle: SavedStateHandle
 ) : ViewModel() {
     private val selectedConversationId = MutableStateFlow<String?>(savedStateHandle[KEY_CONVERSATION_ID] as? String)
@@ -68,6 +120,10 @@ class AiRecordViewModel @Inject constructor(
     private val detailTransient = MutableStateFlow(DetailTransientState())
     private val _events = MutableSharedFlow<AiRecordConversationEvent>(extraBufferCapacity = 1)
     val events = _events.asSharedFlow()
+
+    private val importingCounts = MutableStateFlow<Map<String, Int>>(emptyMap())
+    private val pickerOpenStates = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+    private val cameraOpeningStates = MutableStateFlow<Map<String, Boolean>>(emptyMap())
 
     private val historyState: Flow<AiConversationHistoryState> = combine(
         observeHistory(),
@@ -88,6 +144,7 @@ class AiRecordViewModel @Inject constructor(
         detail.copy(
             isSending = overlay.isSending,
             isStreaming = overlay.isStreaming,
+            isSubmitting = overlay.isSubmitting,
             errorMessage = overlay.errorMessage ?: detail.errorMessage
         )
     }
@@ -119,6 +176,15 @@ class AiRecordViewModel @Inject constructor(
 
     fun createConversationWithFirstMessage(text: String) {
         if (historyTransient.value.isCreating) return
+        val networkAvailable = networkAvailabilityProvider.hasValidatedInternet()
+        android.util.Log.i(
+            NETWORK_GATE_TAG,
+            "path=home_first_message available=$networkAvailable gatePosition=before_local_transaction"
+        )
+        if (!networkAvailable) {
+            historyTransient.update { it.copy(errorMessage = "当前无网络，连接后再发送") }
+            return
+        }
         historyTransient.update { it.copy(isCreating = true, errorMessage = null) }
 
         viewModelScope.launch {
@@ -164,6 +230,273 @@ class AiRecordViewModel @Inject constructor(
         detailTransient.update { it.copy(errorMessage = message) }
     }
 
+    fun getDraftStateFlow(conversationId: String): Flow<ConversationAttachmentDraftState> {
+        val savedIdsFlow = savedStateHandle.getStateFlow<List<String>>("draft_ids_$conversationId", emptyList())
+        return combine(
+            savedIdsFlow,
+            observeConversationMediaUseCase(conversationId),
+            importingCounts,
+            pickerOpenStates,
+            cameraOpeningStates
+        ) { savedIds, dbAssets, impCounts, pickerOpens, cameraOpens ->
+            val activeDbAssetsMap = dbAssets
+                .filter { it.deletedAt == null && it.conversationId == conversationId }
+                .associateBy { it.id }
+
+            val validIds = savedIds.filter { id -> activeDbAssetsMap.containsKey(id) }
+
+            if (validIds != savedIds) {
+                savedStateHandle["draft_ids_$conversationId"] = validIds
+            }
+
+            val draftAssets = validIds.mapNotNull { activeDbAssetsMap[it] }
+
+            val failures = draftAssets.filter { it.lifecycleState == MediaLifecycleState.FAILED }
+                .map { AttachmentImportFailure(it.id, it.failureCode ?: "unknown") }
+
+            ConversationAttachmentDraftState(
+                conversationId = conversationId,
+                attachmentIds = validIds,
+                assets = draftAssets,
+                importingCount = impCounts[conversationId] ?: 0,
+                failures = failures,
+                isPickerOpen = pickerOpens[conversationId] ?: false,
+                isCameraOpening = cameraOpens[conversationId] ?: false
+            )
+        }
+    }
+
+    fun setPickerOpen(conversationId: String, isOpen: Boolean) {
+        pickerOpenStates.update { it + (conversationId to isOpen) }
+    }
+
+    fun setCameraOpening(conversationId: String, isOpen: Boolean) {
+        cameraOpeningStates.update { it + (conversationId to isOpen) }
+    }
+
+    fun importPhotos(conversationId: String, uris: List<String>) {
+        if (uris.isEmpty()) return
+        viewModelScope.launch {
+            val currentIds = savedStateHandle.get<List<String>>("draft_ids_$conversationId") ?: emptyList()
+            val currentImpCount = importingCounts.value[conversationId] ?: 0
+            val remaining = (6 - (currentIds.size + currentImpCount)).coerceAtLeast(0)
+            if (remaining <= 0) {
+                return@launch
+            }
+            val toImport = uris.take(remaining)
+            if (toImport.isEmpty()) return@launch
+
+            importingCounts.update { it + (conversationId to (currentImpCount + toImport.size)) }
+
+            try {
+                val identity = currentIdentityProvider.currentIdentity()
+                val ownerId = identity.localOwnerId
+                val requests = toImport.map { uri ->
+                    ImportLocalMediaRequest(
+                        conversationId = conversationId,
+                        ownerLocalId = ownerId,
+                        source = MediaSource.PHOTO_PICKER,
+                        input = LocalMediaInput.ContentReference(uri)
+                    )
+                }
+                val results = importLocalMediaUseCase(requests, System.currentTimeMillis())
+                val newIds = results.map { it.mediaId }
+                val updatedIds = currentIds + newIds
+                savedStateHandle["draft_ids_$conversationId"] = updatedIds
+            } catch (c: CancellationException) {
+                throw c
+            } catch (e: Exception) {
+                // Failures logged
+            } finally {
+                importingCounts.update {
+                    val count = it[conversationId] ?: 0
+                    it + (conversationId to (count - toImport.size).coerceAtLeast(0))
+                }
+            }
+        }
+    }
+
+    fun importCameraCapture(
+        conversationId: String,
+        relativePath: String,
+        onComplete: (Boolean, String?) -> Unit
+    ) {
+        viewModelScope.launch {
+            val currentIds = savedStateHandle.get<List<String>>("draft_ids_$conversationId") ?: emptyList()
+            val currentImpCount = importingCounts.value[conversationId] ?: 0
+            val remaining = (6 - (currentIds.size + currentImpCount)).coerceAtLeast(0)
+            if (remaining <= 0) {
+                onComplete(false, null)
+                return@launch
+            }
+
+            importingCounts.update { it + (conversationId to (currentImpCount + 1)) }
+
+            var success = false
+            var finalMediaId: String? = null
+            try {
+                val identity = currentIdentityProvider.currentIdentity()
+                val ownerId = identity.localOwnerId
+                val requests = listOf(
+                    ImportLocalMediaRequest(
+                        conversationId = conversationId,
+                        ownerLocalId = ownerId,
+                        source = MediaSource.CAMERA,
+                        input = LocalMediaInput.AppCacheFile(relativePath)
+                    )
+                )
+                val results = importLocalMediaUseCase(requests, System.currentTimeMillis())
+                val firstResult = results.firstOrNull()
+                if (firstResult != null) {
+                    val updatedIds = currentIds + firstResult.mediaId
+                    savedStateHandle["draft_ids_$conversationId"] = updatedIds
+                    success = true
+                    finalMediaId = firstResult.mediaId
+                }
+            } catch (c: CancellationException) {
+                throw c
+            } catch (e: Exception) {
+                // Exceptions caught
+            } finally {
+                importingCounts.update {
+                    val count = it[conversationId] ?: 0
+                    it + (conversationId to (count - 1).coerceAtLeast(0))
+                }
+                onComplete(success, finalMediaId)
+            }
+        }
+    }
+
+    fun removeDraftAttachment(conversationId: String, mediaId: String) {
+        viewModelScope.launch {
+            val currentList = savedStateHandle.get<List<String>>("draft_ids_$conversationId") ?: emptyList()
+            savedStateHandle["draft_ids_$conversationId"] = currentList - mediaId
+            try {
+                discardStagedMediaUseCase(mediaId, System.currentTimeMillis())
+            } catch (e: IllegalArgumentException) {
+                // Ignore if READY
+            } catch (e: Exception) {
+                // Log exception
+            }
+        }
+    }
+
+    fun retryDraftAttachment(conversationId: String, mediaId: String) {
+        viewModelScope.launch {
+            try {
+                retryLocalMediaImportUseCase(mediaId)
+            } catch (e: Exception) {
+                // Log exception
+            }
+        }
+    }
+
+    /**
+     * Submits a user message that may contain both text and local media attachments.
+     *
+     * This method captures immutable input, runs the local Room transaction once,
+     * and on success clears only the submitted draft IDs and emits
+     * [AiRecordConversationEvent.MediaMessageCommitted] so that the Vision assistant
+     * turn can be started for the persisted user message.
+     *
+     * On any local failure, the input text and attachment drafts are preserved so
+     * the user can retry or edit.
+     */
+    fun submitMediaMessage(
+        conversationId: String,
+        text: String,
+        orderedAttachmentIds: List<String>
+    ) {
+        if (conversationId.isBlank()) return
+        if (detailTransient.value.isSubmitting) return
+        val networkAvailable = networkAvailabilityProvider.hasValidatedInternet()
+        android.util.Log.i(
+            NETWORK_GATE_TAG,
+            "path=media_message available=$networkAvailable gatePosition=before_media_transaction"
+        )
+        if (!networkAvailable) {
+            setDetailError("当前无网络，连接后再发送")
+            return
+        }
+
+        val trimmedText = text.trim()
+        val attachments = orderedAttachmentIds.distinct()
+        if (attachments.isEmpty()) {
+            if (trimmedText.isBlank()) {
+                setDetailError("Message cannot be blank")
+            }
+            return
+        }
+        if (attachments.size > MAX_ATTACHMENT_COUNT) {
+            setDetailError("最多只能发送 6 张图片")
+            return
+        }
+
+        detailTransient.update { it.copy(isSubmitting = true, errorMessage = null) }
+
+        viewModelScope.launch {
+            try {
+                val userMessageId = UUID.randomUUID().toString()
+                val request = SendUserMessageWithMediaRequest(
+                    conversationId = conversationId,
+                    userMessageId = userMessageId,
+                    text = trimmedText,
+                    orderedMediaIds = attachments,
+                    createdAt = System.currentTimeMillis()
+                )
+
+                when (val result = sendUserMessageWithMediaUseCase(request)) {
+                    is SendUserMessageWithMediaResult.Committed,
+                    is SendUserMessageWithMediaResult.AlreadyCommitted -> {
+                        val persistedUserMessageId = if (result is SendUserMessageWithMediaResult.Committed) {
+                            result.userMessageId
+                        } else {
+                            userMessageId
+                        }
+                        removeSubmittedDraftIds(conversationId, attachments)
+                        _events.tryEmit(
+                            AiRecordConversationEvent.MediaMessageCommitted(
+                                conversationId = conversationId,
+                                userMessageId = persistedUserMessageId
+                            )
+                        )
+                    }
+
+                    is SendUserMessageWithMediaResult.InvalidConversation -> {
+                        setDetailError("无法发送：${result.reason}")
+                    }
+
+                    is SendUserMessageWithMediaResult.InvalidMedia -> {
+                        setDetailError("图片无效：${result.reason}")
+                    }
+
+                    is SendUserMessageWithMediaResult.MediaAlreadyAttached -> {
+                        setDetailError("图片已经发送过")
+                    }
+
+                    is SendUserMessageWithMediaResult.Conflict -> {
+                        setDetailError("发送冲突，请刷新后重试")
+                    }
+
+                    is SendUserMessageWithMediaResult.Failed -> {
+                        setDetailError("发送失败：${result.error.message ?: "未知错误"}")
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                setDetailError("发送失败：${e.message ?: "未知错误"}")
+            } finally {
+                detailTransient.update { it.copy(isSubmitting = false) }
+            }
+        }
+    }
+
+    private fun removeSubmittedDraftIds(conversationId: String, submittedIds: List<String>) {
+        val currentList = savedStateHandle.get<List<String>>("draft_ids_$conversationId") ?: emptyList()
+        savedStateHandle["draft_ids_$conversationId"] = currentList - submittedIds.toSet()
+    }
+
     private fun observeHistory(): Flow<AiConversationHistoryState> {
         return conversationRepository.observeConversationsByLastActivity()
             .map { conversations ->
@@ -189,11 +522,19 @@ class AiRecordViewModel @Inject constructor(
                     combine(
                         conversationRepository.observeConversationsByLastActivity()
                             .map { conversations -> conversations.firstOrNull { it.id == conversationId } },
-                        aiDraftRepository.observeChatMessages(conversationId)
-                    ) { conversation, messages ->
+                        aiDraftRepository.observeChatMessages(conversationId),
+                        observeConversationMediaUseCase(conversationId),
+                        getDraftStateFlow(conversationId)
+                    ) { conversation, messages, conversationMedia, draft ->
+                        val mediaMap = conversationMedia
+                            .filter { it.deletedAt == null }
+                            .associateBy { it.id }
+                        val messagesWithMedia = messages.map { it.toMessageWithMedia(mediaMap) }
                         AiConversationDetailState(
                             currentConversation = conversation,
-                            messages = messages
+                            messages = messages,
+                            messagesWithMedia = messagesWithMedia,
+                            draftState = draft
                         )
                     }
                 }
@@ -214,10 +555,13 @@ class AiRecordViewModel @Inject constructor(
     private data class DetailTransientState(
         val isSending: Boolean = false,
         val isStreaming: Boolean = false,
+        val isSubmitting: Boolean = false,
         val errorMessage: String? = null
     )
 
     private companion object {
         private const val KEY_CONVERSATION_ID = "conversationId"
+        private const val MAX_ATTACHMENT_COUNT = 6
+        private const val NETWORK_GATE_TAG = "DayZeroNetworkGate"
     }
 }

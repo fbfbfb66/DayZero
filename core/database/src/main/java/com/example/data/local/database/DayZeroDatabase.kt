@@ -10,10 +10,12 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import com.example.data.local.dao.AiChatMessageDao
 import com.example.data.local.dao.ConversationDao
 import com.example.data.local.dao.DailyRecordDao
+import com.example.data.local.dao.MediaAssetDao
 import com.example.data.local.dao.SyncQueueDao
 import com.example.data.local.entity.AiChatMessageEntity
 import com.example.data.local.entity.ConversationEntity
 import com.example.data.local.entity.DailyRecordEntity
+import com.example.data.local.entity.MediaAssetEntity
 import com.example.data.local.entity.SyncQueueEntity
 import java.nio.charset.StandardCharsets
 import java.time.Instant
@@ -22,8 +24,14 @@ import java.time.format.DateTimeFormatter
 import java.util.UUID
 
 @Database(
-    entities = [DailyRecordEntity::class, AiChatMessageEntity::class, ConversationEntity::class, SyncQueueEntity::class],
-    version = 11,
+    entities = [
+        DailyRecordEntity::class,
+        AiChatMessageEntity::class,
+        ConversationEntity::class,
+        SyncQueueEntity::class,
+        MediaAssetEntity::class
+    ],
+    version = 12,
     exportSchema = false
 )
 abstract class DayZeroDatabase : RoomDatabase() {
@@ -31,6 +39,7 @@ abstract class DayZeroDatabase : RoomDatabase() {
     abstract fun aiChatMessageDao(): AiChatMessageDao
     abstract fun conversationDao(): ConversationDao
     abstract fun syncQueueDao(): SyncQueueDao
+    abstract fun mediaAssetDao(): MediaAssetDao
 
     companion object {
         @Volatile
@@ -258,7 +267,58 @@ abstract class DayZeroDatabase : RoomDatabase() {
             }
         }
 
-        val ALL_MIGRATIONS = arrayOf(MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11)
+        internal val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                Log.d("DayZeroSync", "room migration start 11->12")
+                try {
+                    db.execSQL(
+                        """
+                        CREATE TABLE IF NOT EXISTS media_assets (
+                            id TEXT NOT NULL,
+                            ownerLocalId TEXT NOT NULL,
+                            conversationId TEXT NOT NULL,
+                            sourceMessageId TEXT,
+                            conversationOrder INTEGER NOT NULL,
+                            masterRelativePath TEXT,
+                            thumbnailRelativePath TEXT,
+                            mimeType TEXT,
+                            width INTEGER,
+                            height INTEGER,
+                            byteSize INTEGER,
+                            sha256 TEXT,
+                            source TEXT NOT NULL,
+                            lifecycleState TEXT NOT NULL,
+                            failureCode TEXT,
+                            createdAt INTEGER NOT NULL,
+                            updatedAt INTEGER NOT NULL,
+                            deletedAt INTEGER,
+                            PRIMARY KEY(id),
+                            FOREIGN KEY(conversationId) REFERENCES conversations(id) ON UPDATE NO ACTION ON DELETE NO ACTION
+                        )
+                        """.trimIndent()
+                    )
+                    db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_media_assets_conversationId_conversationOrder ON media_assets(conversationId, conversationOrder)")
+                    db.execSQL("CREATE INDEX IF NOT EXISTS index_media_assets_conversationId_deletedAt_conversationOrder ON media_assets(conversationId, deletedAt, conversationOrder)")
+                    db.execSQL("CREATE INDEX IF NOT EXISTS index_media_assets_sourceMessageId ON media_assets(sourceMessageId)")
+                    db.execSQL("CREATE INDEX IF NOT EXISTS index_media_assets_lifecycleState_updatedAt ON media_assets(lifecycleState, updatedAt)")
+                    db.execSQL("CREATE INDEX IF NOT EXISTS index_media_assets_ownerLocalId ON media_assets(ownerLocalId)")
+                    Log.d("DayZeroSync", "room migration success 11->12")
+                } catch (e: Exception) {
+                    Log.e("DayZeroSync", "room migration error 11->12", e)
+                    throw e
+                }
+            }
+        }
+
+        val ALL_MIGRATIONS = arrayOf(
+            MIGRATION_5_6,
+            MIGRATION_6_7,
+            MIGRATION_7_8,
+            MIGRATION_8_9,
+            MIGRATION_9_10,
+            MIGRATION_10_11,
+            MIGRATION_11_12
+        )
 
         fun getDatabase(context: Context): DayZeroDatabase {
             return INSTANCE ?: synchronized(this) {

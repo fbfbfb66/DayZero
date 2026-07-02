@@ -65,7 +65,26 @@ class ChatSyncQueueWriter(
                 !message.suggestedRepliesJson.isNullOrBlank()
             return hasStoredPayload
         }
-        return message.text.isNotBlank()
+        return message.text.isNotBlank() || hasMediaAttachment(message.contentJson)
+    }
+
+    /**
+     * Returns true when [contentJson] contains a valid Phase 2B media attachment
+     * contract with at least one sourceMediaId. Non-object contentJson values,
+     * unknown fields, and missing/empty media arrays are treated as "no media".
+     */
+    private fun hasMediaAttachment(contentJson: String?): Boolean {
+        if (contentJson.isNullOrBlank()) return false
+        return try {
+            val json = org.json.JSONObject(contentJson)
+            if (!json.has("media") || json.isNull("media")) return false
+            val media = json.optJSONObject("media") ?: return false
+            if (media.optInt("schemaVersion", -1) != MEDIA_SCHEMA_VERSION) return false
+            val ids = media.optJSONArray("sourceMediaIds") ?: return false
+            ids.length() > 0
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private suspend fun enqueueLatest(item: SyncQueueEntity, reason: String): Boolean {
@@ -90,5 +109,6 @@ class ChatSyncQueueWriter(
 
     private companion object {
         private const val LOG_PREFIX = "DayZeroChatSync"
+        private const val MEDIA_SCHEMA_VERSION = 1
     }
 }

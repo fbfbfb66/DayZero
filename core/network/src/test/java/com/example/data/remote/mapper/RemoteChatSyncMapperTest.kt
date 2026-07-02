@@ -135,6 +135,19 @@ class RemoteChatSyncMapperTest {
     }
 
     @Test
+    fun continuationContextJsonRoundTripsThroughChatSyncWithoutChangingUnknownFields() {
+        val cardsJson = """
+            [{"type":"ask_missing_info_card","id":"meal-card","title":"Meal","message":"Which?","field":"mealType","originalText":"","options":[],"continuationContext":{"schemaVersion":1,"mediaIds":["11111111-1111-4111-8111-111111111111"],"recognizedFoods":[{"name":"apple","amountText":"1 item","calories":95,"proteinG":0.5}],"futureCompatibleField":{"keep":true}}}]
+        """.trimIndent()
+
+        val roundTrip = mapper.toRemoteMessage(
+            mapper.toMessageSnapshot(messageDto(assistantCardsJson = cardsJson))
+        )
+
+        assertEquals(cardsJson, roundTrip.assistantCardsJson)
+    }
+
+    @Test
     fun dateMismatchGuardJsonRoundTripsWithoutChangingPendingOriginalCard() {
         val cardsJson = """
             [{"type":"date_mismatch_guard_card","id":"guard-1","conversationId":"c1","conversationDate":"2026-06-20","detectedCurrentDate":"2026-06-21","state":"approved","createdAt":1782000000123,"pendingOriginalCard":{"type":"show_confirm_card","id":"card-1","confirmType":"food_record","meals":[{"mealType":"Dinner","items":[{"name":"noodle","calories":500,"calorieConfidence":"medium"}]}],"buttons":[{"id":"confirm","label":"Confirm"},{"id":"cancel","label":"Cancel"}],"state":"pending","unknownNested":"keep-me"}}]
@@ -198,4 +211,3 @@ class RemoteChatSyncMapperTest {
         )
     }
 }
-

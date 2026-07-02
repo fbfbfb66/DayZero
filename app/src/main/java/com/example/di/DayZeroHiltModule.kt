@@ -9,15 +9,21 @@ import com.example.data.identity.SupabaseFixedPasswordIdentityProvider
 import com.example.data.local.dao.AiChatMessageDao
 import com.example.data.local.dao.ConversationDao
 import com.example.data.local.dao.DailyRecordDao
+import com.example.data.local.dao.MediaAssetDao
 import com.example.data.local.dao.SyncQueueDao
 import com.example.data.local.database.DayZeroDatabase
+import com.example.data.network.AndroidNetworkAvailabilityProvider
 import com.example.data.remote.NetworkModule
 import com.example.data.remote.PromptCacheKeyProvider
 import com.example.data.remote.api.AiDraftApiService
+import com.example.assistant.VisionAssistantTurnOrchestrator
 import com.example.data.remote.stream.AssistantTurnStreamClient
 import com.example.data.repository.RemoteAiAssistantRepository
 import com.example.data.repository.RemoteAiDraftRepository
+import com.example.data.repository.RoomChatMediaTransactionRepository
+import com.example.data.repository.RoomFoodCardConfirmationRepository
 import com.example.data.repository.RoomConversationRepository
+import com.example.data.repository.RoomMediaRepository
 import com.example.data.repository.RoomRecordRepository
 import com.example.data.sync.BackfillCoordinator
 import com.example.data.sync.BackfillStateStore
@@ -35,6 +41,7 @@ import com.example.data.sync.SupabaseRemotePullGateway
 import com.example.data.sync.SupabaseRemoteSyncGateway
 import com.example.data.sync.SyncCoordinator
 import com.example.data.sync.SyncHealthReporter
+import com.example.data.sync.SyncQueueWriter
 import com.example.data.sync.chat.ChatBackfillCoordinator
 import com.example.data.sync.chat.ChatBackfillStateStore
 import com.example.data.sync.chat.ChatSyncQueueWriter
@@ -43,12 +50,37 @@ import com.example.data.telemetry.AiLatencyTraceLogger
 import com.example.domain.identity.CurrentIdentityProvider
 import com.example.domain.repository.AiAssistantRepository
 import com.example.domain.repository.AiDraftRepository
+import com.example.domain.repository.ChatMediaTransactionRepository
 import com.example.domain.repository.ConversationRepository
+import com.example.domain.repository.FoodCardConfirmationRepository
+import com.example.domain.repository.MediaRepository
 import com.example.domain.repository.RecordRepository
+import com.example.domain.network.NetworkAvailabilityProvider
 import com.example.domain.time.CurrentDateProvider
 import com.example.domain.usecase.ClearLocalDataUseCase
+import com.example.domain.usecase.ConfirmFoodCardUseCase
 import com.example.domain.usecase.ConfirmFoodRecordUseCase
+import com.example.domain.usecase.CreateStagedMediaAssetsUseCase
 import com.example.domain.usecase.CreateConversationWithFirstMessageUseCase
+import com.example.domain.usecase.ObserveConversationMediaUseCase
+import com.example.domain.usecase.ImportLocalMediaUseCase
+import com.example.domain.usecase.RetryLocalMediaImportUseCase
+import com.example.domain.usecase.DiscardStagedMediaUseCase
+import com.example.domain.usecase.CleanupStaleMediaUseCase
+import com.example.domain.usecase.SendUserMessageWithMediaUseCase
+import com.example.domain.usecase.MediaIdGenerator
+import com.example.data.media.MediaFileStore
+import com.example.data.media.AndroidMediaFileStore
+import com.example.data.media.MediaImageProcessor
+import com.example.data.media.AndroidMediaImageProcessor
+import com.example.data.media.AiImageDerivativeProcessor
+import com.example.data.media.AndroidAiImageDerivativeProcessor
+import com.example.data.repository.AndroidLocalMediaImportRepository
+import com.example.data.repository.AndroidVisionAttachmentPreparationRepository
+import com.example.domain.repository.VisionAttachmentPreparationRepository
+import com.example.domain.usecase.PrepareVisionAttachmentsForMessageUseCase
+import com.example.domain.usecase.ReleasePreparedVisionAttachmentsUseCase
+import com.example.domain.repository.LocalMediaImportRepository
 import com.squareup.moshi.Moshi
 import dagger.Module
 import dagger.Provides
@@ -103,9 +135,18 @@ object DayZeroHiltModule {
     fun provideSyncQueueDao(database: DayZeroDatabase): SyncQueueDao = database.syncQueueDao()
 
     @Provides
+    fun provideMediaAssetDao(database: DayZeroDatabase): MediaAssetDao = database.mediaAssetDao()
+
+    @Provides
     @Singleton
     fun provideLatencyLogger(@ApplicationContext context: Context): AiLatencyTraceLogger {
         return AiLatencyTraceLogger(context)
+    }
+
+    @Provides
+    @Singleton
+    fun provideNetworkAvailabilityProvider(@ApplicationContext context: Context): NetworkAvailabilityProvider {
+        return AndroidNetworkAvailabilityProvider(context)
     }
 
     @Provides
@@ -248,6 +289,194 @@ object DayZeroHiltModule {
     }
 
     @Provides
+    @Singleton
+    fun provideSyncQueueWriter(syncQueueDao: SyncQueueDao): SyncQueueWriter {
+        return SyncQueueWriter(syncQueueDao)
+    }
+
+    @Provides
+    @Singleton
+    fun provideFoodCardConfirmationRepository(
+        database: DayZeroDatabase,
+        identityProvider: CurrentIdentityProvider,
+        syncQueueWriter: SyncQueueWriter,
+        chatSyncQueueWriter: ChatSyncQueueWriter
+    ): FoodCardConfirmationRepository {
+        return RoomFoodCardConfirmationRepository(
+            database = database,
+            identityProvider = identityProvider,
+            syncQueueWriter = syncQueueWriter,
+            chatSyncQueueWriter = chatSyncQueueWriter
+        )
+    }
+
+    @Provides
+    fun provideConfirmFoodCardUseCase(
+        repository: FoodCardConfirmationRepository
+    ): ConfirmFoodCardUseCase {
+        return ConfirmFoodCardUseCase(repository)
+    }
+
+    @Provides
+    @Singleton
+    fun provideMediaRepository(database: DayZeroDatabase): MediaRepository {
+        return RoomMediaRepository(database)
+    }
+
+    @Provides
+    fun provideObserveConversationMediaUseCase(
+        mediaRepository: MediaRepository
+    ): ObserveConversationMediaUseCase {
+        return ObserveConversationMediaUseCase(mediaRepository)
+    }
+
+    @Provides
+    fun provideCreateStagedMediaAssetsUseCase(
+        mediaRepository: MediaRepository
+    ): CreateStagedMediaAssetsUseCase {
+        return CreateStagedMediaAssetsUseCase(mediaRepository)
+    }
+
+    @Provides
+    @Singleton
+    fun provideMediaFileStore(@ApplicationContext context: Context): MediaFileStore {
+        return AndroidMediaFileStore(context)
+    }
+
+    @Provides
+    @Singleton
+    fun provideMediaImageProcessor(): MediaImageProcessor {
+        return AndroidMediaImageProcessor()
+    }
+
+    @Provides
+    @Singleton
+    fun provideAiImageDerivativeProcessor(): AiImageDerivativeProcessor {
+        return AndroidAiImageDerivativeProcessor()
+    }
+
+    @Provides
+    @Singleton
+    fun provideVisionAttachmentPreparationRepository(
+        @ApplicationContext context: Context,
+        database: DayZeroDatabase,
+        fileStore: MediaFileStore,
+        derivativeProcessor: AiImageDerivativeProcessor
+    ): VisionAttachmentPreparationRepository {
+        return AndroidVisionAttachmentPreparationRepository(
+            context = context,
+            messageDao = database.aiChatMessageDao(),
+            mediaDao = database.mediaAssetDao(),
+            fileStore = fileStore,
+            derivativeProcessor = derivativeProcessor
+        )
+    }
+
+    @Provides
+    fun providePrepareVisionAttachmentsForMessageUseCase(
+        repository: VisionAttachmentPreparationRepository
+    ): PrepareVisionAttachmentsForMessageUseCase {
+        return PrepareVisionAttachmentsForMessageUseCase(repository)
+    }
+
+    @Provides
+    fun provideReleasePreparedVisionAttachmentsUseCase(
+        repository: VisionAttachmentPreparationRepository
+    ): ReleasePreparedVisionAttachmentsUseCase {
+        return ReleasePreparedVisionAttachmentsUseCase(repository)
+    }
+
+    @Provides
+    @Singleton
+    fun provideVisionAssistantTurnOrchestrator(
+        prepareUseCase: PrepareVisionAttachmentsForMessageUseCase,
+        releaseUseCase: ReleasePreparedVisionAttachmentsUseCase,
+        aiAssistantRepository: AiAssistantRepository,
+        aiDraftRepository: AiDraftRepository,
+        recordRepository: RecordRepository,
+        conversationRepository: ConversationRepository,
+        currentDateProvider: CurrentDateProvider,
+        latencyLogger: AiLatencyTraceLogger
+    ): VisionAssistantTurnOrchestrator {
+        return VisionAssistantTurnOrchestrator(
+            prepareUseCase = prepareUseCase,
+            releaseUseCase = releaseUseCase,
+            aiAssistantRepository = aiAssistantRepository,
+            aiDraftRepository = aiDraftRepository,
+            recordRepository = recordRepository,
+            conversationRepository = conversationRepository,
+            currentDateProvider = currentDateProvider,
+            latencyLogger = latencyLogger
+        )
+    }
+
+    @Provides
+    @Singleton
+    fun provideLocalMediaImportRepository(
+        mediaRepository: MediaRepository,
+        fileStore: MediaFileStore,
+        imageProcessor: MediaImageProcessor
+    ): LocalMediaImportRepository {
+        return AndroidLocalMediaImportRepository(
+            mediaRepository = mediaRepository,
+            fileStore = fileStore,
+            imageProcessor = imageProcessor
+        )
+    }
+
+    @Provides
+    @Singleton
+    fun provideMediaIdGenerator(): MediaIdGenerator {
+        return MediaIdGenerator { java.util.UUID.randomUUID().toString() }
+    }
+
+    @Provides
+    fun provideImportLocalMediaUseCase(
+        mediaRepository: MediaRepository,
+        importRepository: LocalMediaImportRepository,
+        idGenerator: MediaIdGenerator
+    ): ImportLocalMediaUseCase {
+        return ImportLocalMediaUseCase(
+            mediaRepository = mediaRepository,
+            importRepository = importRepository,
+            idGenerator = idGenerator
+        )
+    }
+
+    @Provides
+    fun provideRetryLocalMediaImportUseCase(
+        mediaRepository: MediaRepository,
+        importRepository: LocalMediaImportRepository
+    ): RetryLocalMediaImportUseCase {
+        return RetryLocalMediaImportUseCase(
+            mediaRepository = mediaRepository,
+            importRepository = importRepository
+        )
+    }
+
+    @Provides
+    fun provideDiscardStagedMediaUseCase(
+        mediaRepository: MediaRepository,
+        importRepository: LocalMediaImportRepository
+    ): DiscardStagedMediaUseCase {
+        return DiscardStagedMediaUseCase(
+            mediaRepository = mediaRepository,
+            importRepository = importRepository
+        )
+    }
+
+    @Provides
+    fun provideCleanupStaleMediaUseCase(
+        mediaRepository: MediaRepository,
+        importRepository: LocalMediaImportRepository
+    ): CleanupStaleMediaUseCase {
+        return CleanupStaleMediaUseCase(
+            mediaRepository = mediaRepository,
+            importRepository = importRepository
+        )
+    }
+
+    @Provides
     fun provideCreateConversationWithFirstMessageUseCase(
         aiDraftRepository: AiDraftRepository
     ): CreateConversationWithFirstMessageUseCase {
@@ -290,6 +519,27 @@ object DayZeroHiltModule {
             syncQueueDao = syncQueueDao,
             identityProvider = identityProvider
         )
+    }
+
+    @Provides
+    @Singleton
+    fun provideChatMediaTransactionRepository(
+        database: DayZeroDatabase,
+        identityProvider: CurrentIdentityProvider,
+        chatSyncQueueWriter: ChatSyncQueueWriter
+    ): ChatMediaTransactionRepository {
+        return RoomChatMediaTransactionRepository(
+            database = database,
+            identityProvider = identityProvider,
+            chatSyncQueueWriter = chatSyncQueueWriter
+        )
+    }
+
+    @Provides
+    fun provideSendUserMessageWithMediaUseCase(
+        repository: ChatMediaTransactionRepository
+    ): SendUserMessageWithMediaUseCase {
+        return SendUserMessageWithMediaUseCase(repository)
     }
 
     @Provides

@@ -72,6 +72,8 @@ import androidx.compose.ui.unit.sp
 import com.example.domain.model.ai.assistant.ConfirmCardMeal
 import com.example.domain.model.ai.assistant.PayloadSummary
 import com.example.domain.model.ai.assistant.ShowConfirmCardPayload
+import com.example.domain.model.formatWeightKg
+import com.example.domain.model.normalizeWeightKg
 import com.example.ui.theme.BorderLight
 import com.example.ui.theme.BrandGreen
 import com.example.ui.theme.BrandRed
@@ -132,7 +134,7 @@ fun FoodDraftConfirmCard(
     }
 
     if (showWeightDialog) {
-        var inputWeight by remember { mutableStateOf(weightKg?.toString() ?: "") }
+        var inputWeight by remember { mutableStateOf(weightKg?.let { formatWeightKg(it) } ?: "") }
         AlertDialog(
             onDismissRequest = { showWeightDialog = false },
             title = { Text("填写体重") },
@@ -147,7 +149,7 @@ fun FoodDraftConfirmCard(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        val newWeight = inputWeight.toDoubleOrNull()
+                        val newWeight = inputWeight.toDoubleOrNull()?.let { normalizeWeightKg(it) }
                         weightKg = newWeight
                         persistDraft(weight = newWeight)
                         showWeightDialog = false
@@ -375,7 +377,7 @@ private fun WeightSection(
         ) {
             Text(text = "体重记录 (kg)", fontWeight = FontWeight.Medium, color = TextPrimary)
             if (weightKg != null) {
-                Text(text = "$weightKg kg", color = BrandGreen, fontWeight = FontWeight.Bold)
+                Text(text = "${formatWeightKg(weightKg)} kg", color = BrandGreen, fontWeight = FontWeight.Bold)
             } else {
                 Text(text = "点击填写", color = TextTertiary)
             }

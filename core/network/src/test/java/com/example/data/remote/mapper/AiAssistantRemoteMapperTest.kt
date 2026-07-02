@@ -1,12 +1,18 @@
 package com.example.data.remote.mapper
 
 import com.example.data.remote.dto.assistant.AiChatCardDto
+import com.example.data.remote.dto.assistant.AiAssistantRequestDto
 import com.example.data.remote.dto.assistant.AssistantActionDto
 import com.example.data.remote.dto.assistant.AssistantActionItemDto
 import com.example.data.remote.dto.assistant.AssistantActionPayloadDto
 import com.example.data.remote.dto.assistant.AssistantTurnV2ResponseDto
+import com.example.domain.model.ai.assistant.AiAssistantRequest
+import com.example.domain.model.ai.assistant.AskMissingInfoCardPayload
+import com.example.domain.model.ai.assistant.AskMissingInfoOption
 import com.example.domain.model.ai.assistant.ConfirmCardItem
 import com.example.domain.model.ai.assistant.DateMismatchGuardCardPayload
+import com.example.domain.model.ai.assistant.PreparedVisionAttachment
+import com.example.domain.model.ai.assistant.PreparedVisionRequest
 import com.example.domain.model.ai.assistant.ShowConfirmCardPayload
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
@@ -23,6 +29,33 @@ class AiAssistantRemoteMapperTest {
     private val actionMapper = AssistantTurnV2ResponseMapper()
     private val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
     private val chatCardAdapter = moshi.adapter(AiChatCardDto::class.java)
+
+    @Test
+    fun askCardContinuationContext_roundTripsUnknownSafeFields_andLegacyCardRemainsCompatible() {
+        val card = AskMissingInfoCardPayload(
+            id = "meal-card",
+            title = "Meal",
+            message = "Which meal?",
+            field = "mealType",
+            originalText = "",
+            options = listOf(AskMissingInfoOption("lunch", "Lunch")),
+            continuationContext = mapOf(
+                "schemaVersion" to 1,
+                "mediaIds" to listOf("11111111-1111-4111-8111-111111111111"),
+                "recognizedFoods" to listOf(mapOf("name" to "apple", "calories" to 95)),
+                "futureCompatibleField" to mapOf("nested" to true)
+            )
+        )
+
+        val roundTripped = mapper.toCardDomain(mapper.toDto(card)!!) as AskMissingInfoCardPayload
+        assertEquals(true, (roundTripped.continuationContext?.get("futureCompatibleField") as Map<*, *>)["nested"])
+        assertEquals("apple", ((roundTripped.continuationContext?.get("recognizedFoods") as List<*>).single() as Map<*, *>)["name"])
+
+        val legacy = chatCardAdapter.fromJson(
+            """{"type":"ask_missing_info_card","id":"legacy","title":"Meal","message":"Which?","field":"mealType","originalText":"food","options":[]}"""
+        )!!
+        assertNull((mapper.toCardDomain(legacy) as AskMissingInfoCardPayload).continuationContext)
+    }
 
     @Test
     fun toCardDomain_withOldJson_hasNullNutritionFields() {
@@ -348,5 +381,122 @@ class AiAssistantRemoteMapperTest {
         assertEquals(1.1f, item.proteinG)
         assertEquals(0.3f, item.fatG)
         assertEquals(2.6f, item.fiberG)
+    }
+
+    @Test
+    fun textOnlyRequest_omitsAttachmentsField() {
+        val request = AiAssistantRequest(
+            date = LocalDate.of(2026, 6, 26),
+            userText = "hello"
+        )
+
+        val dto = mapper.toRequestDto(request)
+        assertNull(dto.attachments)
+    }
+
+    @Test
+    fun requestWithAttachments_mapsToDtoArray() {
+        val request = AiAssistantRequest(
+            date = LocalDate.of(2026, 6, 26),
+            userText = "look at this",
+            attachments = listOf(
+                PreparedVisionAttachment(
+                    mediaId = "media-1",
+                    mimeType = PreparedVisionRequest.MIME_TYPE_JPEG,
+                    base64 = "dGVzdA==",
+                    byteSize = 1234
+                )
+            )
+        )
+
+        val dto = mapper.toRequestDto(request)
+        assertNotNull(dto.attachments)
+        assertEquals(1, dto.attachments!!.size)
+        val attachment = dto.attachments[0]
+        assertEquals("media-1", attachment.mediaId)
+        assertEquals(PreparedVisionRequest.MIME_TYPE_JPEG, attachment.mimeType)
+        assertEquals("dGVzdA==", attachment.base64)
+    }
+
+    @Test
+    fun requestWithEmptyAttachments_omitsAttachmentsField() {
+        val request = AiAssistantRequest(
+            date = LocalDate.of(2026, 6, 26),
+            userText = "hello",
+            attachments = emptyList()
+        )
+
+        val dto = mapper.toRequestDto(request)
+        assertNull(dto.attachments)
+    }
+
+    @Test
+    fun attachmentsDto_serializesAsJsonArrayNotString() {
+        val request = AiAssistantRequest(
+            date = LocalDate.of(2026, 6, 26),
+            userText = "image only",
+            attachments = listOf(
+                PreparedVisionAttachment(
+                    mediaId = "m1",
+                    mimeType = PreparedVisionRequest.MIME_TYPE_JPEG,
+                    base64 = "Yg==",
+                    byteSize = 1
+                ),
+                PreparedVisionAttachment(
+                    mediaId = "m2",
+                    mimeType = PreparedVisionRequest.MIME_TYPE_JPEG,
+                    base64 = "Yw==",
+                    byteSize = 1
+                )
+            )
+        )
+
+        val dto = mapper.toRequestDto(request)
+        val adapter = moshi.adapter(AiAssistantRequestDto::class.java)
+        val json = adapter.toJson(dto)
+
+        assertTrue(json.contains("\"attachments\":["))
+        assertTrue(json.contains("\"mediaId\":\"m1\""))
+        assertTrue(json.contains("\"mediaId\":\"m2\""))
+        assertTrue(json.contains("\"mimeType\":\"image/jpeg\""))
+        // Base64 must not be stringified again or contain data URL prefix
+        assertTrue(json.contains("\"base64\":\"Yg==\""))
+        assertTrue(json.contains("\"base64\":\"Yw==\""))
+    }
+
+    @Test
+    fun interactionResultRequest_omitsAttachmentsField() {
+        val request = AiAssistantRequest(
+            date = LocalDate.of(2026, 6, 26),
+            userText = "已选择：确认",
+            turnType = "interaction_result",
+            interactionResult = com.example.domain.model.ai.assistant.InteractionResult(
+                interactionId = "card-1",
+                actionType = "show_confirm_card",
+                selectedOptionId = "confirm",
+                continuationContext = mapOf(
+                    "schemaVersion" to 1,
+                    "recognizedFoods" to listOf(
+                        mapOf("name" to "apple", "amountText" to "1 item", "calories" to 95)
+                    ),
+                    "futureCompatibleField" to "kept"
+                ),
+                selectedOptionLabel = "确认"
+            ),
+            attachments = listOf(
+                PreparedVisionAttachment(
+                    mediaId = "media-1",
+                    mimeType = PreparedVisionRequest.MIME_TYPE_JPEG,
+                    base64 = "dGVzdA==",
+                    byteSize = 1234
+                )
+            )
+        )
+
+        val dto = mapper.toRequestDto(request)
+        assertNotNull(dto.interactionResult)
+        assertEquals("card-1", dto.interactionResult!!.interactionId)
+        assertEquals("kept", dto.interactionResult!!.continuationContext?.get("futureCompatibleField"))
+        assertNull(dto.attachments)
     }
 }

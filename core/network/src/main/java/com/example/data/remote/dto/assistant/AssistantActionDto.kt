@@ -24,7 +24,8 @@ data class AssistantActionPayloadDto(
     val meals: List<AssistantActionMealDto>? = null,
     val mealType: String? = null,
     val items: List<AssistantActionItemDto>? = null,
-    val buttons: List<AssistantActionOptionDto>? = null
+    val buttons: List<AssistantActionOptionDto>? = null,
+    val continuationContext: Map<String, Any?>? = null
 )
 
 @JsonClass(generateAdapter = true)

@@ -18,6 +18,7 @@ data class AiChatCardDto(
     val state: String? = null,
     val originalText: String? = null,
     val field: String? = null,
+    val continuationContext: Map<String, Any?>? = null,
     // SummaryCard
     val totalCalories: Int? = null,
     val recordedMeals: List<String>? = null,

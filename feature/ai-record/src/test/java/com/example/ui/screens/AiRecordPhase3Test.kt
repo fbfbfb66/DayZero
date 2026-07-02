@@ -33,11 +33,17 @@ import com.example.ui.components.ai.FoodDraftConfirmCardTestTags
 import com.example.domain.repository.AiDraftRepository
 import com.example.domain.repository.ConversationRepository
 import com.example.domain.usecase.CreateConversationWithFirstMessageUseCase
+import com.example.domain.usecase.ObserveConversationMediaUseCase
+import com.example.domain.usecase.ImportLocalMediaUseCase
+import com.example.domain.usecase.RetryLocalMediaImportUseCase
+import com.example.domain.usecase.DiscardStagedMediaUseCase
+import com.example.domain.usecase.SendUserMessageWithMediaUseCase
 import com.example.ui.theme.MyApplicationTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
@@ -201,11 +207,19 @@ class AiRecordPhase3Test {
                     conversationId = "a",
                     detailState = AiConversationDetailState(
                         currentConversation = conversation("a", "A", 1L),
-                        messages = messages
+                        messages = messages,
+                        messagesWithMedia = messages.map { MessageWithMedia(it, emptyList()) }
                     ),
                     appState = AppState(activeConversationId = "a"),
                     actionHandler = NoOpActionHandler,
-                    onBack = {}
+                    events = MutableSharedFlow(),
+                    onBack = {},
+                    onImportPhotos = { _, _ -> },
+                    onRemoveAttachment = { _, _ -> },
+                    onRetryAttachment = { _, _ -> },
+                    onNavigateToCamera = {},
+                    onSetPickerOpen = { _, _ -> },
+                    onSubmitMediaMessage = { _, _, _ -> }
                 )
             }
         }
@@ -226,11 +240,19 @@ class AiRecordPhase3Test {
                     detailState = AiConversationDetailState(currentConversation = conversation("a", "A", 1L)),
                     appState = AppState(activeConversationId = "a", isAnalyzing = true),
                     actionHandler = object : AiRecordActionHandler by NoOpActionHandler {
-                        override fun sendAiMessage(conversationId: String, text: String) {
+                        override fun sendAiMessage(conversationId: String, text: String): Boolean {
                             sent += conversationId to text
+                            return true
                         }
                     },
-                    onBack = {}
+                    events = MutableSharedFlow(),
+                    onBack = {},
+                    onImportPhotos = { _, _ -> },
+                    onRemoveAttachment = { _, _ -> },
+                    onRetryAttachment = { _, _ -> },
+                    onNavigateToCamera = {},
+                    onSetPickerOpen = { _, _ -> },
+                    onSubmitMediaMessage = { _, _, _ -> }
                 )
             }
         }
@@ -474,13 +496,60 @@ class AiRecordPhase3Test {
     }
 
     private fun createViewModel(savedStateHandle: SavedStateHandle = SavedStateHandle()): AiRecordViewModel {
+        val fakeMediaRepository = object : com.example.domain.repository.MediaRepository {
+            override fun observeConversationMedia(conversationId: String): kotlinx.coroutines.flow.Flow<List<com.example.domain.model.media.MediaAsset>> = kotlinx.coroutines.flow.flowOf(emptyList())
+            override suspend fun getConversationMedia(conversationId: String): List<com.example.domain.model.media.MediaAsset> = emptyList()
+            override suspend fun getMediaByIds(ids: List<String>): List<com.example.domain.model.media.MediaAsset> = emptyList()
+            override suspend fun createStagedMedia(requests: List<com.example.domain.model.media.NewMediaAssetRequest>, now: Long): List<com.example.domain.model.media.MediaAsset> = emptyList()
+            override suspend fun attachMediaToMessage(mediaIds: List<String>, conversationId: String, messageId: String, now: Long) {}
+            override suspend fun markMediaReady(id: String, conversationId: String, masterRelativePath: String, thumbnailRelativePath: String, mimeType: String, width: Int, height: Int, byteSize: Long, sha256: String, now: Long): com.example.domain.model.media.MediaAsset = mockAsset()
+            override suspend fun markMediaFailed(id: String, conversationId: String, failureCode: String?, now: Long): com.example.domain.model.media.MediaAsset = mockAsset()
+            override suspend fun softDeleteMedia(id: String, conversationId: String, now: Long) {}
+            override suspend fun findStaleStagedMedia(updatedBefore: Long): List<com.example.domain.model.media.MediaAsset> = emptyList()
+            private fun mockAsset() = com.example.domain.model.media.MediaAsset(
+                id = "1", ownerLocalId = "1", conversationId = "1", sourceMessageId = null,
+                conversationOrder = 0, masterRelativePath = null, thumbnailRelativePath = null,
+                mimeType = null, width = null, height = null, byteSize = null, sha256 = null,
+                source = com.example.domain.model.media.MediaSource.CAMERA, lifecycleState = com.example.domain.model.media.MediaLifecycleState.STAGED,
+                failureCode = null, createdAt = 0L, updatedAt = 0L, deletedAt = null
+            )
+        }
+        val fakeImportRepository = object : com.example.domain.repository.LocalMediaImportRepository {
+            override suspend fun importStagedMedia(mediaId: String, request: com.example.domain.model.media.ImportLocalMediaRequest): com.example.domain.model.media.LocalMediaImportItemResult = com.example.domain.model.media.LocalMediaImportItemResult.Failed(mediaId, com.example.domain.model.media.MediaImportFailureCode.UNKNOWN)
+            override suspend fun retryImport(mediaId: String): com.example.domain.model.media.LocalMediaImportItemResult = com.example.domain.model.media.LocalMediaImportItemResult.Failed(mediaId, com.example.domain.model.media.MediaImportFailureCode.UNKNOWN)
+            override suspend fun discardStagedMedia(mediaId: String): Boolean = true
+            override suspend fun cleanupStaleMedia(updatedBefore: Long): List<String> = emptyList()
+        }
+        val fakeIdGenerator = com.example.domain.usecase.MediaIdGenerator { "id" }
+        val fakeCurrentIdentityProvider = object : com.example.domain.identity.CurrentIdentityProvider {
+            override suspend fun currentIdentity() = com.example.domain.identity.AppIdentity("owner-default", null, "local", false)
+        }
+
+        val fakeSendUserMessageWithMediaUseCase = SendUserMessageWithMediaUseCase(
+            object : com.example.domain.repository.ChatMediaTransactionRepository {
+                override suspend fun sendUserMessageWithMedia(request: com.example.domain.model.ai.SendUserMessageWithMediaRequest): com.example.domain.model.ai.SendUserMessageWithMediaResult {
+                    return com.example.domain.model.ai.SendUserMessageWithMediaResult.Committed(
+                        userMessageId = request.userMessageId,
+                        assistantPlaceholderId = "placeholder-${request.userMessageId}"
+                    )
+                }
+            }
+        )
         return AiRecordViewModel(
             conversationRepository = conversationRepository,
             aiDraftRepository = aiDraftRepository,
             createConversationWithFirstMessageUseCase = CreateConversationWithFirstMessageUseCase(aiDraftRepository),
+            observeConversationMediaUseCase = ObserveConversationMediaUseCase(fakeMediaRepository),
+            importLocalMediaUseCase = ImportLocalMediaUseCase(fakeMediaRepository, fakeImportRepository, fakeIdGenerator),
+            retryLocalMediaImportUseCase = RetryLocalMediaImportUseCase(fakeMediaRepository, fakeImportRepository),
+            discardStagedMediaUseCase = DiscardStagedMediaUseCase(fakeMediaRepository, fakeImportRepository),
+            sendUserMessageWithMediaUseCase = fakeSendUserMessageWithMediaUseCase,
+            currentIdentityProvider = fakeCurrentIdentityProvider,
+            networkAvailabilityProvider = com.example.domain.network.NetworkAvailabilityProvider { true },
             savedStateHandle = savedStateHandle
         )
     }
+
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -633,6 +702,10 @@ private class InMemoryAiDraftRepository(
         }
     }
 
+    override suspend fun getChatMessageById(messageId: String): AiChatMessage? {
+        return messages.value.find { it.id == messageId }
+    }
+
     override suspend fun insertChatMessage(message: AiChatMessage) {
         messages.update { it + message }
     }
@@ -663,9 +736,10 @@ private fun conversation(id: String, title: String, activity: Long): Conversatio
 }
 
 private object NoOpActionHandler : AiRecordActionHandler {
-    override fun sendAiMessage(text: String) = Unit
-    override fun sendAiMessage(conversationId: String, text: String) = Unit
+    override fun sendAiMessage(text: String) = true
+    override fun sendAiMessage(conversationId: String, text: String) = true
     override fun startAssistantTurnForExistingUserMessage(conversationId: String, text: String) = Unit
+    override fun startVisionAssistantTurnForExistingUserMessage(conversationId: String, userMessageId: String) = Unit
     override fun setActiveConversationId(conversationId: String?) = Unit
     override fun sendInteractionResult(
         interactionId: String,

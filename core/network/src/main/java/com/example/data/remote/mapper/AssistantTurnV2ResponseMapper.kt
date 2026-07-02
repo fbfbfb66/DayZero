@@ -6,6 +6,8 @@ import com.example.data.remote.dto.assistant.AssistantTurnV2ResponseDto
 import com.example.domain.model.ai.assistant.AiAssistantTurn
 import com.example.domain.model.ai.assistant.AiChatCard
 import com.example.domain.model.ai.assistant.AiIntent
+import com.example.domain.model.ai.assistant.AssistantContinuationContext
+import com.example.domain.model.ai.assistant.AssistantContinuationContextPolicy
 import com.example.domain.model.ai.assistant.AskMissingInfoCardPayload
 import com.example.domain.model.ai.assistant.AskMissingInfoOption
 import com.example.domain.model.ai.assistant.AskRecordIntentCardPayload
@@ -17,6 +19,7 @@ import com.example.domain.model.ai.assistant.DebugChoiceCardPayload
 import com.example.domain.model.ai.assistant.DebugChoiceOption
 import com.example.domain.model.ai.assistant.ProtocolException
 import com.example.domain.model.ai.assistant.ShowConfirmCardPayload
+import com.example.domain.model.normalizeWeightKg
 import java.util.UUID
 
 class AssistantTurnV2ResponseMapper {
@@ -90,7 +93,8 @@ class AssistantTurnV2ResponseMapper {
             title = payload.title,
             message = payload.message,
             originalText = payload.originalText,
-            options = options
+            options = options,
+            continuationContext = sanitizedContinuationContext(payload.continuationContext)
         )
     }
 
@@ -122,7 +126,8 @@ class AssistantTurnV2ResponseMapper {
             message = payload.message,
             field = payload.field,
             originalText = payload.originalText,
-            options = options
+            options = options,
+            continuationContext = sanitizedContinuationContext(payload.continuationContext)
         )
     }
 
@@ -194,7 +199,7 @@ class AssistantTurnV2ResponseMapper {
             originalText = payload.originalText ?: "",
             date = payload.date ?: "",
             totalCalories = payload.totalCalories,
-            weightKg = payload.weightKg,
+            weightKg = payload.weightKg?.let { normalizeWeightKg(it) },
             mealType = payload.mealType,
             items = items,
             meals = meals,
@@ -213,5 +218,15 @@ class AssistantTurnV2ResponseMapper {
     private fun String?.required(): String {
         if (isNullOrBlank()) throw ProtocolException("协议错误")
         return this
+    }
+
+    private fun sanitizedContinuationContext(
+        value: Map<String, Any?>?
+    ): AssistantContinuationContext? {
+        return try {
+            AssistantContinuationContextPolicy.sanitize(value)
+        } catch (error: IllegalArgumentException) {
+            throw ProtocolException("协议错误", error)
+        }
     }
 }

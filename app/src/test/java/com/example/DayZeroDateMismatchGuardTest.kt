@@ -318,7 +318,7 @@ class DayZeroDateMismatchGuardTest {
             aiAssistantRepository = assistantRepository,
             latencyLogger = AiLatencyTraceLogger(ApplicationProvider.getApplicationContext()),
             clearLocalDataUseCase = ClearLocalDataUseCase(recordRepository, aiDraftRepository),
-            confirmFoodRecordUseCase = ConfirmFoodRecordUseCase(recordRepository),
+            confirmFoodCardUseCase = testConfirmFoodCardUseCase(aiDraftRepository, conversationRepository, recordRepository),
             createConversationWithFirstMessageUseCase = CreateConversationWithFirstMessageUseCase(aiDraftRepository),
             conversationRepository = conversationRepository,
             currentDateProvider = FixedCurrentDateProvider(currentDate),
@@ -329,7 +329,11 @@ class DayZeroDateMismatchGuardTest {
                 override fun requestPull(reason: com.example.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
                 override fun requestInitialRestore(reason: com.example.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
                 override fun requestSyncAndPull(reason: com.example.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
-            }
+            },
+            visionAssistantTurnOrchestrator = com.example.assistant.fakeVisionAssistantTurnOrchestrator(
+                ApplicationProvider.getApplicationContext()
+            ),
+            networkAvailabilityProvider = com.example.domain.network.NetworkAvailabilityProvider { true }
         )
 
         suspend fun insertConversation(id: String, date: LocalDate) {

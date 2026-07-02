@@ -88,6 +88,7 @@ data class AskRecordIntentCardPayload(
     val message: String,
     val originalText: String,
     val options: List<AskRecordIntentOption>,
+    val continuationContext: AssistantContinuationContext? = null,
     val resolved: Boolean = false,
     override val type: AiCardType = AiCardType.AskRecordIntentCard
 ) : AiChatCard
@@ -104,6 +105,7 @@ data class AskMissingInfoCardPayload(
     val field: String,
     val originalText: String,
     val options: List<AskMissingInfoOption>,
+    val continuationContext: AssistantContinuationContext? = null,
     val resolved: Boolean = false,
     override val type: AiCardType = AiCardType.AskMissingInfoCard
 ) : AiChatCard

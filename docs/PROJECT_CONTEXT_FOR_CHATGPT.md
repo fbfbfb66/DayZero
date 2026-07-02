@@ -57,6 +57,9 @@
 - **Current concurrency policy**: the visible UI remains a single global generation surface. While `isAnalyzing` is true, the home input and detail input are disabled. Users may return to AI home while generation continues; replies are still persisted to the send-time conversation and are visible when reopening it. Multi-conversation simultaneous generation UI is not introduced.
 - Still not implemented: multi-device lifecycle orchestration, history search, delete, rename, pinning, and AI-generated titles.
 - **Launcher Double Icon Issue Resolved**. Fixed an issue where building/running the debug app installed duplicate launcher icons on the device. The root cause was that `feature/ai-record/src/debug/AndroidManifest.xml` incorrectly declared `androidx.activity.ComponentActivity` with `MAIN` and `LAUNCHER` intent-filters. This has been removed, preserving the registration of the activity for local Compose test rules while preventing duplicate launcher icons.
+- **Phase 2B-3C1-F1: Android Vision Orchestration Targeted Fixes complete**. Addressed independent-verification findings in `:app` Vision orchestration: `VisionAssistantTurnOrchestrator` is now a required non-null dependency of `DayZeroViewModel`; streaming fallback eligibility covers `IOException`, `ProtocolException`, `JsonDataException`, and transient `HttpException` (408/429/5xx); `DayZeroViewModel` uses per-attempt ownership (`activeVisionAttemptId`) so only the owning attempt can set or clear `isAnalyzing`; cleanup failures are logged and cannot mask the original exception or `CancellationException`. Tests expanded with a fallback exception matrix and `DayZeroViewModelVisionAttemptOwnershipTest`. Edge Function source was left untouched (baseline SHA-256 verified). UI image send remains intercepted until end-to-end verification.
+- **Phase 2B-3C2A: Real Image Send + Vision Turn Wiring complete**. Removed the temporary image-send UI interception in `AiRecordScreen`. The detail screen now routes messages with attachments through `SendUserMessageWithMediaUseCase`; on local commit success it emits `MediaMessageCommitted`, which `AppNavigation` consumes to start `VisionAssistantTurnOrchestrator` for the persisted user message. Attachment drafts are cleaned only after a successful local commit, and a minimal `VisionRetryCard` is shown when the vision turn reaches a terminal error. Added `AiRecordMediaSendTest` covering text/image split, commit success/failure, double-click protection, conflict handling, and draft isolation. Verified by `:app:assembleDebug`, safe install on Pixel_10_Pro AVD, and app launch without crash.
+- **Historical Phase 2B-3C2B-F1 report — superseded by the F2 real-device correction below; it is not a current completion claim**. Diagnosed the Vision picture stream "no streaming" symptom as the Edge Function's hard 15 s Kimi fetch timeout; added safe, data-free diagnostic logging to `VisionAssistantTurnOrchestrator` so TTFT, delta count, fallback reason, and duration can be verified on-device without logging Base64, paths, or payloads. Gated new AI message sends (text and media) on `NetworkAvailabilityProvider` so users cannot submit messages while offline. Fixed weight float precision by centralizing `formatWeightKg`/`normalizeWeightKg` in `:core:model` and applying them in `FoodDraftConfirmCard` input, display, and the `AssistantTurnV2ResponseMapper` boundary. Replaced the generic typing indicator for vision assistant placeholders with a dedicated `VisionImageRecognizingIndicator` (shimmer beam, reduced-motion static fallback, accessibility). Updated `AiRecordPhase2ATest`, `AiRecordMediaSendTest`, `DayZeroConversationPhase2Test`, and added `WeightFormatterTest`, `VisionPlaceholderDetectorTest`, `DayZeroViewModelNetworkGateTest`, and `VisionAssistantTurnOrchestratorTest`. Historical status was `VISION_STREAM_TIMEOUT_CONFIRMED_REQUIRES_EDGE_DECISION`; F2 disproved that timeout claim.
 
 ## Current Phase Features (Phase 4D-1 Complete)
 
@@ -659,3 +662,979 @@ This configuration caused `ComponentActivity` to register as a launcher activity
 - **Real Entry Animations**: Fixed missing entry animations. The `AnimatedVisibility` now triggers effectively upon initial component creation by using a `startVisibilityAnim` state delayed by `LaunchedEffect`. Added a horizontal sweep reveal animation to the top segment bar using `drawWithContent { clipRect(...) }` masking, keeping exact original proportions. Added `animateFloatAsState` to animate numbers (from `0g` to actual grams) and circle progress with appropriate staggering delays (160ms initial delay).
 - **NutritionPercentageRing Component**: Removed the inline `·` separator and plain percentage text. Created a custom `NutritionPercentageRing` component using Compose `Canvas`. Draws a neutral background track color mapped to the theme (light/dark support) and an active sweep colored arc (`-90` degrees start). `clampedProgress` ensures valid ranges, preserving 0% and 100% boundary safety. The percentage text is centered directly inside the ring.
 - **Unit Tests Updated**: Modified Phase C3 test files to verify independent text nodes (`25g` and `42%`) rather than the removed string concat format (`25g · 42%`). Added a Compose animation clock-based test `foodConfirmCardAnimatesNutritionGramsAndRatios` to guarantee values explicitly animate from `0g` and `0%` to final state. All tests passing, ensuring no regression on edge function logic, DTOs, calculation mapping, or sync paths.
+
+## Photo Feature Phase 1-Pre — Atomic Confirm & Idempotency (2026-06-26)
+
+### Original Problem
+- The pre-photo `show_confirm_card(food_record)` confirm path previously wrote `DailyRecord` and business sync queue first, then updated card state and chat sync queue later in `DayZeroViewModel`.
+- A crash, coroutine cancellation, process death, or database failure between those steps could leave a business record committed while the card stayed `pending`, allowing repeated clicks to append duplicate foods or weight.
+
+### Final Transaction Boundary
+- Added `FoodCardConfirmationRepository` and `ConfirmFoodCardUseCase` in domain, with `RoomFoodCardConfirmationRepository` in data.
+- A single `DayZeroDatabase.withTransaction` now re-reads the persisted card message, validates card state, resolves the owning conversation date, writes `DailyRecord`, enqueues business sync, updates `assistantCardsJson`, updates `AiChatMessage`, and enqueues chat sync.
+- `conversationDate` remains the source of truth for the record date, including historical unwrapped cards and approved date mismatch guard cards.
+
+### Idempotency Gate
+- Persisted card JSON state is the authoritative gate: `pending` proceeds, `confirmed` returns `AlreadyConfirmed`, `cancelled` returns `Cancelled`.
+- `date_mismatch_guard_card.pendingOriginalCard` can confirm only when the guard is `approved`; pending/cancelled guards do not write records.
+- Raw `JSONObject`/`JSONArray` editing preserves unknown card JSON fields instead of round-tripping through DTOs.
+
+### Queues And Scheduler
+- Added non-swallowing `SyncQueueWriter` for business queue writes; enqueue failures abort the transaction and roll back local changes.
+- Existing `ChatSyncQueueWriter` is reused in the same transaction and keeps its coalescing behavior.
+- `SyncScheduler.requestSync(RECORD_CONFIRMED)` is called only after `ConfirmFoodCardResult.Confirmed`, so network sync starts after local commit.
+- `AlreadyConfirmed`, `Cancelled`, `CardNotFound`, and `Failed` do not trigger confirm sync.
+
+### Concurrency And Tests
+- Concurrent double confirm is safe because each transaction re-reads persisted card state; the second transaction sees `confirmed` and returns no-op.
+- Added Room tests for normal confirm, repeat confirm, concurrent confirm, three rollback injection points, terminal card states, guard states, missing card, and two different cards appending to the same meal type.
+- Added ViewModel scheduler tests for success, failed transaction result, and already-confirmed no-op.
+- Existing date mismatch guard, chat sync/backfill, card merge, and confirm use case tests continue to run.
+
+### Scope Boundaries
+- No photo/media feature was implemented.
+- No `MediaAssetEntity`, `mediaId`, `sourceMediaIds`, CameraX, Photo Picker, Coil, AI vision, Supabase Storage, WorkManager, or media remote schema work was added.
+- Room schema remains version 11 with no migration.
+- Supabase/remote schema, Edge Functions, prompts, and remote protocol were not changed.
+
+## Photo Feature Phase 1A — Local Media Registry & Room 11→12 (2026-06-26)
+
+### Local Model And Contract
+- Added pure Kotlin media domain models in `:core:model`: `MediaAsset`, `NewMediaAssetRequest`, `MediaSource`, and `MediaLifecycleState`.
+- `MediaAsset.conversationId` is non-null. Phase 1A intentionally supports only one owning conversation per media asset and does not add a conversation-media join table.
+- `sourceMessageId` is nullable because media may be staged before the sending message exists.
+- `deletedAt != null` is the only soft-delete truth. `MediaLifecycleState` remains limited to `STAGED`, `READY`, and `FAILED`.
+
+### Room Table
+- Room is now version 12.
+- Added `media_assets` with columns: `id`, `ownerLocalId`, `conversationId`, `sourceMessageId`, `conversationOrder`, `masterRelativePath`, `thumbnailRelativePath`, `mimeType`, `width`, `height`, `byteSize`, `sha256`, `source`, `lifecycleState`, `failureCode`, `createdAt`, `updatedAt`, and `deletedAt`.
+- `conversationId` has a foreign key to `conversations(id)` with `ON UPDATE NO ACTION` and `ON DELETE NO ACTION`; this prevents silent cascade deletion of media that may later be referenced by Cards, Meals, or Calendar.
+- `sourceMessageId` intentionally has no foreign key. It has only a normal index so message deletion does not delete or block media rows.
+- Added indexes for `(conversationId, conversationOrder)` unique order protection, active conversation pool queries, source message lookup, staged cleanup, and owner lookup.
+
+### Ordering And Lifecycle
+- `conversationOrder` is allocated inside `DayZeroDatabase.withTransaction`: read max order for the conversation, assign `max + 1` in request order, then batch insert.
+- The unique `(conversationId, conversationOrder)` index is the final database guard; repository creation uses a bounded retry for allocation conflicts.
+- READY writes are validated in `RoomMediaRepository`: master and thumbnail relative paths, MIME type, positive width/height/byte size, SHA-256, and non-deleted state are required.
+- Repository operations refuse cross-conversation batch attach, missing IDs, and mutations that would revive soft-deleted media.
+
+### DAO, Repository, Use Cases, And Hilt
+- Added `MediaAssetEntity`, `MediaAssetDao`, and `MediaAssetMapper` in `:core:database`.
+- Added `MediaRepository` in `:core:domain`.
+- Added `RoomMediaRepository` in `:core:data`.
+- Added `ObserveConversationMediaUseCase` and `CreateStagedMediaAssetsUseCase`.
+- Hilt now binds `MediaRepository` to `RoomMediaRepository` and provides the two use cases. UI modules still do not inject DAOs directly.
+
+### Migration 11→12
+- Added `MIGRATION_11_12`.
+- Migration only creates `media_assets` and its indexes/FK. It does not modify, rebuild, clear, or backfill old tables and does not fabricate historical media rows.
+- `Migration11to12Test` creates a real file-based SQLite version 11 database with the full old Room schema, inserts representative conversations, user/assistant messages, card JSON, `contentJson` null/`{}`/`[]`, daily record meals JSON, and sync queue data, then opens it through Room with `MIGRATION_11_12` to trigger schema validation.
+- The migration test verifies old data is preserved field-by-field, `media_assets` exists and is empty, new columns/indexes/FKs match expectations, and old tables/indexes/FKs remain present.
+- The older `Migration10to11Test` now registers both `MIGRATION_10_11` and `MIGRATION_11_12` because the current Room target version is 12.
+
+### Tests And Scope
+- Added `RoomMediaRepositoryTest` covering staged creation, stable ordering, second-batch continuation, independent conversation ordering, concurrent creation uniqueness, conversation isolation, active-only queries, FK behavior, source message non-FK behavior, no implicit conversation cascade, lifecycle transitions, READY metadata validation, soft-delete idempotency, stale staged lookup, and atomic batch message attach.
+- Verification run used `JAVA_HOME=C:\Program Files\Android\Android Studio\jbr` and passed: `:core:model:test`, `:core:database:testDebugUnitTest`, `:core:data:testDebugUnitTest`, `:app:testDebugUnitTest`, `:app:assembleDebug`, and root `test`.
+- No APK was installed and no real-device database was migrated in this phase.
+- Once a device opens a real version 12 database, a version 11 APK cannot normally downgrade-open it. Source rollback is not a database downgrade. Phase 1A does not implement downgrade migration and does not use destructive migration.
+- Phase 1A does not implement CameraX, Photo Picker, URI handling, Bitmap decoding, compression, thumbnails, file directory creation, file deletion, AI vision, Card image fields, Calendar image UI, Supabase Storage, remote media tables, WorkManager, or media sync.
+- Phase 1B should implement the real local import/file-processing pipeline on top of this registry without changing the Phase 1A ownership and ordering contract.
+
+## Photo Feature Phase 1B — Local Import & Image Processing (2026-06-26)
+
+### File Directory Structure
+All files are resolved relative to standard Android app storage areas:
+* **Staging Directory**: `cache/media/import/{mediaId}.source` (temporary raw file)
+* **Master Directory**: `files/media/master/{mediaId}.jpg` (processed display image)
+* **Thumbnail Directory**: `files/media/thumbnail/{mediaId}.jpg` (scaled preview image)
+* **Part Directory**: `.part` files are generated in their respective target folders before atomic renaming.
+* **Camera & AI Cache Roots**: `cache/media/camera/` and `cache/media/ai/` are created/defined but unused in this phase.
+* **Database Paths**: Room database saves only relative paths `media/master/{mediaId}.jpg` and `media/thumbnail/{mediaId}.jpg`.
+
+### Added Interfaces and Use Cases
+* **`LocalMediaImportRepository`**: Defines the data layer coordination for copying, processing, retrying, discarding, and cleaning files.
+* **`MediaFileStore`**: Handles directories, staging copies, atomic renames, and cleanups.
+* **`MediaImageProcessor`**: Reads bounds, decodes safely, transforms images, flattens transparency, and scales.
+* **`ImportLocalMediaUseCase`**: Generates stable `mediaId` values, creates STAGED records, and imports batches (1 to 6 items).
+* **`RetryLocalMediaImportUseCase`**: Retries imports for STAGED/FAILED media assets, preserving the original `mediaId` and `conversationOrder`.
+* **`DiscardStagedMediaUseCase`**: Idempotently soft-deletes assets and deletes associated files (staging source, master, thumbnail, and part files).
+* **`CleanupStaleMediaUseCase`**: Automatically soft-deletes STAGED/FAILED assets older than 24 hours that are not attached to messages, and deletes their files.
+
+### Image Specifications
+* **Master Display**: Restricts longest side to 2048px without upscaling. Compressed to JPEG format at quality 85.
+* **Thumbnail Display**: Restricts longest side to 320px without upscaling. Compressed to JPEG format at quality 80.
+* **Background fill**: PNG and WebP files with alpha channels are drawn onto a solid `#FFFFFF` white background before JPEG compression.
+
+### Supported and Rejected Formats
+* **Supported**: JPEG, PNG, static WebP.
+* **Explicitly Rejected**: GIF, animated WebP, video, SVG, unrecognized mime types, or files with invalid bounds.
+* **MIME Verification**: MIME validation is done via actual image decoding and parsing WebP chunk tags for animation, not just trusting the ContentResolver MIME type.
+
+### EXIF and Privacy metadata
+* Orientation corrected natively using `ExifInterface` transformations (supporting 8 standard modes) and reset to normal/none in final JPEG.
+* Privacy metadata (GPS, camera details, comments, etc.) are stripped by re-encoding through `Bitmap.compress`.
+
+### Memory and Concurrency Guardrails
+* **Real-time counting stream**: Copying to staging checks file size byte-by-byte, enforcing a strict 30 MiB (`31_457_280` bytes) limit.
+* **Long dimensions multiplication**: Checks single bounds first, then uses `Long` arithmetic to check pixel area (limit `100,000,000` pixels) to prevent `Int` overflow.
+* **Safe sample decoding**: Calculates `inSampleSize` prior to decoding to prevent JVM OutOfMemory errors.
+* **Targeted OOM Catch**: Wraps decodes in `OutOfMemoryError` blocks, recycling transient bitmaps and mapping to `OUT_OF_MEMORY` failure code.
+* **CancellationException Handling**: On job cancellation, cancels immediately, preserves staging source, deletes temporary `.part` files, preserves already READY items in the batch, does not mark failed, and rethrows.
+
+### Compensation Strategy
+* **Processing / DB Failures**: Cleans up all `.part` files and deletes any master/thumbnail files written during the run.
+* **markMediaReady Database Failure**: Automatically deletes generated output files, keeps the staging source file for retry, updates database state to FAILED, and returns `DATABASE_UPDATE_FAILED`.
+* **Staging source deletion**: Deleted by the orchestrator ONLY after `markMediaReady` succeeds in the DB. If staging source deletion fails, the READY state remains valid.
+
+### Failure Codes
+Mapped to stable enums: `SOURCE_OPEN_FAILED`, `SOURCE_TOO_LARGE`, `UNSUPPORTED_FORMAT`, `INVALID_DIMENSIONS`, `DECODE_FAILED`, `OUT_OF_MEMORY`, `WRITE_FAILED`, `HASH_FAILED`, `DATABASE_UPDATE_FAILED`, `SOURCE_MISSING`, `UNKNOWN`.
+
+### Gradle Dependencies
+* Added version catalog dependency: `androidx-exifinterface = "androidx.exifinterface:exifinterface:1.3.7"`.
+* Added dependency to `:core:data`.
+
+### Tests and Results
+* Added `AndroidLocalMediaImportRepositoryTest` with 12 comprehensive unit test scenarios covering all A-H criteria.
+* JVM verification tests run using Robolectric Native Graphics mode and JDK 17 passed successfully:
+  * `:core:model:test` (SUCCESS)
+  * `:core:domain:test` (SUCCESS)
+  * `:core:data:testDebugUnitTest` (SUCCESS)
+  * `:core:database:testDebugUnitTest` (SUCCESS)
+  * `:app:testDebugUnitTest` (SUCCESS)
+  * `:app:assembleDebug` (SUCCESS)
+  * Root `test` (SUCCESS)
+* **Unverified Formats**: HEIF/HEIC decoding is not natively supported by the JDK/Robolectric test sandbox and is marked as unverified on JVM. It is expected to fall back to the Android system decoder on actual devices.
+* **Room Schema & Remote Configuration**: Room version remains 12 with no migration or DB schema changes. No remote database or Edge Function changes were introduced.
+* **UI/CameraX/Photo Picker Integration**: No Compose, UI menus, Coil, CameraX, Photo Picker launcher, WorkManager, or cloud media backup sync was added.
+
+### Next Step Recommendations
+* Implement cloud media sync/upload (Phase 2B/2C).
+* Integrate multimodal AI model support (Vision) for business record generation.
+
+---
+
+## Phase 2A — Photo Picker, CameraX & Attachment Draft UI (Completed 2026-06-26)
+
+### ViewModel Scoping & Navigation
+* **Shared ViewModel Instance**: `AiRecordViewModel` is scoped to the main activity context in `AppNavigation.kt` via a single top-level `viewModel()` call. This ensures that the conversation screen and camera screen share the exact same ViewModel instance and state.
+* **Navigation Routes**: Wired `ai_camera/{conversationId}` route. The bottom navigation bar is hidden on the camera screen and detail conversation screens.
+
+### Attachment Draft State & SavedStateHandle
+* **State Isolation**: Drafts are isolated per conversation using `SavedStateHandle` key `draft_ids_$conversationId`.
+* **Monotonic SavedState Pruning**: On state recovery or whenever a draft is observed, obsolete, soft-deleted, or cross-conversation media IDs are automatically filtered out, and the pruned list is written back to `SavedStateHandle`.
+* **Async Target Binding**: In `importPhotos` and `importCameraCapture`, the target `conversationId` is captured immutably at start-time. Import results are written back only to the captured `conversationId`, ensuring that switching conversations during an active import does not leak files to another draft.
+
+### Capacity & Flow Control
+* **Strict Attachment Limit**: Draft capacity is strictly limited to 6, checked dynamically via `attachmentIds.size + importingCount`.
+* **Entrance Disabling**: While an import is in progress (`importingCount > 0`), the Picker and Camera entry buttons are disabled to prevent race conditions or breaking the import sequence.
+
+### UI Attachments & Safe Thumbnail Loader
+* **Safe Thumbnail Loader**: Implemented `LocalMediaThumbnail` in `:core:ui`. It performs strict sandbox verification, ensuring that the canonical file path is strictly inside the app's `files/media/thumbnail/` directory before displaying the image with Coil.
+* **Photo Picker Integration**: ActivityResultLauncher lives in the Compose UI layer. The returned Uri strings and the captured `conversationId` are passed directly to `AiRecordViewModel` to initiate import.
+* **Send Interception**: AI message submission is intercepted if any draft attachments (`attachmentIds.isNotEmpty()`) or active imports (`importingCount > 0`) exist. A Toast is shown prompting the user to remove images first, and the text in the input box is preserved.
+
+### Custom Camera Screen & Confirmation Flow
+* **Camera Screen**: Built using `LifecycleCameraController` in `:feature:ai-record`. Features flash toggle, lens flipping, and custom overlay guide graphics.
+* **Capture State Machine**: Handles `Preview`, `Capturing`, `CapturedPreview`, `Importing`, and `Error` states.
+* **Captured Confirmation**: After taking a photo, it displays a preview with "Use Photo" and "Retake" buttons.
+  * **Retake**: Deletes the temporary capture file and returns the UI to live preview.
+  * **Use Photo**: Kicks off the async import using `ImportLocalMediaUseCase` with `LocalMediaInput.AppCacheFile` naming the temporary capture path.
+* **Temp File Cleanup**: Temporary capture files are named `cache/media/camera/capture-{captureId}.jpg`. They are deleted on successful import, normal import failures, retakes, exiting the camera confirmation screen, or discarding. On `CancellationException`, the temp capture file is preserved to support retry.
+* **Camera Permission Handling**: Tracks the request state in `SharedPreferences` to differentiate between a first-time request and a permanent denial (where `shouldShowRequestPermissionRationale` is false). Displays "Go to settings" only for true permanent denials, avoiding false negatives on first entry. Returning from settings re-evaluates the permission state in the screen lifecycle.
+* **Back Press Priority**: Intercepts system back press in order: Close Menu -> Close Keyboard -> Navigate Back. On the Camera Captured Preview page, back press exits the preview state to live preview rather than exiting the camera screen route.
+
+### Gradle Dependencies
+* **CameraX**: Added `androidx.camera:camera-camera2`, `androidx.camera:camera-lifecycle`, and `androidx.camera:camera-view` to `:feature:ai-record`.
+* **Coil**: Added Coil dependency only to `:core:ui` (for permanent thumbnails) and `:feature:ai-record` (for loading the camera temporary capture preview). No duplicate Coil configurations are added.
+* **Manifest**: Added `android.permission.CAMERA` to `:app` manifest. No storage or external media read/write permissions are requested.
+
+
+
+### Phase 2A-V Acceptance Gate
+* **Acceptance Gate Passed**: Phase 2A-V Independent Read-only Acceptance Gate was conducted and resulted in READY_FOR_DEVICE_SMOKE_TEST.
+* **ViewModel Scoping**: AiRecordViewModel correctly hoisted to MainApp and shared consistently across Conversation UI and Camera UI routes.
+* **Concurrency and Scope Isolation**: Draft imports and counting logic are isolated per conversationId within the shared ViewModel, and limit calculation strictly factors in active importingCount plus saved IDs.
+* **File Cleanup**: Temporary camera captures are correctly named using captureId within the cache/media/camera/ sandbox, and rigorously cleaned up across Retake, Error, Discard, and Success Use Photo actions. AndroidMediaFileStore properly guards against Path Traversal escaping the allowed roots.
+* **Failure Handling**: Image dimension limit or format failures are accurately recorded as FAILED with respective MediaImportFailureCode values, preserving failure context instead of silent discarding.
+* **State Preservation**: Re-evaluates permission logic flawlessly utilizing SharedPreferences to properly identify Permanent Denial vs First-time request.
+* **No Unrelated Modifications**: Source schema and remote protocol remain unaffected.
+
+
+### Photo Feature Phase 2B-1 — Implemented
+
+> Atomic Local Message Attachments & Image Bubble (completed 2026-06-26).
+
+**Status**
+- Implemented. All unit tests pass and `:app:assembleDebug` succeeds. No Room migration, no remote schema changes, and no production send path with attachments is enabled yet.
+
+**contentJson Media Contract**
+- `AiChatMessage.contentJson.media.schemaVersion == 1`.
+- `contentJson.media.sourceMediaIds` is the ordered list of attached local `MediaAsset` ids.
+- `AiChatMessageMapper` reads and writes the `media` object while preserving unknown top-level fields.
+
+**Atomic Transaction (`RoomChatMediaTransactionRepository`)**
+- Validates the conversation exists and is not soft-deleted.
+- Validates media count is 1..6, no duplicates, every id exists, belongs to the conversation, is `READY`, and not soft-deleted.
+- Idempotent re-invocation with the same ids/text returns `AlreadyCommitted`; mismatched content returns `Conflict`.
+- CAS attach via `MediaAssetDao.attachReadyMediaToMessage(...)` ensures only unattached (`sourceMessageId IS NULL`) READY assets are bound.
+- Inserts the user `AiChatMessageEntity` with `contentJson.media.sourceMediaIds`.
+- Inserts a deterministic assistant placeholder whose id is derived with `UUID.nameUUIDFromBytes("dayzero-assistant-reply:$userMessageId".toByteArray(UTF_8))`.
+- Updates conversation summary preview: text if present, otherwise `"发送了 N 张图片"`.
+- Enqueues the conversation and user message to `ChatSyncQueueWriter` inside the same Room transaction.
+
+**Sync Compatibility**
+- `ChatSyncQueueWriter.isSyncableFinalMessage()` recognizes image-only user messages when `contentJson.media.schemaVersion == 1` and `sourceMediaIds` is non-empty.
+- Backfill/Pull/Merge preserve `contentJson` unchanged; no fake `MediaAsset` rows are created from remote payloads.
+
+**UI Model & Image Bubble (`MessageWithMedia`)**
+- `AiRecordViewModel` derives `MessageWithMedia` by joining messages with `ObserveConversationMediaUseCase`.
+- `AiConversationScreen` renders `messagesWithMedia` instead of plain `messages`.
+- User messages display up to 6 images in a 2-column grid, using `LocalMediaThumbnail` and Coil.
+- Placeholder states: `MissingLocalAsset`, `MissingLocalFile`, `InvalidReference` render gray boxes with descriptive labels.
+- Assistant card renderer, analysis shimmer, and text-only messages remain unchanged.
+
+**Production Send Interception**
+- The UI send button still blocks submission while any draft attachments are present, showing `"图片识别正在接入中，请先移除图片发送文字。"`.
+- `SendUserMessageWithMediaUseCase` is wired in Hilt but not yet invoked from the production send path.
+
+**Key Files**
+- `core/domain/src/main/java/com/example/domain/model/ai/SendUserMessageWithMediaRequest.kt`
+- `core/domain/src/main/java/com/example/domain/model/ai/SendUserMessageWithMediaResult.kt`
+- `core/domain/src/main/java/com/example/domain/repository/ChatMediaTransactionRepository.kt`
+- `core/domain/src/main/java/com/example/domain/usecase/SendUserMessageWithMediaUseCase.kt`
+- `core/domain/src/main/java/com/example/domain/usecase/ObserveConversationMediaUseCase.kt`
+- `core/data/src/main/java/com/example/data/repository/RoomChatMediaTransactionRepository.kt`
+- `core/data/src/main/java/com/example/data/local/mapper/AiChatMessageMapper.kt`
+- `core/database/src/main/java/com/example/data/local/dao/MediaAssetDao.kt`
+- `core/sync/src/main/java/com/example/data/sync/chat/ChatSyncQueueWriter.kt`
+- `feature/ai-record/src/main/java/com/example/ui/screens/MessageWithMedia.kt`
+- `feature/ai-record/src/main/java/com/example/ui/screens/AiRecordScreen.kt`
+- `feature/ai-record/src/main/java/com/example/ui/screens/AiRecordViewModel.kt`
+- `app/src/main/java/com/example/di/DayZeroHiltModule.kt`
+
+**Validation**
+- `:core:data:testDebugUnitTest` — `RoomChatMediaTransactionRepositoryTest` passes.
+- `:feature:ai-record:testDebugUnitTest` — `AiRecordPhase2ATest`, `AiRecordPhase3Test` pass.
+- `:app:testDebugUnitTest` — `DayZeroConversationPhase2Test`, `DayZeroDateMismatchGuardTest`, `DayZeroLocalIntentFlowTest`, `DayZeroConfirmFoodSchedulerTest` pass.
+- `:app:assembleDebug` succeeds.
+
+
+
+## Photo Feature Phase 2B-1-V — Independent Verification
+
+* **Status:** **PHASE_2B_1_NOT_ACCEPTABLE** (original independent review).
+* **Original reasons:**
+  1. `AiChatMessageDao.insertMessage` used `@Insert(onConflict = OnConflictStrategy.REPLACE)`, which can silently overwrite existing messages.
+  2. `AiChatMessageMapper.buildContentJson` completely replaced the `media` JSON object, dropping unknown nested fields.
+  3. Tests were missing for critical transaction behaviors (rollback on queue failure, `affectedRows` mismatch, 6-image edge case, JSON preservation).
+
+### Targeted Fixes Applied
+
+1. **Strict first-time creation API**
+   * Added `AiChatMessageDao.insertMessageStrict(@Insert(onConflict = OnConflictStrategy.ABORT))`.
+   * `RoomChatMediaTransactionRepository` now uses `insertMessageStrict` for both the user message and the deterministic assistant placeholder.
+   * Existing callers of `insertMessage` (normal chat send, card updates, Pull/Merge, tests) remain unchanged.
+
+2. **ABORT handling and idempotency classification**
+   * A primary-key conflict aborts the Room transaction.
+   * After the transaction rolls back, the repository re-reads the existing state and classifies the result as `AlreadyCommitted` only when:
+     * the user message exists with matching id, conversation, role, type, text, deletedAt, and ordered sourceMediaIds;
+     * every requested media asset exists, belongs to the conversation, is not soft-deleted, and has `sourceMessageId == userMessageId`;
+     * no extra media is bound to the user message;
+     * the deterministic assistant placeholder exists with matching conversation, role, type, and deletedAt (it may be empty or already final).
+   * Any inconsistency returns `Conflict`; no silent REPLACE retry.
+
+3. **Assistant placeholder final-protection**
+   * The deterministic placeholder id remains `UUID.nameUUIDFromBytes("dayzero-assistant-reply:$userMessageId")`.
+   * An already-final placeholder (non-empty text/cards/replies) is never reset to empty.
+   * A placeholder with mismatched immutable fields returns `Conflict`.
+
+4. **Media JSON incremental merge**
+   * `AiChatMessageMapper.buildContentJson` now copies the existing `media` JSONObject (if present) and overlays only `schemaVersion` and `sourceMediaIds`.
+   * Unknown top-level fields and unknown nested fields inside `media` are preserved.
+   * Malformed `media` values are safely ignored.
+
+5. **Missing transaction safety tests added**
+   * `commitsSixImagesAtLimit`
+   * `rejectsFailedMedia`
+   * `rejectsSoftDeletedMedia`
+   * `casAffectedRowsMismatchRollsBackEverything`
+   * `conversationQueueFailureRollsBackEverything`
+   * `messageQueueFailureRollsBackEverything`
+   * `cancellationRollsBackEverythingAndRethrows`
+   * `existingFinalAssistantMessageIsNeverOverwritten`
+   * `alreadyCommittedRequiresAllMediaBoundToUserMessage`
+   * `partiallyBoundExistingMessageReturnsConflict`
+   * `strictInsertDoesNotReplaceExistingUserMessage`
+   * `preservesUnknownTopLevelAndNestedMediaJsonFields`
+   * `sameIdsInDifferentOrderReturnsConflict`
+
+### Validation After Fix
+
+* `:core:database:testDebugUnitTest` — PASS
+* `:core:data:testDebugUnitTest` — PASS (including `AiChatMessageMapperTest` and `RoomChatMediaTransactionRepositoryTest`)
+* `:core:sync:testDebugUnitTest` — PASS (including `ChatSyncQueueWriterTest` and `ChatMessageRemoteMergerTest`)
+* `:core:network:testDebugUnitTest` — PASS
+* `:app:testDebugUnitTest` — PASS
+* `:app:assembleDebug` succeeds
+
+### Current Environment
+
+* Room is at version 12.
+* No remote schema changes were made.
+* Production UI block for sending images remains intact.
+
+### Next Steps
+
+* Phase 2B-1 is officially accepted.
+* **READY_FOR_PHASE_2B_2** — proceed to Phase 2B-2 (client-side AI vision request preparation).
+
+
+
+## Photo Feature Phase 2B-2 — Client Vision Preparation
+
+### Status
+**PHASE_2B_2_COMPLETE** — client-side AI Vision request preparation is implemented, tested, and verified. **READY_FOR_PHASE_2B_3**.
+
+### Document Encoding Fix
+Before writing any production code, `docs/PROJECT_CONTEXT_FOR_CHATGPT.md` and `docs/DEVELOPMENT_LOG.md` were scanned for `\u0000` with `perl -ne 'print if /\x00/'`. The previously corrupted `Photo Feature Phase 2B-1-V2` section was removed and rewritten as the clean UTF-8 `Photo Feature Phase 2B-1-V — Independent Verification` chapter. No NUL bytes remain.
+
+### Authoritative Persisted-Message Input
+Vision preparation never trusts Compose draft state or transient URIs. The authoritative input is the persisted user message row.
+
+Entry points:
+
+* `PrepareVisionAttachmentsForMessageUseCase`
+* `VisionAttachmentPreparationRepository`
+* `ReleasePreparedVisionAttachmentsUseCase`
+
+Required input (`PrepareVisionAttachmentsRequest`):
+
+```text
+requestId
+conversationId
+userMessageId
+```
+
+The repository re-reads:
+
+1. `AiChatMessageEntity` for `userMessageId`.
+2. `contentJson.media.schemaVersion == 1`.
+3. Ordered `sourceMediaIds`.
+4. Corresponding `MediaAssetEntity` rows.
+
+Validation enforced before any file I/O:
+
+* User message exists.
+* Belongs to the supplied conversation.
+* `role == user`.
+* Not soft-deleted.
+* `sourceMediaIds` size 1–6, no empty IDs, no duplicates.
+* Each `MediaAsset` exists, belongs to the conversation, not soft-deleted, `lifecycleState == READY`.
+* `sourceMessageId == userMessageId`.
+* `masterRelativePath` is non-empty and safe.
+
+Failure codes include `MESSAGE_NOT_FOUND`, `INVALID_MESSAGE`, `INVALID_MEDIA_CONTRACT`, `MEDIA_NOT_FOUND`, `MEDIA_NOT_READY`, `MEDIA_BINDING_MISMATCH`, `MASTER_FILE_MISSING`, and `UNSAFE_PATH`.
+
+### Image-Only Effective Text
+If the persisted user message text is non-empty, it is used verbatim as `effectiveAiText`. If the message contains only images, the following text is used only inside the in-memory AI request:
+
+```text
+请识别这些图片中的食物，并帮我生成饮食记录确认卡。
+```
+
+This synthetic prompt:
+
+* Never writes back to the user message.
+* Never appears in conversation preview.
+* Never enters `contentJson`.
+* Never enters the sync queue.
+* Does not change what other devices see in the user bubble.
+
+### AI Derivative Directory
+Derivative files are written under:
+
+```text
+cache/media/ai/{requestId}/{mediaId}.jpg
+```
+
+Safety:
+
+* `requestId` and `mediaId` are constrained to `[A-Za-z0-9._-]`.
+* Canonical path traversal check verifies the final file is strictly under `cache/media/ai/`.
+* Absolute paths, `..`, and out-of-bounds symlinks are rejected.
+* Files are written to `{name}.part` first, then atomically renamed to `{name}.jpg`.
+* Cleanup deletes only the directory matching the request.
+* Master, thumbnail, camera, and import directories are never touched.
+
+### Derivative Specification
+Input is the local master file at `files/media/master/{mediaId}.jpg` (already EXIF-oriented and privacy-scrubbed by Phase 1B).
+
+AI derivative:
+
+* Format: JPEG.
+* MIME type: `image/jpeg`.
+* Never upscaled.
+* Preferred longest side: 1280 px.
+* White background for non-rectangular sources.
+* No EXIF, no privacy metadata.
+* Per-file maximum: 640 KiB.
+* Six-file total maximum: 4 MiB.
+
+Bounded encoding attempts:
+
+```text
+1. longestSide 1280, JPEG quality 80
+2. longestSide 1280, JPEG quality 72
+3. longestSide 1152, JPEG quality 72
+4. longestSide 1024, JPEG quality 68
+5. longestSide 896,  JPEG quality 64
+```
+
+The first attempt satisfying the 640 KiB limit is kept. If all attempts fail, the result is `IMAGE_TOO_LARGE`. If the six-file total exceeds 4 MiB, the result is `TOTAL_PAYLOAD_TOO_LARGE`. The implementation never falls back to the master, never loops infinitely, and never silently degrades below the final step.
+
+### Memory Safety
+* Reads image bounds first and computes `inSampleSize`.
+* Processes one image at a time.
+* Releases transient `Bitmap` references promptly.
+* Reads files through controlled streams.
+* Uses `Long` for byte totals.
+* Catches `OutOfMemoryError` inside the target processing region and maps it to `OUT_OF_MEMORY`.
+* Does not swallow global OOM.
+* `CancellationException` is re-thrown and triggers cleanup of `.part` and generated derivatives for the request.
+
+### Base64 Contract
+Each `PreparedVisionAttachment` contains:
+
+```text
+mediaId
+mimeType = "image/jpeg"
+base64
+byteSize
+```
+
+* Order strictly equals `sourceMediaIds`.
+* Base64 is standard, no line breaks.
+* No `data:` URL prefix.
+* Decodes back to the exact derivative bytes.
+* `toString()` does not include the Base64 payload.
+* Logs never emit Base64 strings.
+
+### Android → Edge Function Attachment DTO
+`AiAssistantRequestDto` was extended with an optional field:
+
+```json
+{
+  "attachments": [
+    {
+      "mediaId": "stable-media-id",
+      "mimeType": "image/jpeg",
+      "base64": "..."
+    }
+  ]
+}
+```
+
+Rules:
+
+* Text-only requests omit `attachments` (or keep the previous default), preserving backward-compatible JSON.
+* Non-empty attachment count is 1–6.
+* `mimeType` is always `image/jpeg`.
+* No URL, path, or data URL is provided.
+* Base64 has no line breaks.
+* The array is a real JSON array, not a string.
+* `interaction_result` carries no images.
+* Existing `todayRecord`, `history`, `turnType`, `promptCacheKey`, and other fields are unaffected.
+
+Production code does not send non-empty `attachments` to the remote functions yet.
+
+### Streaming / Fallback Prepare-Once Contract
+A single `PreparedVisionRequest` is built once and can be consumed by both streaming and fallback paths. The repository boundary guarantees:
+
+* `prepare(...)` is called once per request.
+* Both paths receive the same `effectiveAiText`.
+* Both paths receive the same attachment order and Base64 content.
+* Streaming timeout does not clean derivatives early.
+* Derivatives are removed only after streaming success, fallback completion, final failure, or cancellation.
+* `release(...)` is idempotent; repeated cleanup is a no-op and does not throw.
+
+This is covered by unit tests using fake clients; no real Edge Function is invoked in this phase.
+
+### Cleanup Strategy
+Per-request cleanup (`ReleasePreparedVisionAttachmentsUseCase`):
+
+* Deletes `cache/media/ai/{requestId}` and all contained `.part` and `.jpg` files.
+* Leaves master/thumbnail untouched.
+* Does not modify `MediaAsset`.
+* Idempotent.
+
+Opportunistic stale cleanup:
+
+* `VisionAttachmentPreparationRepository` can remove `cache/media/ai/` directories older than 24 hours before starting a new prepare.
+* No WorkManager.
+* Only scans the AI cache root.
+* Canonical-path failures are rejected.
+* Cleanup failure is logged as a warning and does not fake a successful prepare.
+
+### Log Safety
+Logs and error messages never emit:
+
+* Base64 strings.
+* Data URLs.
+* File contents.
+* Absolute paths.
+* Full request JSON.
+* Moonshot key or Supabase token.
+
+Allowed fields:
+
+* `requestId`
+* `userMessageId`
+* `attachmentCount`
+* Per-attachment `byteSize`
+* `totalByteSize`
+* Failure enum names
+* Processing duration
+
+### Modified / Added Files
+* `core/model/src/main/java/com/example/domain/model/ai/assistant/PreparedVisionRequest.kt`
+* `core/domain/src/main/java/com/example/domain/model/ai/assistant/PrepareVisionAttachmentsRequest.kt`
+* `core/domain/src/main/java/com/example/domain/repository/VisionAttachmentPreparationRepository.kt`
+* `core/domain/src/main/java/com/example/domain/usecase/PrepareVisionAttachmentsForMessageUseCase.kt`
+* `core/domain/src/main/java/com/example/domain/usecase/ReleasePreparedVisionAttachmentsUseCase.kt`
+* `core/data/src/main/java/com/example/data/repository/AndroidVisionAttachmentPreparationRepository.kt`
+* `core/data/src/main/java/com/example/data/media/AiImageDerivativeProcessor.kt`
+* `core/data/src/main/java/com/example/data/media/AndroidAiImageDerivativeProcessor.kt`
+* `core/data/src/main/java/com/example/data/media/MediaFileStore.kt`
+* `core/data/src/main/java/com/example/data/media/AndroidMediaFileStore.kt`
+* `core/network/src/main/java/com/example/data/remote/dto/assistant/AiAssistantRequestDto.kt`
+* `core/network/src/main/java/com/example/data/remote/mapper/assistant/AiAssistantRemoteMapper.kt`
+* `app/src/main/java/com/example/di/DayZeroHiltModule.kt`
+* Tests:
+  * `core/domain/src/test/java/com/example/domain/usecase/PrepareVisionAttachmentsForMessageUseCaseTest.kt`
+  * `core/data/src/test/java/com/example/data/repository/AndroidVisionAttachmentPreparationRepositoryTest.kt`
+  * `core/data/src/test/java/com/example/data/media/AndroidAiImageDerivativeProcessorTest.kt`
+  * `core/network/src/test/java/com/example/data/remote/mapper/assistant/AiAssistantRemoteMapperTest.kt`
+
+### Verification Commands & Results
+
+```powershell
+$env:JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'
+.\gradlew.bat :core:model:test
+.\gradlew.bat :core:domain:test
+.\gradlew.bat :core:data:testDebugUnitTest
+.\gradlew.bat :core:network:testDebugUnitTest
+.\gradlew.bat :app:testDebugUnitTest
+.\gradlew.bat :app:assembleDebug
+.\gradlew.bat test
+```
+
+Results:
+
+* `:core:model:test` — PASS.
+* `:core:domain:test` — PASS.
+* `:core:data:testDebugUnitTest` — PASS (new repository/processor tests pass; existing image-import tests log a Robolectric host `invalid input` decoder warning but do not fail).
+* `:core:network:testDebugUnitTest` — PASS (attachments DTO / mapper tests pass).
+* `:app:testDebugUnitTest` — PASS.
+* `:app:assembleDebug` — BUILD SUCCESSFUL.
+* `test` (root) — BUILD SUCCESSFUL.
+
+### Boundaries Preserved
+
+* Room schema version remains **12**; no migration added.
+* No Edge Function deployed or modified.
+* No Supabase schema changes.
+* No Kimi prompt changes.
+* No real Moonshot API calls.
+* No Base64 written to Room, sync queue, or logs.
+* Production send UI still blocks messages with attachments.
+
+### Next Steps
+Phase 2B-3 will wire the prepared Vision request into the actual `assistant-turn-v2-stream` / `assistant-turn-v2` send path, update the Edge Function to receive and route attachments, and only then remove the production UI block.
+
+### Photo Feature Phase 2B-2-V — Independent Verification
+Independent verification completed for Phase 2B-2 Client Vision Preparation. Verified:
+1. `AndroidVisionAttachmentPreparationRepository` correctly persists and processes derivatives from Room.
+2. Memory constraints (max 640KB per image, 4MB total) and OOM handling are securely managed.
+3. Path traversal protection is implemented via `resolveMasterFile`.
+4. Base64 encoding remains bounded, does not leak to logs, and excludes the data URL prefix.
+5. All testing commands (`core:model:test`, `core:domain:test`, `core:data:testDebugUnitTest`, `core:network:testDebugUnitTest`, `app:testDebugUnitTest`, `test`) passed successfully, preserving boundaries and safety contracts.
+
+
+## Photo Feature Phase 2B-3A — Local Edge Vision Protocol
+
+### Status
+**READY_FOR_PHASE_2B_3A_VERIFICATION**. Local Edge Function multimodal protocol implemented and tested. No remote deployment, no Android production send path changes, and no UI block removal.
+
+### What Was Done
+* Added shared pure TypeScript module `supabase/functions/_shared/assistant_vision.ts`.
+  * `parseAndValidateAttachments(...)` — validates raw `attachments` input.
+  * `calculateDecodedBase64Size(...)` — strict Base64 size calculation without decoding.
+  * `buildKimiUserContent(...)` — constructs the multimodal content array.
+  * `applyVisionContentToCurrentUserMessage(...)` / `buildVisionAwareUserMessage(...)` — applies vision content only to the current user message.
+  * `VISION_PROMPT_ADDENDUM` — single minimal vision sentence shared by both functions.
+  * `checkAttachmentSizeLimits(...)` — enforces single and total decoded byte limits.
+* Updated both `supabase/functions/assistant-turn-v2/index.ts` and `supabase/functions/assistant-turn-v2-stream/index.ts` to:
+  * Accept the same optional `attachments` DTO contract.
+  * Share the same validation and content construction implementation.
+  * Keep text-only requests as string `content`.
+  * Use a real object array for `content` when attachments are present.
+  * Reject non-empty attachments for `interaction_result` with a stable 400 / SSE error.
+  * Reject empty `userText` with attachments (`EMPTY_VISION_TEXT`).
+  * Bump prompt versions: fallback `compact_v3_timing` → `compact_v4_vision`; streaming `stream_compact_v2` → `stream_compact_v3_vision`.
+  * Append the same vision sentence to both system prompts.
+* Refactored both handlers to export a `handler` function (used by tests) while keeping `Deno.serve` behind `import.meta.main` so tests do not start a server.
+
+### Shared Helper Location
+`supabase/functions/_shared/assistant_vision.ts`
+
+### Android → Edge Function Attachment Contract
+```json
+{
+  "attachments": [
+    {
+      "mediaId": "stable-media-id",
+      "mimeType": "image/jpeg",
+      "base64": "..."
+    }
+  ]
+}
+```
+* Optional field; missing or empty array means text-only.
+* Non-empty count must be 1–6.
+* Order is preserved.
+* `mediaId` must be non-empty, unique, and match `[A-Za-z0-9._-]+`.
+* `mimeType` must be exactly `image/jpeg`.
+* `base64` must be standard Base64 (no whitespace, no `data:` prefix, no URL-safe `-`/`_`).
+* Single decoded size ≤ 640 KiB.
+* Total decoded size ≤ 4 MiB.
+
+### Kimi Outbound Content Array Structure
+When attachments are present, the current user message becomes:
+```json
+{
+  "role": "user",
+  "content": [
+    { "type": "text", "text": "full prompt text including Date/Recent/AlreadyRecorded/TurnType/User:..." },
+    { "type": "image_url", "image_url": { "url": "data:image/jpeg;base64,/9j/4AAQ..." } },
+    ...
+  ]
+}
+```
+* One text part followed by 1–6 image parts in client order.
+* `content` is a real array, never a JSON string.
+* Only the Edge Function adds the `data:image/jpeg;base64,` prefix.
+* Original Base64 from Android is not modified.
+
+### turnType Rules
+* `user_message`: attachments optional (0–6).
+* `interaction_result`: attachments must be missing or empty; non-empty attachments return 400 / SSE error.
+
+### Base64 & Size Validation
+* Decoded size is computed from string length and padding count without `atob` or byte arrays.
+* Valid padding 0, 1, 2 tested.
+* Rejected: empty, whitespace, `data:` prefix, URL-safe chars, invalid chars, non-multiple-of-4 length, padding in middle, padding count > 2.
+* Note: with the 1–6 count limit and 640 KiB single limit, the maximum reachable total is 6 × 640 KiB = 3.75 MiB. The 4 MiB total check is still enforced by `checkAttachmentSizeLimits` for any input that could reach it.
+
+### streaming / fallback Consistency
+* Both functions import the same shared validation and content builders.
+* Both use the same `VISION_PROMPT_ADDENDUM`.
+* Both return identical error codes for the same invalid attachment inputs.
+* Handler-level tests with a fake `fetch` confirm both outbound Moonshot bodies have the same current-user-message structure.
+
+### promptVersion Changes
+* fallback: `compact_v4_vision`
+* streaming: `stream_compact_v3_vision`
+* Both prompts received the same single vision sentence; no other prompt content was changed.
+
+### Files Modified / Added
+* Added: `supabase/functions/_shared/assistant_vision.ts`
+* Added: `supabase/functions/_shared/assistant_vision_test.ts`
+* Added: `supabase/functions/assistant-turn-v2/vision_handler_test.ts`
+* Added: `supabase/functions/assistant-turn-v2-stream/vision_handler_test.ts`
+* Modified: `supabase/functions/assistant-turn-v2/index.ts`
+* Modified: `supabase/functions/assistant-turn-v2-stream/index.ts`
+* Formatted (pre-existing unrelated file): `supabase/functions/classify-user-intent/index.ts`
+
+### Deno Commands & Results
+```bash
+$env:DENO_EXE="$env:USERPROFILE\.deno\bin\deno.exe"
+& $env:DENO_EXE fmt --check supabase/functions        # PASS (11 files)
+& $env:DENO_EXE check supabase/functions/assistant-turn-v2/index.ts      # PASS
+& $env:DENO_EXE check supabase/functions/assistant-turn-v2-stream/index.ts # PASS
+& $env:DENO_EXE lint supabase/functions/_shared/assistant_vision.ts `
+  supabase/functions/assistant-turn-v2/index.ts `
+  supabase/functions/assistant-turn-v2-stream/index.ts                  # PASS
+& $env:DENO_EXE test supabase/functions/_shared/assistant_vision_test.ts `
+  supabase/functions/assistant-turn-v2/normalization_test.ts `
+  supabase/functions/assistant-turn-v2/vision_handler_test.ts `
+  supabase/functions/assistant-turn-v2-stream/normalization_test.ts `
+  supabase/functions/assistant-turn-v2-stream/vision_handler_test.ts `
+  --no-check                                                            # 71 passed
+```
+Note: `deno lint supabase/functions` reports 4 pre-existing issues in the unrelated legacy file `supabase/functions/classify-user-intent/index.ts`.
+
+### Gradle Commands & Results
+```powershell
+$env:JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'
+.\gradlew.bat :core:network:testDebugUnitTest :app:assembleDebug --no-daemon
+# BUILD SUCCESSFUL
+```
+
+### Boundaries Preserved
+* No Supabase Edge Function deployed.
+* No remote schema, RLS, Storage, or database changes.
+* No Room schema or version changes (Room remains 12).
+* No Android production send path changes.
+* UI image send block remains in place.
+* No `sourceMediaIds/mediaIds` added to `ConfirmCardMeal` or `MealEntry`.
+* No Card/Meal photo归属 fields added.
+* No chat sync or business record sync changes.
+* No git mutations.
+
+### Next Step
+Independent verification (`Phase 2B-3A-V`). After acceptance, Phase 2B-3B may remove the Android production UI block and enable end-to-end vision sending.
+
+### Photo Feature Phase 2B-3A-V — Independent Edge Vision Verification
+
+* **Final Conclusion**: `NEEDS_TARGETED_FIXES`
+* **Source Checked**:
+  * `_shared/assistant_vision.ts`
+  * `_shared/assistant_vision_test.ts`
+  * `assistant-turn-v2/index.ts`
+  * `assistant-turn-v2/vision_handler_test.ts`
+  * `assistant-turn-v2-stream/index.ts`
+  * `assistant-turn-v2-stream/vision_handler_test.ts`
+* **Base64 Conclusion**: Validation logic in `calculateDecodedBase64Size` is fully pure, strictly enforces multiple of 4, standard charset, padding rules, and calculates the exact byte size securely without negative/overflow risks. Limit checks correctly reject >640KiB per image and >4MiB total.
+* **Handler & Bundling Conclusion**: The integration into the two Edge Functions successfully adheres to the text-only and array-based Prompt structures as well as Interaction Result blocks. **However**, `import.meta.main` check around `Deno.serve(handler)` is a known deployment risk because Supabase edge-runtime often evaluates dynamically loaded handlers with `import.meta.main` as false, which would fail to register the server. This must be fixed to match `classify-user-intent`'s top-level `Deno.serve(async (req) => { ... })` structure before deployment.
+* **Prompt Diff**: Clean. Only `VISION_PROMPT_ADDENDUM` was appended without altering existing legacy behavior.
+* **Log Safety**: Safe. Checked for JSON.stringify, attachments, base64, and console.log. No raw attachments, requests, or Base64 payloads leak to server logs or client errors.
+* **Tests & Commands**: `deno fmt`, `deno lint`, `deno check`, and `deno test` passed, along with Android regressions (`:core:network:testDebugUnitTest`, `:app:assembleDebug`). A minor test lint issue exists (`require-await` warning on `globalThis.fetch` mock).
+* **Unresolved Issues**:
+  1. High Risk: `if (import.meta.main)` wrapper around `Deno.serve(handler)` risks silent failure on Supabase edge-runtime.
+  2. Minor Risk: `classify-user-intent/index.ts` has unrelated auto-formatting diffs that must be reverted.
+  3. Minor Risk: Test lint warning in `_shared/assistant_vision_test.ts`.
+* **Allow to 2B-3B**: **NO**. Targeted fixes are required for the unresolved issues (especially the edge runtime entry point risk) before advancing.
+
+### Photo Feature Phase 2B-3A-F1 — Targeted Verification Fixes
+
+* **Split Approach**: Split `index.ts` and `handler.ts` in both `assistant-turn-v2` and `assistant-turn-v2-stream`. The `index.ts` files now only import the handler and call `Deno.serve(handler)` directly. The core logic resides in `handler.ts`.
+* **Removal of `import.meta.main`**: Completely removed to avoid the deployment risk on Supabase edge-runtime where dynamic loading might make `import.meta.main` evaluate to false, causing registration failure.
+* **Test Isolation**: Updated both `vision_handler_test.ts` files to import `handler` from `./handler.ts` instead of `./index.ts`, preventing the tests from executing `Deno.serve` and starting a real HTTP server. Fake fetch tests continue to mock `globalThis.fetch` and assert Kimi outbound bodies.
+* **Classify-User-Intent Clean-up**: Reverted the unrelated format-only diffs in `supabase/functions/classify-user-intent/index.ts` entirely. `git diff` for this file is now empty.
+* **Lint Warning Resolution**: Fixed `require-await` warnings in both test files by removing the `async` keyword on the mock fetch arrow function and returning `Promise.resolve(new Response(...))` directly. Deno lint checks now report 0 warnings across all project files.
+* **Deno Commands & Results**:
+  * `deno fmt --check` successfully passed for all 12 target files.
+  * `deno lint` successfully passed for all 8 target files with 0 warnings.
+  * `deno check` passed for both entrypoints and handlers.
+  * `deno test` ran successfully with 71 passing tests and 0 failures.
+* **Gradle Commands & Results**:
+  * `:core:network:testDebugUnitTest` ran successfully.
+  * `:app:assembleDebug` completed successfully.
+* **Preserved Boundaries**:
+  * No remote Edge Function deployment was performed.
+  * No Android UI send path was modified or unblocked.
+* **Ready for Reverification**: **YES**. Reaches `READY_FOR_PHASE_2B_3B_REVERIFICATION`.
+
+
+### Photo Feature Phase 2B-3A-F1-R — Targeted Reverification
+
+* **Status**: `READY_FOR_PHASE_2B_3B`
+* **Entry & Handler Split**: Both `assistant-turn-v2` and `assistant-turn-v2-stream` keep `index.ts` as a pure `Deno.serve(handler)` entrypoint; all production logic lives in `handler.ts`.
+* **Deno Tests**: 71 tests passed (`assistant_vision_test.ts`, `normalization_test.ts` for both functions, `vision_handler_test.ts` for both functions).
+* **Classify-User-Intent Diff**: Empty; no unrelated changes.
+* **Local Pre-Deployment Verification**:
+  * `git diff --check` passed after fixing trailing whitespace in this document.
+  * `deno fmt --check` passed for all 12 target files.
+  * `deno lint` passed for all 8 target files with 0 warnings.
+  * `deno check` passed for both entrypoints and handlers.
+  * `:core:network:testDebugUnitTest` passed.
+  * `:app:assembleDebug` succeeded.
+* **Boundary Preservation**: No remote Edge Function deployment performed in this phase; Android UI image-send intercept remains in place.
+
+### Photo Feature Phase 2B-3B — Controlled Remote Vision Deployment
+
+* **Deployment Result**: Successful controlled deployment of both Edge Functions.
+* **Original Remote Baseline**:
+  * `assistant-turn-v2`: Version 21, `ACTIVE`, `verify_jwt=false`, `promptVersion=compact_v3_timing`.
+  * `assistant-turn-v2-stream`: Version 12, `ACTIVE`, `verify_jwt=false`, `promptVersion=stream_compact_v2`, stream timeout 15s.
+* **Backup**: Complete remote source backup created outside the repository under `%LOCALAPPDATA%\Temp\dayzero-edge-vision-rollback-20260627-030940`, including both functions' full files, recursive SHA-256 manifest, and rollback instructions.
+* **Deployment Sequence**:
+  1. Deployed `assistant-turn-v2` (fallback) → Version 22.
+  2. Verified fallback text-only, attachment validation, single-image, image-only effective text, and multi-image requests.
+  3. Deployed `assistant-turn-v2-stream` (streaming) → Version 13.
+  4. Verified streaming text-only SSE, image SSE, stream-to-fallback payload reuse, and interaction_result attachment rejection.
+* **Final Remote State**:
+  * `assistant-turn-v2`: Version 22, `ACTIVE`, `verify_jwt=false`, `promptVersion=compact_v4_vision`.
+  * `assistant-turn-v2-stream`: Version 13, `ACTIVE`, `verify_jwt=false`, `promptVersion=stream_compact_v3_vision`, stream timeout still 15s.
+* **Smoke Test Summary**:
+  * Fallback text-only: HTTP 200, valid `reply`/`actions`, `debugTiming.promptVersion=compact_v4_vision`.
+  * Fallback attachment validation: stable 400s for non-array attachments, non-JPEG MIME, invalid Base64, `interaction_result` with attachments, and empty text with attachments.
+  * Fallback single image: HTTP 200, valid protocol, no Base64/data URL leakage.
+  * Fallback image-only effective text: HTTP 200, valid protocol.
+  * Fallback multiple images: HTTP 200, valid protocol.
+  * Streaming text-only SSE: correct event sequence (`status`, `reply_delta`, `final`, `debug_timing`, `done`), `debugTiming.promptVersion=stream_compact_v3_vision`, `final` appears exactly once, no actions in `reply_delta`.
+  * Streaming image SSE: HTTP 200, valid SSE success sequence, no Base64 leakage.
+  * Stream → fallback payload reuse: same vision request JSON sent to fallback returned HTTP 200.
+  * Streaming `interaction_result` with attachments: SSE `error` event with `ATTACHMENTS_NOT_ALLOWED_FOR_TURN_TYPE`.
+* **Log Check**: Edge-function access logs show successful new-version calls for both functions. No BOOT_ERROR, module/import error, or continuous 5xx observed. One transient fallback 500 (132s execution time) and one 502 (rejected 1×1 JPEG fixture) occurred during smoke testing; both retried successfully and did not recur. Logs do not contain Base64, data URLs, or attachment payloads at the access-log level.
+* **Boundaries Preserved**:
+  * No Schema, RLS, Storage, or Auth changes.
+  * No secrets rotation or `verify_jwt` change.
+  * No Android production send path modification.
+  * UI image-send intercept remains in place.
+  * Room schema remains Version 12.
+* **Not Verified**: Android automatic fallback, real-device end-to-end image send, and removal of UI send intercept (deferred to Phase 2B-3C).
+* **Next Phase**: Phase 2B-3C — connect `PreparedVisionRequest` to Android production send path and remove UI image-send intercept after full end-to-end verification.
+
+
+### Photo Feature Phase 2B-3C1 — Android Vision Production Orchestration
+
+* **Goal**: Connect persisted image user messages to the existing `assistant-turn-v2-stream` / `assistant-turn-v2` production chain from Android, with prepare-once, stream-first, eligible fallback, deterministic placeholder, and guaranteed cleanup.
+* **Result**: `VisionAssistantTurnOrchestrator` implemented in `:app` and covered by unit tests; Hilt wiring and ViewModel forwarding completed. Phase 2B-3C1-F1 targeted fixes resolved independent-verification findings.
+* **New files**:
+  * `core/model/src/main/java/com/example/domain/model/ai/assistant/VisionAssistantTurnResult.kt`
+  * `app/src/main/java/com/example/assistant/VisionAssistantTurnOrchestrator.kt`
+  * `app/src/test/java/com/example/VisionAssistantTurnOrchestratorTest.kt`
+  * `app/src/test/java/com/example/DayZeroViewModelVisionAttemptOwnershipTest.kt`
+  * `app/src/test/java/com/example/assistant/FakeVisionAssistantTurnOrchestrator.kt`
+* **Modified files**:
+  * `core/domain/src/main/java/com/example/domain/repository/AiDraftRepository.kt`
+  * `core/data/src/main/java/com/example/data/repository/RemoteAiDraftRepository.kt`
+  * `core/data/src/main/java/com/example/data/repository/FakeAiDraftRepository.kt`
+  * `app/src/main/java/com/example/DayZeroViewModel.kt`
+  * `app/src/main/java/com/example/di/DayZeroHiltModule.kt`
+  * `app/src/main/java/com/example/ui/AppNavigation.kt`
+  * `:feature:ai-record` test fakes (`AiRecordPhase2ATest`, `AiRecordPhase3Test`).
+* **Design highlights**:
+  * Validates the persisted user message (exists, role=user, has `contentJson.media`, not already final).
+  * Calls `PrepareVisionAttachmentsForMessageUseCase` once; reuses the same `PreparedVisionRequest` / `AiAssistantRequest` for both stream and fallback.
+  * Streams via `RemoteAiAssistantRepository.streamMessage`; on recoverable failures falls back to `sendMessage`.
+  * Recoverable streaming failures: `IOException`, `ProtocolException`, Moshi `JsonDataException`, and temporary `HttpException` (408 / 429 / 5xx). `CancellationException` is rethrown; local/programming errors fail fast without fallback.
+  * Cause-chain traversal for fallback eligibility is bounded (max depth 4) and cycle-safe.
+  * Uses deterministic assistant placeholder id consistent with `RoomChatMediaTransactionRepository` (`assistantPlaceholderId(userMessageId)`); returns `AlreadyCompleted` if the placeholder is already final.
+  * Releases derivative caches via `ReleasePreparedVisionAttachmentsUseCase` in a `finally` block, only when preparation succeeded; master/thumbnail and `MediaAsset` rows are not deleted. Cleanup exceptions are logged and cannot mask the original exception or cancellation.
+  * Image-only user messages use an in-memory default prompt; no persisted message text is rewritten.
+* **ViewModel attempt ownership**:
+  * `DayZeroViewModel` tracks a single `activeVisionAttemptId`.
+  * New vision attempts are rejected while another is active.
+  * `onAnalyzingChanged` callbacks only mutate `_uiState.isAnalyzing` when the callback belongs to the current owner.
+  * The owner is cleared only by its own `finally` block, preventing stale turns from resetting a newer turn's loading state.
+* **Test coverage**:
+  * `VisionAssistantTurnOrchestratorTest` covers stream success, fallback success, double failure, fallback eligibility matrix (EOFException, JsonDataException, ProtocolException, wrapped IOException, HttpException 429/503, non-recoverable 400, IllegalArgumentException, persistence RuntimeException), prepare failure, cancellation cleanup, prepare-once payload reuse, deterministic placeholder id, `AlreadyCompleted`, image-only default text, release behavior, and release-exception masking.
+  * `DayZeroViewModelVisionAttemptOwnershipTest` covers completion/failure/cancellation cleanup, second attempt rejection while one is active, stale callback suppression, conversation-switch ownership preservation, and ordinary text-flow regression.
+* **Verification commands**:
+  ```powershell
+  $env:JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'
+  .\gradlew.bat :core:model:test --no-daemon
+  .\gradlew.bat :core:domain:test --no-daemon
+  .\gradlew.bat :core:data:testDebugUnitTest --no-daemon
+  .\gradlew.bat :core:network:testDebugUnitTest --no-daemon
+  .\gradlew.bat :feature:ai-record:testDebugUnitTest --no-daemon
+  .\gradlew.bat :app:testDebugUnitTest --no-daemon
+  .\gradlew.bat test --no-daemon
+  .\gradlew.bat :app:assembleDebug --no-daemon
+  ```
+* **Verification results**:
+  * All Gradle commands completed successfully.
+  * Root `test` passed except two pre-existing timezone-sensitive conversation tests that are unrelated to vision orchestration: `DayZeroConversationMigrationTest.migrationWithMultipleNaturalDaysCreatesConversationPerDay` and `DayZeroConversationPhase2Test.continuingConversationKeepsDateAndTitleButUpdatesPreviewAndActivity`.
+  * `:app:assembleDebug` built successfully.
+  * Edge Function baseline SHA-256 verification passed for all 12 tracked files (`supabase/functions/_shared`, `assistant-turn-v2`, `assistant-turn-v2-stream`), confirming no Edge Function source modification.
+* **Boundaries preserved**:
+  * No Edge Function deployment or remote schema change; source hashes match the Phase 2B-3C1-F1 baseline.
+  * No Room schema migration (still Version 12).
+  * No Supabase Schema, RLS, Storage, Auth, or secrets change.
+  * UI image-send intercept remains in place; production image send is not yet open.
+  * Existing text-only send path unchanged.
+  * No Base64, file paths, full request JSON, or keys logged or rendered in UI.
+* **Not verified**: Real-device end-to-end image send and removal of UI send intercept (deferred to Phase 2B-3C2).
+* **Next Phase**: Phase 2B-3C2 — remove the UI image-send intercept and complete real-device end-to-end verification after independent re-verification of 2B-3C1-F1.
+* **Status**: `READY_FOR_PHASE_2B_3C1_REVERIFICATION`.
+
+### Photo Feature Phase 2B-3C1-V — Independent Verification
+* **Original Verification Result**: **PHASE_2B_3C1_NOT_ACCEPTABLE**
+* **Findings**:
+  1. Unauthorized Edge Function source modifications were present in the working tree (fatal boundary violation).
+  2. `VisionAssistantTurnOrchestrator.isEligibleForFallback()` only covered `ProtocolException` and `IOException`.
+  3. `DayZeroViewModel` injected `VisionAssistantTurnOrchestrator? = null`.
+  4. `isAnalyzing` was cleared blindly in `finally` without attempt ownership.
+* **Resolution (Phase 2B-3C1-F1)**:
+  * Edge Function files were reverted/confirmed untouched and verified against a SHA-256 baseline; all 12 hashes match.
+  * Fallback eligibility expanded to include `JsonDataException` and temporary HTTP failures; cause-chain traversal bounded and cycle-safe.
+  * Orchestrator dependency made non-null and required; Hilt provides it.
+  * `DayZeroViewModel` added attempt ownership for vision turns.
+  * Cleanup exceptions are logged and cannot mask original failures or cancellation.
+* **Current Status**: `READY_FOR_PHASE_2B_3C1_REVERIFICATION`.
+
+### Photo Feature Phase 2B-3C1-F1-V — Independent Reverification
+* **Verification Result**: **READY_FOR_PHASE_2B_3C2**
+* **Edge Diff Attribution**: The uncommitted Edge Function modifications in the git workspace were identified as legacy diffs from Phase 2B-3A/3B. The rule confirmed that Phase 2B-3C1-F1 did not improperly modify Edge Functions.
+* **Non-null Hilt Verification**: The `VisionAssistantTurnOrchestrator` dependency in `DayZeroViewModel` is strictly non-null. The Hilt graph successfully built via `:app:assembleDebug`, proving no silent null-swallowing exists.
+* **Fallback & Exception Scope**: `isEligibleForFallback` accurately filters `IOException`, `ProtocolException`, `JsonDataException` (Moshi), and transient HTTP codes (408, 429, 5xx) with a bounded depth=4 cause chain and loop protection. `CancellationException` correctly bypasses fallback.
+* **Attempt Ownership (Race Conditions)**: `DayZeroViewModel` tracks `activeVisionAttemptId` atomically on the main thread before launching the coroutine, guaranteeing that a cancelling or belated attempt cannot falsely clear the `isAnalyzing` state of a newer attempt.
+* **Test Authenticity & Root Exit Code**:
+  - Root `test` exit code was confirmed as `1`.
+  - The two failing tests (`DayZeroConversationMigrationTest` and `DayZeroConversationPhase2Test`) were successfully reproduced to fail under `UTC` but strictly pass under `Asia/Shanghai` and `America/New_York`. This categorizes them as preexisting timezone-dependent brittle tests unrelated to the Phase 2B-3C1-F1 modifications.
+* **UI Interception**: The UI image-send interception remains in place. No APK or real device testing was improperly performed during this code-verification phase.
+* **Next Phase**: Proceeding to **Phase 2B-3C2** to remove the UI image-send intercept and complete real-device end-to-end verification.
+
+## Photo Feature Phase 2B-3C2B-F2 — Codex Takeover & Real-Device Recovery (2026-06-29)
+
+### Correction and current status
+
+This chapter preserves the F1 audit trail but supersedes its completion claim. The user's real-device evidence confirmed only the Vision “识别图片” shimmer and one-decimal weight formatting from F1. Image-request visual streaming, the fully-offline send gate, and image-origin Card continuation all failed on the device. Current status is **`NEEDS_FURTHER_FIXES` until the user completes the post-install manual device checklist**; local tests, remote HTTP 200, and controlled smokes are not treated as final acceptance.
+
+### Audited request chains
+
+```text
+text/media click
+  -> AiRecordActionHandler / AiRecordViewModel
+  -> current validated-network gate (before any local transaction)
+  -> text insert OR SendUserMessageWithMediaUseCase
+  -> assistant placeholder
+  -> DayZeroViewModel / VisionAssistantTurnOrchestrator
+  -> RemoteAiAssistantRepository
+  -> existing Retrofit/OkHttp SSE parser
+  -> StreamingReplyState -> Compose
+  -> final message/Card persistence
+
+ask card click
+  -> findMessageByAssistantCardId(cardId)
+  -> source conversation + stored continuationContext
+  -> interaction_result (attachments omitted)
+  -> assistant-turn-v2 stream/fallback
+  -> normalization -> show_confirm_card -> original conversation
+```
+
+### Proven root causes
+
+1. **Vision streaming**: successful Vision SSE commonly delivered the reply as one large delta. The text path already paced successful SSE text and waited before final persistence, but `VisionAssistantTurnOrchestrator` wrote the whole delta and finalized immediately. The parser, transient state, and Compose observation were functioning. Three pre-fix controlled image samples completed without fallback (first delta 7,418 / 6,156 / 5,495 ms); a device sample received one delta at 11,634 ms and final 43 ms later. Therefore the claimed 15-second timeout was not the root cause.
+2. **Offline gate**: `AndroidNetworkAvailabilityProvider` trusted an active `INTERNET + VALIDATED` VPN even when no validated physical Wi-Fi/cellular/Ethernet path remained. `interaction_result` had no gate, and the text Compose path cleared input after calling the ViewModel even when the ViewModel rejected the send.
+3. **Vision interaction continuation**: the first image turn persisted only static ask-card fields and the original user text. Recognized food/portion/nutrition existed only in the model turn; image-only synthetic text was not persisted, history omitted Card JSON, and the following attachment-free `interaction_result` therefore reached the model without recognized-food context. The observed model response had `actions=[]`; Android mapping did not drop an action.
+
+### Fixes
+
+* Vision now reuses the text path's successful-SSE presentation pacing through `StreamingReplyPresentation`; final persistence waits for presentation, Cards remain final-only, and fallback text is still persisted once without fake streaming.
+* Production network checks query current capabilities and require active `INTERNET + VALIDATED` plus a validated non-VPN Wi-Fi/cellular/Ethernet network. Text, media, first-message, retry, and Card interaction gates execute before inserts, media binding, placeholder creation, Card resolution, or `isAnalyzing`. Rejected text sends return `false`, so Compose retains the draft.
+* Ask-record/ask-missing Cards gained an optional forward-compatible `continuationContext`. It stores only a bounded JSON recognition summary and media-ID references; Android and Edge reject/remove Base64, data/remote URLs, paths, binary fields, non-finite values, and oversized/deep structures. Unknown safe JSON fields survive Card mapping and Chat Sync. Historical Cards without the field remain compatible; no Room migration was needed.
+* `interaction_result` carries that structured context but forcibly omits attachments. It does not prepare/re-encode/re-send images and does not create a second visible user message. Existing Edge prompt/normalization deterministically produces `show_confirm_card` after a meal choice when recognized foods are sufficient.
+
+### Vision timeout decision
+
+No timeout value was changed. The existing stream `15_000` ms AbortController protects Moonshot `fetch()` until response headers; `.finally(clearTimeout)` cancels it once headers arrive, so it is neither a fixed whole-body timeout nor an SSE idle timer. Post-deploy controlled Vision smokes observed first deltas at 12,452 ms, 17,150 ms, and 12,293 ms and still completed normally, directly proving that normal body streaming is not cut off at 15 seconds.
+
+### Edge backup, deployment, and smoke
+
+* Complete pre-deploy backup: `C:\Users\Goings\AppData\Local\Temp\dayzero-edge-backup-20260629-f2-gatea`; recursive source plus `sha256-manifest.txt` and `remote-metadata.json`.
+* Before: `assistant-turn-v2` v22 / `assistant-turn-v2-stream` v13, ACTIVE, `verify_jwt=false`. Final: fallback v24 (`compact_v5_vision_continuation`, SHA `0dfb4032…4df2`) and stream v15 (`stream_compact_v4_vision_continuation`, SHA `d1dfc8a9…9525`), ACTIVE, `verify_jwt=false`. Intermediate v23/v14 introduced continuation; v24/v15 additionally made continuation `weightKg` authoritative in the confirm payload.
+* Deployment order was fallback first, then its interaction smoke, then streaming; the small weight correction repeated that same fallback-smoke-stream order. Remote source was read back and matched local handler/normalization exactly before the final correction, and final v24/v15 passed weight/nutrition smokes. The unsafe full model-response log was removed.
+* Smokes: text stream 44 deltas; single image 25; image-only semantics 94; multi-image 68; all HTTP 200 with final and no error event. Text ask -> record selection -> confirm and image ask-missing -> meal selection -> confirm both succeeded; both interaction requests had no attachments. Final fallback and stream interaction smokes preserved `weightKg=71.2` and `proteinG=0.5`; stream emitted 23 deltas before final.
+
+### Verification and boundaries
+
+* Deno `fmt --check`, `lint`, `check`, and all related tests: 27/27 pass.
+* Gradle: all requested core modules, `feature:ai-record`, compile, and assemble pass. `app:testDebugUnitTest`: 130 total, 128 pass; only the two pre-existing timezone tests fail. Root `test` exit code is 1 for those same two tests.
+* Safe preserving-data install succeeded on V2403A. The script's optional Activity launch failed only because `adb` was not on that child shell's PATH; APK installation itself succeeded and data was preserved.
+* Partial post-install real-device evidence is now available. Read-only logcat captured one single-image turn with 65 true deltas, TTFD 6,517 ms, total stream 10,757 ms, and no fallback. It also captured two offline media attempts with active/internet/validated=true but physicalValidated=false; both stopped at `before_media_transaction`. Read-only Room metadata in the same conversation shows `ask_record_intent_card -> ask_missing_info_card -> show_confirm_card`; both ask Cards persisted one recognized-food context and contained no Base64/data URL/file-path markers. These prove the network/media gate and Card data path, but they do not substitute for the user's visual confirmation.
+* Still pending from the user: offline text and Card visual behavior, draft retention/recovery, confirmation that the 65 deltas were visibly progressive before final, text regression, shimmer, and weight precision.
+* Room remains version 12. No Database Schema, migration, Supabase Database Schema, RLS, Storage, Auth, or secrets were changed. No Base64, image path, full request/response, token, or secret was logged. No git commit/push/reset/clean/checkout/restore was executed.

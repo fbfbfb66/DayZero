@@ -1,9 +1,14 @@
 import { assertEquals } from "jsr:@std/assert@1";
 import {
+  ensureInteractionContinuationAction,
   normalizeActions,
   normalizeNullableNonNegativeNumber,
 } from "./normalization.ts";
-import { normalizeActions as normalizeStreamActions } from "../assistant-turn-v2-stream/normalization.ts";
+import {
+  ensureInteractionContinuationAction
+    as ensureStreamInteractionContinuationAction,
+  normalizeActions as normalizeStreamActions,
+} from "../assistant-turn-v2-stream/normalization.ts";
 
 type JsonObject = Record<string, unknown>;
 
@@ -238,4 +243,101 @@ Deno.test("streaming and fallback normalization produce the same output for the 
   });
 
   assertEquals(fallbackActions, streamActions);
+});
+
+Deno.test("vision meal selection deterministically creates confirm card from continuation context", () => {
+  const context = {
+    schemaVersion: 1,
+    originalText: "",
+    weightKg: 71.2,
+    mediaIds: ["11111111-1111-4111-8111-111111111111"],
+    recognizedFoods: [{
+      id: "item-fixed",
+      name: "apple",
+      amountText: "1 item",
+      calories: 95,
+      calorieConfidence: "estimated",
+      carbohydratesG: 25,
+      proteinG: 0.5,
+      fatG: 0.3,
+      fiberG: 4.4,
+      imageUrl: "https://forbidden.example/image.jpg",
+    }],
+    futureCompatibleField: { nested: true },
+    base64: "forbidden",
+    filePath: "C:\\private\\photo.jpg",
+  };
+  const fallbackActions: JsonObject[] = [];
+  const streamActions: JsonObject[] = [];
+
+  ensureInteractionContinuationAction(
+    fallbackActions,
+    "ask_missing_info_card",
+    "lunch",
+    context,
+  );
+  ensureStreamInteractionContinuationAction(
+    streamActions,
+    "ask_missing_info_card",
+    "lunch",
+    context,
+  );
+  fallbackActions[0].id = "confirm-fixed";
+  streamActions[0].id = "confirm-fixed";
+  normalizeActions(fallbackActions, "2026-06-29", "", null, {
+    inheritedContinuationContext: context,
+    selectedMealType: "lunch",
+  });
+  normalizeStreamActions(streamActions, "2026-06-29", "", null, {
+    inheritedContinuationContext: context,
+    selectedMealType: "lunch",
+  });
+
+  const payload = payloadOf(fallbackActions[0]);
+  const storedContext = payload.continuationContext as JsonObject;
+  assertEquals(fallbackActions, streamActions);
+  assertEquals(fallbackActions[0].type, "show_confirm_card");
+  assertEquals(
+    (mealsOf(fallbackActions[0])[0].items as JsonObject[])[0].name,
+    "apple",
+  );
+  assertEquals(
+    (mealsOf(fallbackActions[0])[0].items as JsonObject[])[0].proteinG,
+    0.5,
+  );
+  assertEquals(payload.weightKg, 71.2);
+  assertEquals(
+    (storedContext.futureCompatibleField as JsonObject).nested,
+    true,
+  );
+  assertEquals(storedContext.base64, undefined);
+  assertEquals(storedContext.filePath, undefined);
+  assertEquals(
+    (storedContext.recognizedFoods as JsonObject[])[0].imageUrl,
+    undefined,
+  );
+});
+
+Deno.test("vision record intent selection preserves context into missing-meal card", () => {
+  const actions: JsonObject[] = [];
+  const context = {
+    recognizedFoods: [{ name: "soup", amountText: "1 bowl", calories: 180 }],
+  };
+
+  ensureInteractionContinuationAction(
+    actions,
+    "ask_record_intent_card",
+    "record",
+    context,
+  );
+  normalizeActions(actions, "2026-06-29", "", null, {
+    inheritedContinuationContext: context,
+  });
+
+  assertEquals(actions[0].type, "ask_missing_info_card");
+  assertEquals(
+    ((payloadOf(actions[0]).continuationContext as JsonObject)
+      .recognizedFoods as JsonObject[])[0].name,
+    "soup",
+  );
 });

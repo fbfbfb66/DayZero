@@ -19,7 +19,15 @@ data class AiAssistantRequestDto(
     val consumptionStatus: String? = null,
     val shouldCreateDraft: Boolean? = null,
     val shouldAskMealTime: Boolean? = null,
-    val extractedFoodText: String? = null
+    val extractedFoodText: String? = null,
+    val attachments: List<VisionAttachmentDto>? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class VisionAttachmentDto(
+    val mediaId: String,
+    val mimeType: String,
+    val base64: String
 )
 
 @JsonClass(generateAdapter = true)
@@ -47,7 +55,8 @@ data class InteractionResultDto(
     val field: String? = null,
     val originalText: String? = null,
     val confirmType: String? = null,
-    val payloadSummary: PayloadSummaryDto? = null
+    val payloadSummary: PayloadSummaryDto? = null,
+    val continuationContext: Map<String, Any?>? = null
 )
 
 @JsonClass(generateAdapter = true)

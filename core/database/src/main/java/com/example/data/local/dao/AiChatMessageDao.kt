@@ -50,6 +50,9 @@ interface AiChatMessageDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMessage(message: AiChatMessageEntity)
 
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insertMessageStrict(message: AiChatMessageEntity)
+
     @Query(
         """
         UPDATE ai_chat_messages

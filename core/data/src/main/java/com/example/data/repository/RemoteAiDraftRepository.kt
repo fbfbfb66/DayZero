@@ -170,6 +170,10 @@ class RemoteAiDraftRepository(
             }
     }
 
+    override suspend fun getChatMessageById(messageId: String): AiChatMessage? {
+        return chatDao.getMessageById(messageId)?.let { chatMapper.toDomain(it) }
+    }
+
     override suspend fun insertChatMessage(message: AiChatMessage) {
         val conversationId = message.conversationId ?: ensureCurrentConversation(message).id
         insertChatMessage(conversationId, message)

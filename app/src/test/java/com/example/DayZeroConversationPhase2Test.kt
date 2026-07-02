@@ -40,6 +40,12 @@ import com.example.domain.time.CurrentDateProvider
 import com.example.domain.usecase.ClearLocalDataUseCase
 import com.example.domain.usecase.ConfirmFoodRecordUseCase
 import com.example.domain.usecase.CreateConversationWithFirstMessageUseCase
+import com.example.domain.usecase.ObserveConversationMediaUseCase
+import com.example.domain.usecase.ImportLocalMediaUseCase
+import com.example.domain.usecase.RetryLocalMediaImportUseCase
+import com.example.domain.usecase.DiscardStagedMediaUseCase
+import com.example.domain.usecase.SendUserMessageWithMediaUseCase
+import com.example.domain.repository.ChatMediaTransactionRepository
 import com.example.ui.screens.AiRecordConversationEvent
 import com.example.ui.screens.AiRecordViewModel
 import kotlinx.coroutines.CompletableDeferred
@@ -391,10 +397,54 @@ class DayZeroConversationPhase2Test {
         val conversationRepository = InMemoryConversationRepository()
         val aiDraftRepository = FakeAiDraftRepository()
         val useCase = CreateConversationWithFirstMessageUseCase(aiDraftRepository)
+        val fakeMediaRepository = object : com.example.domain.repository.MediaRepository {
+            override fun observeConversationMedia(conversationId: String): kotlinx.coroutines.flow.Flow<List<com.example.domain.model.media.MediaAsset>> = kotlinx.coroutines.flow.flowOf(emptyList())
+            override suspend fun getConversationMedia(conversationId: String): List<com.example.domain.model.media.MediaAsset> = emptyList()
+            override suspend fun getMediaByIds(ids: List<String>): List<com.example.domain.model.media.MediaAsset> = emptyList()
+            override suspend fun createStagedMedia(requests: List<com.example.domain.model.media.NewMediaAssetRequest>, now: Long): List<com.example.domain.model.media.MediaAsset> = emptyList()
+            override suspend fun attachMediaToMessage(mediaIds: List<String>, conversationId: String, messageId: String, now: Long) {}
+            override suspend fun markMediaReady(id: String, conversationId: String, masterRelativePath: String, thumbnailRelativePath: String, mimeType: String, width: Int, height: Int, byteSize: Long, sha256: String, now: Long): com.example.domain.model.media.MediaAsset = mockAsset()
+            override suspend fun markMediaFailed(id: String, conversationId: String, failureCode: String?, now: Long): com.example.domain.model.media.MediaAsset = mockAsset()
+            override suspend fun softDeleteMedia(id: String, conversationId: String, now: Long) {}
+            override suspend fun findStaleStagedMedia(updatedBefore: Long): List<com.example.domain.model.media.MediaAsset> = emptyList()
+            private fun mockAsset() = com.example.domain.model.media.MediaAsset(
+                id = "1", ownerLocalId = "1", conversationId = "1", sourceMessageId = null,
+                conversationOrder = 0, masterRelativePath = null, thumbnailRelativePath = null,
+                mimeType = null, width = null, height = null, byteSize = null, sha256 = null,
+                source = com.example.domain.model.media.MediaSource.CAMERA, lifecycleState = com.example.domain.model.media.MediaLifecycleState.STAGED,
+                failureCode = null, createdAt = 0L, updatedAt = 0L, deletedAt = null
+            )
+        }
+        val fakeImportRepository = object : com.example.domain.repository.LocalMediaImportRepository {
+            override suspend fun importStagedMedia(mediaId: String, request: com.example.domain.model.media.ImportLocalMediaRequest): com.example.domain.model.media.LocalMediaImportItemResult = com.example.domain.model.media.LocalMediaImportItemResult.Failed(mediaId, com.example.domain.model.media.MediaImportFailureCode.UNKNOWN)
+            override suspend fun retryImport(mediaId: String): com.example.domain.model.media.LocalMediaImportItemResult = com.example.domain.model.media.LocalMediaImportItemResult.Failed(mediaId, com.example.domain.model.media.MediaImportFailureCode.UNKNOWN)
+            override suspend fun discardStagedMedia(mediaId: String): Boolean = true
+            override suspend fun cleanupStaleMedia(updatedBefore: Long): List<String> = emptyList()
+        }
+        val fakeIdGenerator = com.example.domain.usecase.MediaIdGenerator { "id" }
+        val fakeCurrentIdentityProvider = object : com.example.domain.identity.CurrentIdentityProvider {
+            override suspend fun currentIdentity() = com.example.domain.identity.AppIdentity("owner-default", null, "local", false)
+        }
+        val fakeSendMediaUseCase = SendUserMessageWithMediaUseCase(
+            object : ChatMediaTransactionRepository {
+                override suspend fun sendUserMessageWithMedia(request: com.example.domain.model.ai.SendUserMessageWithMediaRequest) =
+                    com.example.domain.model.ai.SendUserMessageWithMediaResult.Committed(
+                        userMessageId = request.userMessageId,
+                        assistantPlaceholderId = "placeholder-${request.userMessageId}"
+                    )
+            }
+        )
         val viewModel = AiRecordViewModel(
             conversationRepository = conversationRepository,
             aiDraftRepository = aiDraftRepository,
             createConversationWithFirstMessageUseCase = useCase,
+            observeConversationMediaUseCase = ObserveConversationMediaUseCase(fakeMediaRepository),
+            importLocalMediaUseCase = ImportLocalMediaUseCase(fakeMediaRepository, fakeImportRepository, fakeIdGenerator),
+            retryLocalMediaImportUseCase = RetryLocalMediaImportUseCase(fakeMediaRepository, fakeImportRepository),
+            discardStagedMediaUseCase = DiscardStagedMediaUseCase(fakeMediaRepository, fakeImportRepository),
+            sendUserMessageWithMediaUseCase = fakeSendMediaUseCase,
+            currentIdentityProvider = fakeCurrentIdentityProvider,
+            networkAvailabilityProvider = com.example.domain.network.NetworkAvailabilityProvider { true },
             savedStateHandle = SavedStateHandle()
         )
 
@@ -426,15 +476,16 @@ class DayZeroConversationPhase2Test {
         aiAssistantRepository: AiAssistantRepository
     ): DayZeroViewModel {
         val recordRepository = InMemoryPhase2RecordRepository()
+        val conversationRepository = InMemoryConversationRepository()
         return DayZeroViewModel(
             recordRepository = recordRepository,
             aiDraftRepository = aiDraftRepository,
             aiAssistantRepository = aiAssistantRepository,
             latencyLogger = AiLatencyTraceLogger(context),
             clearLocalDataUseCase = ClearLocalDataUseCase(recordRepository, aiDraftRepository),
-            confirmFoodRecordUseCase = ConfirmFoodRecordUseCase(recordRepository),
+            confirmFoodCardUseCase = testConfirmFoodCardUseCase(aiDraftRepository, conversationRepository, recordRepository),
             createConversationWithFirstMessageUseCase = CreateConversationWithFirstMessageUseCase(aiDraftRepository),
-            conversationRepository = InMemoryConversationRepository(),
+            conversationRepository = conversationRepository,
             currentDateProvider = FixedCurrentDateProvider(LocalDate.of(2026, 6, 20)),
             syncScheduler = object : com.example.data.sync.SyncScheduler {
                 override fun requestSync(reason: com.example.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
@@ -443,7 +494,9 @@ class DayZeroConversationPhase2Test {
                 override fun requestPull(reason: com.example.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
                 override fun requestInitialRestore(reason: com.example.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
                 override fun requestSyncAndPull(reason: com.example.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
-            }
+            },
+            visionAssistantTurnOrchestrator = com.example.assistant.fakeVisionAssistantTurnOrchestrator(context),
+            networkAvailabilityProvider = com.example.domain.network.NetworkAvailabilityProvider { true }
         )
     }
 

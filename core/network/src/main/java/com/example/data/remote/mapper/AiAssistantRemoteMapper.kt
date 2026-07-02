@@ -49,7 +49,8 @@ class AiAssistantRemoteMapper {
                                 )
                             }
                         )
-                    }
+                    },
+                    continuationContext = AssistantContinuationContextPolicy.sanitize(it.continuationContext)
                 )
             },
             primaryIntent = request.primaryIntent,
@@ -57,7 +58,17 @@ class AiAssistantRemoteMapper {
             consumptionStatus = request.consumptionStatus,
             shouldCreateDraft = request.shouldCreateDraft,
             shouldAskMealTime = request.shouldAskMealTime,
-            extractedFoodText = request.extractedFoodText
+            extractedFoodText = request.extractedFoodText,
+            attachments = request.attachments
+                ?.takeIf { request.turnType != "interaction_result" }
+                ?.takeIf { it.isNotEmpty() }
+                ?.map { attachment ->
+                    VisionAttachmentDto(
+                        mediaId = attachment.mediaId,
+                        mimeType = attachment.mimeType,
+                        base64 = attachment.base64
+                    )
+                }
         )
     }
 
@@ -145,6 +156,7 @@ class AiAssistantRemoteMapper {
                 message = dto.message ?: "",
                 originalText = dto.originalText ?: "",
                 options = dto.options?.map { AskRecordIntentOption(id = it.id, label = it.label) } ?: emptyList(),
+                continuationContext = AssistantContinuationContextPolicy.sanitize(dto.continuationContext),
                 resolved = dto.resolved ?: false
             )
             "ask_missing_info_card" -> AskMissingInfoCardPayload(
@@ -154,6 +166,7 @@ class AiAssistantRemoteMapper {
                 field = dto.field ?: "",
                 originalText = dto.originalText ?: "",
                 options = dto.options?.map { AskMissingInfoOption(id = it.id, label = it.label) } ?: emptyList(),
+                continuationContext = AssistantContinuationContextPolicy.sanitize(dto.continuationContext),
                 resolved = dto.resolved ?: false
             )
             "show_confirm_card" -> ShowConfirmCardPayload(
@@ -319,6 +332,7 @@ class AiAssistantRemoteMapper {
                 message = card.message,
                 originalText = card.originalText,
                 options = card.options.map { AiChoiceOptionDto(id = it.id, label = it.label) },
+                continuationContext = AssistantContinuationContextPolicy.sanitize(card.continuationContext),
                 resolved = card.resolved
             )
             is AskMissingInfoCardPayload -> AiChatCardDto(
@@ -329,6 +343,7 @@ class AiAssistantRemoteMapper {
                 field = card.field,
                 originalText = card.originalText,
                 options = card.options.map { AiChoiceOptionDto(id = it.id, label = it.label) },
+                continuationContext = AssistantContinuationContextPolicy.sanitize(card.continuationContext),
                 resolved = card.resolved
             )
             is ShowConfirmCardPayload -> AiChatCardDto(

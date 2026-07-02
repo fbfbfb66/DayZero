@@ -18,7 +18,9 @@ interface AiDraftRepository {
     suspend fun getRecentChatMessages(conversationId: String, limit: Int): List<AiChatMessage>
     
     suspend fun findMessageByAssistantCardId(cardId: String): AiChatMessage?
-    
+
+    suspend fun getChatMessageById(messageId: String): AiChatMessage?
+
     suspend fun insertChatMessage(message: AiChatMessage)
 
     suspend fun insertChatMessage(conversationId: String, message: AiChatMessage)

@@ -14,6 +14,8 @@ data class AiChatMessage(
     val choiceCard: ChoiceCard? = null,
     val assistantCards: List<AiChatCard> = emptyList(),
     val suggestedReplies: List<String> = emptyList(),
+    val sourceMediaIds: List<String> = emptyList(),
+    val contentJson: String? = null,
     val updatedAt: Long = createdAt,
     val deletedAt: Long? = null
 )

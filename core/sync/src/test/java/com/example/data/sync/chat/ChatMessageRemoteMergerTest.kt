@@ -304,6 +304,83 @@ class ChatMessageRemoteMergerTest {
     }
 
     @Test
+    fun pullsImageOnlyUserMessageWithMediaContentJsonWithoutCreatingFakeAsset() = runTest {
+        insertConversation("conv-1")
+        val contentJson = """{"media":{"schemaVersion":1,"sourceMediaIds":["media-1","media-2"]}}"""
+
+        val stats = merger.mergeMessagePage(
+            "local_1",
+            listOf(remoteMessage("image-only", role = "User", text = "", contentJson = contentJson))
+        )
+
+        assertEquals(1, stats.insertedCount)
+        val local = messageDao.getMessageById("image-only")
+        assertNotNull(local)
+        assertEquals("", local!!.text)
+        assertEquals(contentJson, local.contentJson)
+        // No MediaAsset row should be created by the merger.
+        assertEquals(0, database.mediaAssetDao().getActiveByConversation("conv-1").size)
+    }
+
+    @Test
+    fun mergePreservesUnknownMediaFieldsAndSourceMediaIdOrder() = runTest {
+        insertConversation("conv-1")
+        val localContent = """{"media":{"schemaVersion":1,"sourceMediaIds":["local-a"]},"extraLocal":true}"""
+        insertMessage(localMessage("media-msg", text = "", contentJson = localContent))
+        val remoteContent = """{"media":{"schemaVersion":1,"sourceMediaIds":["remote-a","remote-b"]},"extraRemote":true}"""
+
+        val stats = merger.mergeMessagePage(
+            "local_1",
+            listOf(remoteMessage("media-msg", text = "", updatedAtMillis = 2000L, contentJson = remoteContent))
+        )
+
+        assertEquals(1, stats.updatedCount)
+        val merged = messageDao.getMessageById("media-msg")!!.contentJson
+        assertNotNull(merged)
+        val json = JSONObject(merged!!)
+        val ids = json.getJSONObject("media").getJSONArray("sourceMediaIds")
+        assertEquals(2, ids.length())
+        assertEquals("remote-a", ids.getString(0))
+        assertEquals("remote-b", ids.getString(1))
+        assertTrue(json.getBoolean("extraRemote"))
+    }
+
+    @Test
+    fun mergeWithEqualMediaContentJsonIsSkipped() = runTest {
+        insertConversation("conv-1")
+        val contentJson = """{"media":{"schemaVersion":1,"sourceMediaIds":["a","b"]}}"""
+        insertMessage(localMessage("media-msg", text = "", contentJson = contentJson, updatedAt = 1000L))
+
+        val stats = merger.mergeMessagePage(
+            "local_1",
+            listOf(remoteMessage("media-msg", text = "", updatedAtMillis = 1000L, contentJson = contentJson))
+        )
+
+        assertEquals(1, stats.skippedCount)
+    }
+
+    @Test
+    fun nullEmptyObjectAndEmptyArrayContentJsonAreNotConfusedWithMedia() = runTest {
+        insertConversation("conv-1")
+        insertMessage(localMessage("null-json", text = "", contentJson = null))
+        insertMessage(localMessage("empty-object", text = "", contentJson = "{}"))
+        insertMessage(localMessage("empty-array", text = "", contentJson = "[]"))
+
+        merger.mergeMessagePage(
+            "local_1",
+            listOf(
+                remoteMessage("null-json", text = "", contentJson = null),
+                remoteMessage("empty-object", text = "", contentJson = "{}"),
+                remoteMessage("empty-array", text = "", contentJson = "[]")
+            )
+        )
+
+        assertNull(messageDao.getMessageById("null-json")?.contentJson)
+        assertEquals("{}", messageDao.getMessageById("empty-object")?.contentJson)
+        assertEquals("[]", messageDao.getMessageById("empty-array")?.contentJson)
+    }
+
+    @Test
     fun confirmedCardPullHasNoBusinessSideEffectsAndDoesNotUpdateConversationSummary() = runTest {
         insertConversation("conv-1", title = "Before", lastMessagePreview = "Preview")
         dailyRecordDao.upsertRecord(

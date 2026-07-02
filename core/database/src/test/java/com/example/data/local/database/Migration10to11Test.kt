@@ -169,7 +169,7 @@ class Migration10to11Test {
             DayZeroDatabase::class.java,
             "test_migration_10_11_db"
         )
-        .addMigrations(DayZeroDatabase.MIGRATION_10_11)
+        .addMigrations(DayZeroDatabase.MIGRATION_10_11, DayZeroDatabase.MIGRATION_11_12)
         .allowMainThreadQueries()
         .build()
 

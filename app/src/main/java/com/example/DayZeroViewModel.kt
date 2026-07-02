@@ -3,6 +3,9 @@ package com.example
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.assistant.VisionAssistantTurnOrchestrator
+import com.example.assistant.STREAMING_REPLY_FRAME_DELAY_MS
+import com.example.assistant.streamingReplyStep
 import com.example.data.sync.BackfillCoordinator
 import com.example.data.sync.InProcessSyncScheduler
 import com.example.data.sync.PullCoordinator
@@ -24,6 +27,9 @@ import com.example.domain.model.ai.assistant.AiChatCard
 import com.example.domain.model.ai.assistant.DateMismatchGuardCardPayload
 import com.example.domain.model.ai.assistant.ShowConfirmCardPayload
 import com.example.domain.model.ai.assistant.ProtocolException
+import com.example.domain.model.ai.assistant.VisionAssistantTurnResult
+import com.example.domain.network.NetworkAvailabilityProvider
+import com.example.domain.repository.ConfirmFoodCardResult
 import com.example.domain.repository.AiAssistantRepository
 import com.example.domain.repository.AiDraftRepository
 import com.example.domain.repository.ConversationRepository
@@ -31,7 +37,7 @@ import com.example.domain.repository.RecordRepository
 import com.example.domain.time.CurrentDateProvider
 import com.example.domain.usecase.ClearLocalDataAction
 import com.example.domain.usecase.ClearLocalDataUseCase
-import com.example.domain.usecase.ConfirmFoodRecordUseCase
+import com.example.domain.usecase.ConfirmFoodCardUseCase
 import com.example.domain.usecase.CreateConversationWithFirstMessageUseCase
 import com.example.ui.sync.SyncStatusUiState
 import com.example.ui.sync.SyncStatusUiStateMapper
@@ -47,6 +53,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.LocalDate
+import java.util.UUID
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 
@@ -62,11 +69,13 @@ class DayZeroViewModel @Inject constructor(
     private val aiAssistantRepository: AiAssistantRepository,
     private val latencyLogger: AiLatencyTraceLogger,
     private val clearLocalDataUseCase: ClearLocalDataUseCase,
-    private val confirmFoodRecordUseCase: ConfirmFoodRecordUseCase,
+    private val confirmFoodCardUseCase: ConfirmFoodCardUseCase,
     private val createConversationWithFirstMessageUseCase: CreateConversationWithFirstMessageUseCase,
     private val conversationRepository: ConversationRepository,
     private val currentDateProvider: CurrentDateProvider,
     private val syncScheduler: SyncScheduler,
+    private val visionAssistantTurnOrchestrator: VisionAssistantTurnOrchestrator,
+    private val networkAvailabilityProvider: NetworkAvailabilityProvider,
     private val syncStatusRepository: SyncStatusRepository? = null,
     private val cloudBackupCleaner: SupabaseCloudBackupCleaner? = null
 ) : ViewModel() {
@@ -82,6 +91,12 @@ class DayZeroViewModel @Inject constructor(
     private val _uiEvents = MutableSharedFlow<UiEvent>()
     val uiEvents: SharedFlow<UiEvent> = _uiEvents.asSharedFlow()
 
+    /**
+     * Owner of the currently active Vision assistant attempt. Used to prevent an
+     * older attempt's cleanup from resetting the analyzing state of a newer attempt.
+     */
+    private var activeVisionAttemptId: String? = null
+
     init {
         observeRecords()
         observeChatMessages()
@@ -89,6 +104,27 @@ class DayZeroViewModel @Inject constructor(
         triggerInitialBackfill("app_start", delayMs = 1_500L)
         triggerInitialRestore("app_start", delayMs = 2_500L)
         triggerBackgroundSync("app_start")
+    }
+
+    /**
+     * Returns true if the device has validated internet access.
+     * If not, posts a transient error message and keeps the current input intact.
+     */
+    private fun checkNetworkOrNotify(path: String): Boolean {
+        val available = networkAvailabilityProvider.hasValidatedInternet()
+        Log.i(TAG_NETWORK_GATE, "path=$path available=$available gatePosition=before_local_transaction")
+        if (available) return true
+        val message = "当前无网络，连接后再发送"
+        _uiState.update {
+            it.copy(
+                isAnalyzing = false,
+                conversationState = AiRecordConversationState.Error(message)
+            )
+        }
+        viewModelScope.launch {
+            _uiEvents.emit(UiEvent.Error(message))
+        }
+        return false
     }
 
     private fun observeRecords() {
@@ -107,12 +143,13 @@ class DayZeroViewModel @Inject constructor(
         }
     }
 
-    fun sendAiMessage(text: String) {
+    fun sendAiMessage(text: String): Boolean {
         val trimmed = text.trim()
-        if (trimmed.isBlank()) return
+        if (trimmed.isBlank()) return false
+        if (!checkNetworkOrNotify("home_text")) return false
 
         val traceId = latencyLogger.start(turnType = "user_message", userText = trimmed)
-        Log.d("DayZeroAiV2", "send message: '$trimmed'")
+        Log.d("DayZeroAiV2", "send message accepted source=home textLength=${trimmed.length}")
 
         _uiState.update {
             it.copy(
@@ -138,14 +175,16 @@ class DayZeroViewModel @Inject constructor(
                 handleAssistantTurnV2Error(e, traceId)
             }
         }
+        return true
     }
 
-    fun sendAiMessage(conversationId: String, text: String) {
+    fun sendAiMessage(conversationId: String, text: String): Boolean {
         val trimmed = text.trim()
-        if (conversationId.isBlank() || trimmed.isBlank()) return
+        if (conversationId.isBlank() || trimmed.isBlank()) return false
+        if (!checkNetworkOrNotify("conversation_text")) return false
 
         val traceId = latencyLogger.start(turnType = "user_message", userText = trimmed)
-        Log.d("DayZeroAiV2", "send message to conversation=$conversationId: '$trimmed'")
+        Log.d("DayZeroAiV2", "send message accepted source=conversation textLength=${trimmed.length}")
 
         _uiState.update {
             it.copy(
@@ -173,11 +212,13 @@ class DayZeroViewModel @Inject constructor(
                 handleAssistantTurnV2Error(e, traceId)
             }
         }
+        return true
     }
 
     fun startAssistantTurnForExistingUserMessage(conversationId: String, text: String) {
         val trimmed = text.trim()
         if (conversationId.isBlank() || trimmed.isBlank()) return
+        if (!checkNetworkOrNotify("existing_text_turn")) return
 
         val traceId = latencyLogger.start(turnType = "user_message", userText = trimmed)
         Log.d("DayZeroAiV2", "start assistant for existing first message conversation=$conversationId")
@@ -194,6 +235,82 @@ class DayZeroViewModel @Inject constructor(
                 requestAssistantTurnV2(trimmed, traceId, conversationId)
             } catch (e: Exception) {
                 handleAssistantTurnV2Error(e, traceId)
+            }
+        }
+    }
+
+    /**
+     * Production entry point for a persisted image user message.
+     *
+     * This does NOT create a new user message; it starts the assistant turn for an
+     * already-persisted message identified by [conversationId] and [userMessageId].
+     * The UI send button is still intercepted elsewhere; this method is exposed only
+     * so that a future phase can wire it in without changing the orchestrator.
+     */
+    fun startVisionAssistantTurnForExistingUserMessage(
+        conversationId: String,
+        userMessageId: String
+    ) {
+        if (conversationId.isBlank() || userMessageId.isBlank()) return
+        if (!checkNetworkOrNotify("vision_retry_or_committed_turn")) return
+
+        val currentOwner = activeVisionAttemptId
+        if (currentOwner != null) {
+            Log.w(
+                "DayZeroAiV2",
+                "vision attempt rejected: active attempt=$currentOwner conversation=$conversationId"
+            )
+            return
+        }
+
+        val attemptId = UUID.randomUUID().toString()
+        activeVisionAttemptId = attemptId
+
+        Log.d(
+            "DayZeroAiV2",
+            "start vision assistant turn attemptId=$attemptId conversation=$conversationId userMessageId=$userMessageId"
+        )
+        _uiState.update {
+            it.copy(
+                activeConversationId = conversationId,
+                isAnalyzing = true,
+                conversationState = AiRecordConversationState.Idle
+            )
+        }
+
+        viewModelScope.launch {
+            try {
+                val result = visionAssistantTurnOrchestrator.runVisionTurn(
+                    conversationId = conversationId,
+                    userMessageId = userMessageId,
+                    onAnalyzingChanged = { isAnalyzing ->
+                        if (activeVisionAttemptId == attemptId) {
+                            _uiState.update { it.copy(isAnalyzing = isAnalyzing) }
+                        }
+                    }
+                )
+                when (result) {
+                    is VisionAssistantTurnResult.Success -> {
+                        Log.d("DayZeroAiV2", "vision assistant turn completed successfully")
+                    }
+                    is VisionAssistantTurnResult.AlreadyCompleted -> {
+                        Log.d(
+                            "DayZeroAiV2",
+                            "vision assistant turn skipped: placeholder ${result.assistantMessageId} already completed"
+                        )
+                    }
+                    is VisionAssistantTurnResult.InvalidInput -> {
+                        Log.w("DayZeroAiV2", "vision assistant turn invalid input: ${result.reason}")
+                        _uiEvents.emit(UiEvent.Error("无法启动图片识别：${result.reason}"))
+                    }
+                    is VisionAssistantTurnResult.Failure -> {
+                        handleAssistantTurnV2Error(result.error)
+                    }
+                }
+            } finally {
+                if (activeVisionAttemptId == attemptId) {
+                    activeVisionAttemptId = null
+                }
             }
         }
     }
@@ -243,6 +360,9 @@ class DayZeroViewModel @Inject constructor(
         confirmType: String? = null,
         payloadSummary: com.example.domain.model.ai.assistant.PayloadSummary? = null
     ) {
+        if (actionType != "show_confirm_card" && !checkNetworkOrNotify("interaction_result")) {
+            return
+        }
         val traceId = latencyLogger.start(
             turnType = if (actionType == "show_confirm_card" && confirmType == "food_record") {
                 "local_card_interaction"
@@ -284,9 +404,19 @@ class DayZeroViewModel @Inject constructor(
 
         viewModelScope.launch {
             try {
-                val targetConversationId = aiDraftRepository.findMessageByAssistantCardId(interactionId)?.conversationId
+                val sourceMessage = aiDraftRepository.findMessageByAssistantCardId(interactionId)
+                val targetConversationId = sourceMessage?.conversationId
                     ?: _uiState.value.activeConversationId
                     ?: error("Cannot resolve conversation for interaction $interactionId")
+                val continuationContext = sourceMessage?.assistantCards
+                    ?.firstOrNull { it.id == interactionId }
+                    ?.let { card ->
+                        when (card) {
+                            is com.example.domain.model.ai.assistant.AskRecordIntentCardPayload -> card.continuationContext
+                            is com.example.domain.model.ai.assistant.AskMissingInfoCardPayload -> card.continuationContext
+                            else -> null
+                        }
+                    }
                 latencyLogger.mark(traceId, "room_card_resolve_start")
                 markCardAsResolved(interactionId)
                 latencyLogger.mark(traceId, "room_card_resolve_complete")
@@ -311,7 +441,8 @@ class DayZeroViewModel @Inject constructor(
                         field = field,
                         originalText = originalText,
                         confirmType = confirmType,
-                        payloadSummary = payloadSummary
+                        payloadSummary = payloadSummary,
+                        continuationContext = continuationContext
                     )
                 )
                 latencyLogger.mark(
@@ -383,7 +514,7 @@ class DayZeroViewModel @Inject constructor(
                 synchronized(displayLock) {
                     if (displayedLength < targetText.length) {
                         val remaining = targetText.length - displayedLength
-                        displayedLength = (displayedLength + streamingTypewriterStep(remaining))
+                        displayedLength = (displayedLength + streamingReplyStep(remaining))
                             .coerceAtMost(targetText.length)
                         nextText = targetText.substring(0, displayedLength)
                         shouldFinish = false
@@ -406,7 +537,7 @@ class DayZeroViewModel @Inject constructor(
                 }
 
                 if (shouldFinish) break
-                delay(30L)
+                delay(STREAMING_REPLY_FRAME_DELAY_MS)
             }
         }
 
@@ -618,14 +749,6 @@ class DayZeroViewModel @Inject constructor(
         return "date-mismatch-guard-$originalCardId"
     }
 
-    private fun streamingTypewriterStep(remainingChars: Int): Int {
-        return when {
-            remainingChars > 140 -> 3
-            remainingChars > 56 -> 2
-            else -> 1
-        }
-    }
-
     private suspend fun handleAssistantTurnV2Error(error: Throwable, traceId: String? = null) {
         Log.e("DayZeroAiV2", "assistant-turn-v2 error", error)
         val errorMessage = if (error is ProtocolException) {
@@ -773,13 +896,26 @@ class DayZeroViewModel @Inject constructor(
         if (optionId == "cancel") {
             Log.d("DayZeroAiV2", "confirm food card clicked cancel")
             viewModelScope.launch {
-                if (!isShowConfirmCardActionAllowed(interactionId)) return@launch
                 val targetConversationId = conversationIdForInteraction(interactionId)
                 _uiState.update { it.copy(activeConversationId = targetConversationId) }
                 latencyLogger.mark(traceId, "room_confirm_card_state_update_start")
-                updateCardState(interactionId, "cancelled")
-                latencyLogger.mark(traceId, "room_confirm_card_state_update_complete")
-                addClientMessage("好，这次先不记录。", traceId, "local_food_cancel")
+                when (val result = confirmFoodCardUseCase.cancel(interactionId)) {
+                    ConfirmFoodCardResult.Cancelled -> {
+                        latencyLogger.mark(traceId, "room_confirm_card_state_update_complete")
+                        addClientMessage("好，这次先不记录。", traceId, "local_food_cancel")
+                    }
+                    ConfirmFoodCardResult.AlreadyConfirmed -> {
+                        latencyLogger.mark(traceId, "room_confirm_card_already_confirmed")
+                    }
+                    ConfirmFoodCardResult.CardNotFound -> {
+                        latencyLogger.mark(traceId, "room_confirm_card_not_found")
+                    }
+                    is ConfirmFoodCardResult.Failed -> {
+                        Log.e("DayZeroAiV2", "food cancel card error", result.cause)
+                        addClientMessage("操作失败，请重试。", traceId, "local_food_cancel_error")
+                    }
+                    is ConfirmFoodCardResult.Confirmed -> Unit
+                }
             }
             return
         }
@@ -790,36 +926,43 @@ class DayZeroViewModel @Inject constructor(
 
             viewModelScope.launch {
                 try {
-                    if (!isShowConfirmCardActionAllowed(interactionId)) return@launch
                     val targetConversationId = conversationIdForInteraction(interactionId)
                     _uiState.update { it.copy(activeConversationId = targetConversationId) }
-                    val targetRecordDate = recordDateForInteraction(interactionId)
                     latencyLogger.mark(traceId, "food_record_payload_map_start")
-                    val updatedRecord = confirmFoodRecordUseCase(targetRecordDate, payloadSummary)
-                    latencyLogger.mark(
-                        traceId,
-                        "food_record_payload_map_complete",
-                        mapOf("mealsCount" to updatedRecord.meals.size)
-                    )
-                    triggerBackgroundSync("food_confirm_enqueue")
-                    latencyLogger.mark(
-                        traceId,
-                        "room_daily_record_upsert_complete",
-                        mapOf("totalCalories" to updatedRecord.totalCalories)
-                    )
-
-                    Log.d("DayZeroAiV2", "food record save success")
-                    latencyLogger.mark(traceId, "room_confirm_card_state_update_start")
-                    updateCardState(
-                        interactionId = interactionId,
-                        newState = "confirmed",
-                        updatedWeightKg = payloadSummary?.weightKg,
-                        hasUpdatedWeightKg = payloadSummary != null,
-                        updatedMeals = payloadSummary?.meals
-                    )
-                    latencyLogger.mark(traceId, "room_confirm_card_state_update_complete")
-                    addClientMessage("已记录到今天。", traceId, "local_food_confirm")
-                    _uiEvents.emit(UiEvent.RecordConfirmed)
+                    when (val result = confirmFoodCardUseCase(interactionId, payloadSummary)) {
+                        is ConfirmFoodCardResult.Confirmed -> {
+                            latencyLogger.mark(
+                                traceId,
+                                "food_record_payload_map_complete",
+                                mapOf("mealsCount" to result.record.meals.size)
+                            )
+                            triggerBackgroundSync("food_confirm_enqueue")
+                            latencyLogger.mark(
+                                traceId,
+                                "room_daily_record_upsert_complete",
+                                mapOf("totalCalories" to result.record.totalCalories)
+                            )
+                            Log.d("DayZeroAiV2", "food record save success")
+                            latencyLogger.mark(traceId, "room_confirm_card_state_update_complete")
+                            addClientMessage("已记录到今天。", traceId, "local_food_confirm")
+                            _uiEvents.emit(UiEvent.RecordConfirmed)
+                        }
+                        ConfirmFoodCardResult.AlreadyConfirmed -> {
+                            Log.d("DayZeroAiV2", "food record already confirmed")
+                            latencyLogger.mark(traceId, "room_confirm_card_already_confirmed")
+                        }
+                        ConfirmFoodCardResult.Cancelled -> {
+                            Log.d("DayZeroAiV2", "food record confirm ignored cancelled_or_blocked")
+                            latencyLogger.mark(traceId, "room_confirm_card_cancelled_or_blocked")
+                        }
+                        ConfirmFoodCardResult.CardNotFound -> {
+                            Log.d("DayZeroAiV2", "food record confirm card not found")
+                            latencyLogger.mark(traceId, "room_confirm_card_not_found")
+                        }
+                        is ConfirmFoodCardResult.Failed -> {
+                            throw result.cause
+                        }
+                    }
                 } catch (e: Exception) {
                     Log.e("DayZeroAiV2", "food record save error", e)
                     addClientMessage("记录失败，请重试。", traceId, "local_food_confirm_error")
@@ -827,32 +970,10 @@ class DayZeroViewModel @Inject constructor(
             }
         }
     }
-
     private suspend fun conversationIdForInteraction(interactionId: String): String {
         return aiDraftRepository.findMessageByAssistantCardId(interactionId)?.conversationId
             ?: _uiState.value.activeConversationId
             ?: error("Cannot resolve conversation for interaction $interactionId")
-    }
-
-    private suspend fun recordDateForInteraction(interactionId: String): LocalDate {
-        val conversationId = aiDraftRepository.findMessageByAssistantCardId(interactionId)?.conversationId
-            ?: error("Cannot resolve message for record card $interactionId")
-        return conversationRepository.getConversationById(conversationId)?.conversationDate
-            ?: error("Cannot resolve conversation date for record card $interactionId")
-    }
-
-    private suspend fun isShowConfirmCardActionAllowed(interactionId: String): Boolean {
-        val targetMessage = aiDraftRepository.findMessageByAssistantCardId(interactionId) ?: return false
-        val originalState = targetMessage.assistantCards.firstNotNullOfOrNull { card ->
-            when {
-                card is ShowConfirmCardPayload && card.id == interactionId -> card.state
-                card is DateMismatchGuardCardPayload && card.pendingOriginalCard.id == interactionId -> {
-                    if (card.state == "approved") card.pendingOriginalCard.state else "guard_${card.state}"
-                }
-                else -> null
-            }
-        }
-        return originalState == null || originalState == "pending"
     }
 
     private suspend fun updateCardState(
@@ -1020,6 +1141,10 @@ class DayZeroViewModel @Inject constructor(
             "backfill_enqueued" -> SyncTriggerReason.BACKFILL_COMPLETED
             else -> SyncTriggerReason.RETRY
         }
+    }
+
+    private companion object {
+        const val TAG_NETWORK_GATE = "DayZeroNetworkGate"
     }
 
 }

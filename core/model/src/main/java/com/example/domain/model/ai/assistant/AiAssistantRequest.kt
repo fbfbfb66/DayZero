@@ -18,7 +18,8 @@ data class AiAssistantRequest(
     val shouldCreateDraft: Boolean? = null,
     val shouldAskMealTime: Boolean? = null,
     val extractedFoodText: String? = null,
-    val traceId: String? = null
+    val traceId: String? = null,
+    val attachments: List<PreparedVisionAttachment>? = null
 )
 
 data class InteractionResult(
@@ -29,7 +30,8 @@ data class InteractionResult(
     val field: String? = null,
     val originalText: String? = null,
     val confirmType: String? = null,
-    val payloadSummary: PayloadSummary? = null
+    val payloadSummary: PayloadSummary? = null,
+    val continuationContext: AssistantContinuationContext? = null
 )
 
 data class PayloadSummary(

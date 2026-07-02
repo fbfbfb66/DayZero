@@ -158,6 +158,10 @@ class FakeAiDraftRepository : AiDraftRepository {
         }
     }
 
+    override suspend fun getChatMessageById(messageId: String): AiChatMessage? {
+        return _messages.value.find { it.id == messageId }
+    }
+
     override suspend fun insertChatMessage(message: AiChatMessage) {
         _messages.update { it + message }
     }

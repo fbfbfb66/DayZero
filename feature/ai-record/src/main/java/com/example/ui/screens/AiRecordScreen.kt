@@ -1,5 +1,22 @@
 package com.example.ui.screens
 
+import android.provider.Settings
+import android.widget.Toast
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Refresh
+import com.example.ui.components.LocalMediaThumbnail
 import androidx.compose.animation.animateColor
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.RepeatMode
@@ -23,10 +40,12 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -38,6 +57,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.LazyListState
@@ -48,6 +68,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -67,12 +88,19 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.coerceAtLeast
@@ -84,6 +112,7 @@ import com.example.domain.model.ai.ChatRole
 import com.example.domain.model.ai.Conversation
 import com.example.domain.model.ai.assistant.ConfirmCardMeal
 import com.example.domain.model.ai.assistant.PayloadSummary
+import com.example.domain.ai.isVisionAssistantPlaceholder
 import com.example.ui.theme.BorderNormal
 import com.example.ui.theme.BrandGreen
 import com.example.ui.theme.CardBackground
@@ -96,6 +125,7 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.SharedFlow
 import java.util.Locale
 
 object AiRecordTestTags {
@@ -113,11 +143,13 @@ object AiRecordTestTags {
 }
 
 interface AiRecordActionHandler {
-    fun sendAiMessage(text: String)
+    fun sendAiMessage(text: String): Boolean
 
-    fun sendAiMessage(conversationId: String, text: String)
+    fun sendAiMessage(conversationId: String, text: String): Boolean
 
     fun startAssistantTurnForExistingUserMessage(conversationId: String, text: String)
+
+    fun startVisionAssistantTurnForExistingUserMessage(conversationId: String, userMessageId: String)
 
     fun setActiveConversationId(conversationId: String?)
 
@@ -237,18 +269,49 @@ fun AiConversationScreen(
     detailState: AiConversationDetailState,
     appState: AppState,
     actionHandler: AiRecordActionHandler,
-    onBack: () -> Unit
+    events: SharedFlow<AiRecordConversationEvent>,
+    onBack: () -> Unit,
+    onImportPhotos: (String, List<String>) -> Unit,
+    onRemoveAttachment: (String, String) -> Unit,
+    onRetryAttachment: (String, String) -> Unit,
+    onNavigateToCamera: (String) -> Unit,
+    onSetPickerOpen: (String, Boolean) -> Unit,
+    onSubmitMediaMessage: (String, String, List<String>) -> Unit,
+    onClearDetailError: () -> Unit = {}
 ) {
     LaunchedEffect(conversationId) {
         actionHandler.setActiveConversationId(conversationId)
     }
 
+    val context = LocalContext.current
+    val capturedConversationId = remember(conversationId) { conversationId }
     var inputText by remember(conversationId) { mutableStateOf("") }
+
+    LaunchedEffect(events, conversationId) {
+        events.collect { event ->
+            if (event is AiRecordConversationEvent.MediaMessageCommitted && event.conversationId == conversationId) {
+                inputText = ""
+            }
+        }
+    }
+    val messagesWithMedia = detailState.messagesWithMedia
     val messages = detailState.messages
     val isCurrentConversationAnalyzing = appState.isAnalyzing && appState.activeConversationId == conversationId
     val hasAssistantPlaceholder = messages.lastOrNull()?.let { message ->
         message.role == ChatRole.Assistant && message.text.isBlank() && message.assistantCards.isEmpty()
     } == true
+
+    val retryUserMessageId = if (
+        !isCurrentConversationAnalyzing &&
+        detailState.errorMessage != null &&
+        hasAssistantPlaceholder &&
+        messages.size >= 2
+    ) {
+        val previous = messages[messages.size - 2]
+        if (previous.role == ChatRole.User) previous.id else null
+    } else {
+        null
+    }
 
     val listState = remember(conversationId) {
         val lastMsgIndex = (messages.size - 1).coerceAtLeast(0)
@@ -321,6 +384,21 @@ fun AiConversationScreen(
         }
     }
 
+    var isPlusMenuOpen by remember { mutableStateOf(false) }
+
+    BackHandler(enabled = isPlusMenuOpen) {
+        isPlusMenuOpen = false
+    }
+
+    val pickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia(maxItems = 6)
+    ) { uris ->
+        onSetPickerOpen(capturedConversationId, false)
+        if (uris.isNotEmpty()) {
+            onImportPhotos(capturedConversationId, uris.map { it.toString() })
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -341,11 +419,12 @@ fun AiConversationScreen(
                 }
             }
 
-            items(items = messages, key = { it.id }) { message ->
+            items(items = messagesWithMedia, key = { it.message.id }) { messageWithMedia ->
                 ChatMessageRow(
-                    message = message,
+                    messageWithMedia = messageWithMedia,
+                    allMessages = messages,
                     isAnalyzing = isCurrentConversationAnalyzing,
-                    isLastMessage = message.id == messages.lastOrNull()?.id,
+                    isLastMessage = messageWithMedia.message.id == messages.lastOrNull()?.id,
                     actionHandler = actionHandler
                 )
             }
@@ -357,6 +436,21 @@ fun AiConversationScreen(
                     }
                 }
             }
+
+            if (retryUserMessageId != null) {
+                item(key = "vision_retry") {
+                    VisionRetryCard(
+                        errorMessage = detailState.errorMessage ?: "图片识别失败",
+                        onRetry = {
+                            onClearDetailError()
+                            actionHandler.startVisionAssistantTurnForExistingUserMessage(
+                                conversationId,
+                                retryUserMessageId
+                            )
+                        }
+                    )
+                }
+            }
         }
 
         ConversationTopBar(
@@ -365,19 +459,80 @@ fun AiConversationScreen(
             onBack = onBack
         )
 
+        if (isPlusMenuOpen) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { isPlusMenuOpen = false }
+            )
+        }
+
         ConversationInputBar(
             modifier = Modifier.align(Alignment.BottomCenter),
             inputText = inputText,
-            enabled = !appState.isAnalyzing,
+            enabled = !appState.isAnalyzing && !detailState.isSubmitting,
             isAnalyzing = isCurrentConversationAnalyzing,
+            isSubmitting = detailState.isSubmitting,
             inputTestTag = AiRecordTestTags.ConversationInput,
             sendTestTag = AiRecordTestTags.ConversationSend,
             onInputChange = { inputText = it },
+            detailState = detailState,
+            isPlusMenuOpen = isPlusMenuOpen,
+            onPlusMenuToggle = { isPlusMenuOpen = it },
+            onTakePhoto = {
+                isPlusMenuOpen = false
+                onNavigateToCamera(capturedConversationId)
+            },
+            onSelectPhotos = {
+                isPlusMenuOpen = false
+                val draft = detailState.draftState
+                val currentCount = (draft?.attachmentIds?.size ?: 0) + (draft?.importingCount ?: 0)
+                if (currentCount >= 6) {
+                    Toast.makeText(context, "最多只能添加6张图片", Toast.LENGTH_SHORT).show()
+                } else {
+                    onSetPickerOpen(capturedConversationId, true)
+                    pickerLauncher.launch(
+                        androidx.activity.result.PickVisualMediaRequest(
+                            ActivityResultContracts.PickVisualMedia.ImageOnly
+                        )
+                    )
+                }
+            },
+            onRemoveAttachment = { mediaId ->
+                onRemoveAttachment(capturedConversationId, mediaId)
+            },
+            onRetryAttachment = { mediaId ->
+                onRetryAttachment(capturedConversationId, mediaId)
+            },
             onSubmit = {
-                val text = inputText
-                if (text.isNotBlank()) {
-                    actionHandler.sendAiMessage(conversationId, text)
-                    inputText = ""
+                val draft = detailState.draftState
+                val targetConversationId = conversationId
+                val currentText = inputText
+                val orderedAttachmentIds = draft?.attachmentIds.orEmpty()
+                val importingCount = draft?.importingCount ?: 0
+
+                when {
+                    orderedAttachmentIds.isEmpty() && currentText.isBlank() -> {
+                        // Nothing to send; ignore.
+                    }
+
+                    orderedAttachmentIds.isNotEmpty() && importingCount > 0 -> {
+                        Toast.makeText(context, "图片仍在导入中，请稍后再试", Toast.LENGTH_SHORT).show()
+                    }
+
+                    orderedAttachmentIds.isNotEmpty() -> {
+                        onSubmitMediaMessage(targetConversationId, currentText, orderedAttachmentIds)
+                    }
+
+                    else -> {
+                        if (currentText.isNotBlank()) {
+                            val accepted = actionHandler.sendAiMessage(targetConversationId, currentText)
+                            if (accepted) inputText = ""
+                        }
+                    }
                 }
             }
         )
@@ -554,29 +709,89 @@ private fun ConversationTopBar(
 
 @Composable
 private fun ChatMessageRow(
-    message: AiChatMessage,
+    messageWithMedia: MessageWithMedia,
+    allMessages: List<AiChatMessage>,
     isAnalyzing: Boolean,
     isLastMessage: Boolean,
     actionHandler: AiRecordActionHandler
 ) {
+    val message = messageWithMedia.message
     if (message.role == ChatRole.User) {
-        UserMessage(message.text, message.createdAt)
+        UserMessage(
+            text = message.text,
+            createdAt = message.createdAt,
+            media = messageWithMedia.media
+        )
     } else {
         LaunchedEffect(message.id, message.text, message.assistantCards.size) {
             if (message.text.isNotBlank() || message.assistantCards.isNotEmpty()) {
                 actionHandler.markAssistantMessageRendered(message)
             }
         }
+        val isVisionPlaceholder = com.example.domain.ai.isVisionAssistantPlaceholder(message, allMessages)
         Column {
             if (message.text.isNotBlank()) {
                 AiMessage(message.text, message.createdAt)
             } else if ((isAnalyzing || message.text.isBlank()) && isLastMessage && message.assistantCards.isEmpty()) {
-                AiMessageComponent {
-                    TypingIndicator()
+                if (isVisionPlaceholder) {
+                    VisionImageRecognizingIndicator()
+                } else {
+                    AiMessageComponent {
+                        TypingIndicator()
+                    }
                 }
             }
             message.assistantCards.forEach { card ->
                 AssistantCardRenderer(card = card, actionHandler = actionHandler)
+            }
+        }
+    }
+}
+
+
+@Composable
+private fun VisionRetryCard(
+    errorMessage: String,
+    onRetry: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+        shape = RoundedCornerShape(18.dp),
+        color = Color(0xFFFDE8E8),
+        border = BorderStroke(1.dp, Color(0xFFE53E3E).copy(alpha = 0.5f)),
+        shadowElevation = 0.dp
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+        ) {
+            Text(
+                text = errorMessage,
+                color = Color(0xFFE53E3E),
+                fontSize = 13.sp
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable { onRetry() }
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Default.Refresh,
+                    contentDescription = "Retry",
+                    tint = TextPrimary,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.size(8.dp))
+                Text(
+                    text = "重试识别",
+                    color = TextPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium
+                )
             }
         }
     }
@@ -589,11 +804,22 @@ private fun ConversationInputBar(
     inputText: String,
     enabled: Boolean,
     isAnalyzing: Boolean,
+    isSubmitting: Boolean = false,
     inputTestTag: String,
     sendTestTag: String,
     onInputChange: (String) -> Unit,
+    detailState: AiConversationDetailState,
+    isPlusMenuOpen: Boolean,
+    onPlusMenuToggle: (Boolean) -> Unit,
+    onTakePhoto: () -> Unit,
+    onSelectPhotos: () -> Unit,
+    onRemoveAttachment: (String) -> Unit,
+    onRetryAttachment: (String) -> Unit,
     onSubmit: () -> Unit
 ) {
+    val draft = detailState.draftState
+    val isPlusDisabled = !enabled || (draft != null && draft.importingCount > 0)
+
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -601,6 +827,32 @@ private fun ConversationInputBar(
             .navigationBarsPadding()
             .padding(bottom = 8.dp)
     ) {
+        AnimatedVisibility(
+            visible = isPlusMenuOpen,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically()
+        ) {
+            PlusMenuCard(
+                onTakePhoto = onTakePhoto,
+                onSelectPhotos = onSelectPhotos
+            )
+        }
+
+        val showDraftBar = draft != null && (draft.attachmentIds.isNotEmpty() || draft.importingCount > 0)
+        AnimatedVisibility(
+            visible = showDraftBar,
+            enter = fadeIn(),
+            exit = fadeOut()
+        ) {
+            if (draft != null) {
+                AttachmentDraftBar(
+                    draft = draft,
+                    onRemove = onRemoveAttachment,
+                    onRetry = onRetryAttachment
+                )
+            }
+        }
+
         var isFocused by remember { mutableStateOf(false) }
         val imeTargetBottom = WindowInsets.imeAnimationTarget.getBottom(LocalDensity.current)
         val isSeparated = isFocused || (imeTargetBottom > 0) || inputText.isNotEmpty()
@@ -674,6 +926,9 @@ private fun ConversationInputBar(
                         .padding(start = innerGap.coerceAtLeast(0.dp), end = 4.dp, top = 2.dp, bottom = 2.dp),
                     verticalAlignment = Alignment.Bottom
                 ) {
+                    val hasDraftAttachments = draft != null && (draft.attachmentIds.isNotEmpty() || draft.importingCount > 0)
+                    val sendEnabled = (inputText.isNotBlank() || hasDraftAttachments) && enabled && !isSubmitting
+
                     OutlinedTextField(
                         value = inputText,
                         onValueChange = onInputChange,
@@ -698,12 +953,12 @@ private fun ConversationInputBar(
                             .padding(end = 2.dp, bottom = 6.dp)
                             .size(40.dp)
                             .clip(CircleShape)
-                            .background(if (inputText.isNotBlank() && enabled) BrandGreen else BrandGreen.copy(alpha = 0.3f))
-                            .clickable(enabled = inputText.isNotBlank() && enabled) { onSubmit() }
+                            .background(if (sendEnabled) BrandGreen else BrandGreen.copy(alpha = 0.3f))
+                            .clickable(enabled = sendEnabled) { onSubmit() }
                             .testTag(sendTestTag),
                         contentAlignment = Alignment.Center
                     ) {
-                        if (isAnalyzing) {
+                        if (isAnalyzing || isSubmitting) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(20.dp),
                                 strokeWidth = 2.dp,
@@ -721,6 +976,16 @@ private fun ConversationInputBar(
                 }
             }
 
+            val errorMessage = detailState.errorMessage
+            if (!errorMessage.isNullOrBlank()) {
+                Text(
+                    text = errorMessage,
+                    color = MaterialTheme.colorScheme.error,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(start = 72.dp, end = 16.dp, top = 4.dp, bottom = 4.dp)
+                )
+            }
+
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
@@ -733,13 +998,180 @@ private fun ConversationInputBar(
                     },
                 contentAlignment = Alignment.Center
             ) {
-                IconButton(onClick = {}, enabled = false) {
-                    Icon(Icons.Filled.Add, contentDescription = "More", tint = TextSecondary.copy(alpha = 0.5f))
+                IconButton(
+                    onClick = {
+                        if (!isPlusDisabled) {
+                            onPlusMenuToggle(!isPlusMenuOpen)
+                        }
+                    },
+                    enabled = !isPlusDisabled
+                ) {
+                    val angle by androidx.compose.animation.core.animateFloatAsState(targetValue = if (isPlusMenuOpen) 45f else 0f)
+                    Icon(
+                        Icons.Filled.Add,
+                        contentDescription = "More",
+                        tint = if (isPlusDisabled) TextSecondary.copy(alpha = 0.3f) else TextSecondary,
+                        modifier = Modifier.graphicsLayer { rotationZ = angle }
+                    )
                 }
             }
         }
     }
 }
+
+@Composable
+private fun PlusMenuCard(
+    onTakePhoto: () -> Unit,
+    onSelectPhotos: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .fillMaxWidth(0.5f),
+        shape = RoundedCornerShape(18.dp),
+        color = Color(0xFFFAF7F2),
+        border = BorderStroke(1.dp, BorderNormal.copy(alpha = 0.5f)),
+        shadowElevation = 2.dp
+    ) {
+        Column(
+            modifier = Modifier.padding(vertical = 8.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onTakePhoto() }
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Default.CameraAlt,
+                    contentDescription = "Take Photo",
+                    tint = TextSecondary,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.size(12.dp))
+                Text("拍照", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onSelectPhotos() }
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Default.PhotoLibrary,
+                    contentDescription = "Select Photos",
+                    tint = TextSecondary,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.size(12.dp))
+                Text("从照片选择", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AttachmentDraftBar(
+    draft: ConversationAttachmentDraftState,
+    onRemove: (String) -> Unit,
+    onRetry: (String) -> Unit
+) {
+    LazyRow(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        items(
+            items = draft.assets,
+            key = { it.id }
+        ) { asset ->
+            Box(
+                modifier = Modifier
+                    .size(64.dp)
+            ) {
+                when (asset.lifecycleState) {
+                    com.example.domain.model.media.MediaLifecycleState.READY -> {
+                        LocalMediaThumbnail(
+                            thumbnailRelativePath = asset.thumbnailRelativePath,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(RoundedCornerShape(12.dp))
+                        )
+                    }
+                    com.example.domain.model.media.MediaLifecycleState.STAGED -> {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color(0xFFF5F0EA), RoundedCornerShape(12.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(24.dp),
+                                strokeWidth = 2.dp,
+                                color = BrandGreen
+                            )
+                        }
+                    }
+                    com.example.domain.model.media.MediaLifecycleState.FAILED -> {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color(0xFFFDE8E8), RoundedCornerShape(12.dp))
+                                .border(1.dp, Color(0xFFE53E3E), RoundedCornerShape(12.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            IconButton(onClick = { onRetry(asset.id) }) {
+                                Icon(
+                                    Icons.Default.Refresh,
+                                    contentDescription = "Retry",
+                                    tint = Color(0xFFE53E3E)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .offset(x = 4.dp, y = (-4).dp)
+                        .size(20.dp)
+                        .clip(CircleShape)
+                        .background(Color.Black.copy(alpha = 0.6f))
+                        .clickable { onRemove(asset.id) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = "Remove",
+                        tint = Color.White,
+                        modifier = Modifier.size(12.dp)
+                    )
+                }
+            }
+        }
+
+        items(draft.importingCount) {
+            Box(
+                modifier = Modifier
+                    .size(64.dp)
+                    .background(Color(0xFFF5F0EA), RoundedCornerShape(12.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(24.dp),
+                    strokeWidth = 2.dp,
+                    color = BrandGreen
+                )
+            }
+        }
+    }
+}
+
 
 @Composable
 private fun AiMessageComponent(content: @Composable () -> Unit) {
@@ -790,8 +1222,93 @@ private fun TypingIndicator() {
     }
 }
 
+/**
+ * Loading indicator shown while the assistant is recognizing images.
+ *
+ * Displays a low-opacity "识别图片" label with a narrow, low-saturation light beam
+ * sweeping from left to right. No bubble background, no bouncing dots, and no
+ * character displacement. When the system disables animations (reduced motion),
+ * the text is rendered as static semi-transparent text.
+ */
 @Composable
-private fun UserMessage(text: String, createdAt: Long) {
+private fun VisionImageRecognizingIndicator() {
+    val context = LocalContext.current
+    val animationsEnabled = remember(context) {
+        Settings.Global.getFloat(context.contentResolver, Settings.Global.TRANSITION_ANIMATION_SCALE, 1f) > 0f
+    }
+
+    val text = "识别图片"
+    val baseColor = TextSecondary.copy(alpha = 0.45f)
+    val highlightColor = TextPrimary.copy(alpha = 0.78f)
+    val beamColor = Color.White.copy(alpha = 0.55f)
+
+    Box(
+        modifier = Modifier
+            .padding(vertical = 12.dp, horizontal = 4.dp)
+            .semantics(mergeDescendants = true) {
+                contentDescription = "正在识别图片"
+            }
+    ) {
+        Text(
+            text = text,
+            color = baseColor,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Normal,
+            maxLines = 1
+        )
+
+        if (animationsEnabled) {
+            val infiniteTransition = rememberInfiniteTransition(label = "vision_shimmer")
+            val shimmerProgress by infiniteTransition.animateFloat(
+                initialValue = -0.4f,
+                targetValue = 1.4f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(1100, easing = LinearEasing),
+                    repeatMode = RepeatMode.Restart
+                ),
+                label = "vision_shimmer_progress"
+            )
+
+            Text(
+                text = text,
+                color = highlightColor,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Normal,
+                maxLines = 1,
+                modifier = Modifier.drawWithContent {
+                    val beamWidth = size.width * 0.22f
+                    val beamStart = shimmerProgress * (size.width + beamWidth) - beamWidth
+                    clipRect(left = beamStart, right = beamStart + beamWidth) {
+                        this@drawWithContent.drawContent()
+                    }
+                    // Draw a narrow low-saturation light beam overlay for extra shimmer.
+                    val beamCenter = beamStart + beamWidth / 2f
+                    val gradientAlpha = 0.18f
+                    drawRect(
+                        color = beamColor,
+                        topLeft = androidx.compose.ui.geometry.Offset(
+                            beamCenter - beamWidth / 6f,
+                            0f
+                        ),
+                        size = androidx.compose.ui.geometry.Size(
+                            beamWidth / 3f,
+                            size.height
+                        ),
+                        alpha = gradientAlpha
+                    )
+                }
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun UserMessage(
+    text: String,
+    createdAt: Long,
+    media: List<MessageMediaReference> = emptyList()
+) {
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.End
@@ -804,7 +1321,15 @@ private fun UserMessage(text: String, createdAt: Long) {
                 .padding(12.dp)
         ) {
             Column {
-                Text(text, color = Color.White, fontSize = 15.sp)
+                if (media.isNotEmpty()) {
+                    UserMessageMediaGrid(media = media)
+                    if (text.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                }
+                if (text.isNotBlank()) {
+                    Text(text, color = Color.White, fontSize = 15.sp)
+                }
                 if (createdAt > 0) {
                     Text(
                         text = formatTime(createdAt),
@@ -815,6 +1340,105 @@ private fun UserMessage(text: String, createdAt: Long) {
                             .padding(top = 2.dp)
                     )
                 }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun UserMessageMediaGrid(media: List<MessageMediaReference>) {
+    when (media.size) {
+        1 -> UserMessageSingleMedia(media = media.single())
+        2 -> {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.widthIn(max = 260.dp)
+            ) {
+                media.forEach { reference ->
+                    UserMessageMediaItem(
+                        reference = reference,
+                        modifier = Modifier
+                            .weight(1f)
+                            .aspectRatio(1f)
+                    )
+                }
+            }
+        }
+        else -> {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                maxItemsInEachRow = 2,
+                modifier = Modifier.widthIn(max = 260.dp)
+            ) {
+                media.forEach { reference ->
+                    val fraction = if (media.size == 3 || media.size >= 5) 0.48f else 0.48f
+                    UserMessageMediaItem(
+                        reference = reference,
+                        modifier = Modifier
+                            .fillMaxWidth(fraction)
+                            .aspectRatio(1f)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun UserMessageSingleMedia(media: MessageMediaReference) {
+    Box(
+        modifier = Modifier
+            .widthIn(max = 220.dp)
+            .heightIn(max = 220.dp)
+            .aspectRatio(1f)
+    ) {
+        UserMessageMediaItem(reference = media, modifier = Modifier.fillMaxSize())
+    }
+}
+
+@Composable
+private fun UserMessageMediaItem(
+    reference: MessageMediaReference,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0xFF4A7C59)),
+        contentAlignment = Alignment.Center
+    ) {
+        when (reference) {
+            is MessageMediaReference.LocalReady -> {
+                LocalMediaThumbnail(
+                    thumbnailRelativePath = reference.mediaAsset.thumbnailRelativePath,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+            is MessageMediaReference.MissingLocalAsset -> {
+                Text(
+                    text = "图片暂未同步",
+                    color = Color.White.copy(alpha = 0.9f),
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(8.dp)
+                )
+            }
+            is MessageMediaReference.MissingLocalFile -> {
+                Text(
+                    text = "图片不可用",
+                    color = Color.White.copy(alpha = 0.9f),
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(8.dp)
+                )
+            }
+            is MessageMediaReference.InvalidReference -> {
+                Text(
+                    text = "图片引用无效",
+                    color = Color.White.copy(alpha = 0.9f),
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(8.dp)
+                )
             }
         }
     }
