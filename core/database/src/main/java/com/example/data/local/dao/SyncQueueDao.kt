@@ -219,6 +219,14 @@ interface SyncQueueDao {
     @Query("DELETE FROM sync_queue WHERE status = 'DONE' AND updatedAt < :beforeTimestamp")
     suspend fun deleteDoneOlderThan(beforeTimestamp: Long): Int
 
+    /**
+     * Removes all queued business-record sync tasks. Used when local business records
+     * are cleared so that stale pending upserts cannot re-push data that no longer
+     * exists locally. Chat sync tasks are intentionally not affected.
+     */
+    @Query("DELETE FROM sync_queue WHERE entityType IN ('daily_record', 'meal', 'food_entry', 'weight_record')")
+    suspend fun deleteBusinessRecordTasks(): Int
+
     @Query("SELECT MAX(updatedAt) FROM sync_queue")
     suspend fun getLastSyncAttemptAt(): Long?
 

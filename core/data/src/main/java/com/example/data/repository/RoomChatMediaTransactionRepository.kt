@@ -37,9 +37,13 @@ class RoomChatMediaTransactionRepository(
     override suspend fun sendUserMessageWithMedia(
         request: SendUserMessageWithMediaRequest
     ): SendUserMessageWithMediaResult {
+        // Resolve identity (which may perform remote sign-in/refresh over the network)
+        // BEFORE opening the Room write transaction so network latency never blocks
+        // while holding the DB write lock.
+        val identity = identityProvider.currentIdentity()
         return try {
             database.withTransaction {
-                executeTransaction(request)
+                executeTransaction(request, identity)
             }
         } catch (e: CancellationException) {
             throw e
@@ -56,7 +60,8 @@ class RoomChatMediaTransactionRepository(
     }
 
     private suspend fun executeTransaction(
-        request: SendUserMessageWithMediaRequest
+        request: SendUserMessageWithMediaRequest,
+        identity: com.example.domain.identity.AppIdentity
     ): SendUserMessageWithMediaResult {
         val conversation = conversationDao.getConversationById(request.conversationId)
         if (conversation == null) {
@@ -147,7 +152,6 @@ class RoomChatMediaTransactionRepository(
             updatedAt = request.createdAt
         )
 
-        val identity = identityProvider.currentIdentity()
         val refreshedConversation = conversationDao.getConversationById(request.conversationId)
             ?: abort(SendUserMessageWithMediaResult.InvalidConversation("Conversation disappeared during transaction"))
         chatSyncQueueWriter.enqueueConversationUpsert(refreshedConversation, identity)

@@ -732,7 +732,10 @@ private fun ChatMessageRow(
         Column {
             if (message.text.isNotBlank()) {
                 AiMessage(message.text, message.createdAt)
-            } else if ((isAnalyzing || message.text.isBlank()) && isLastMessage && message.assistantCards.isEmpty()) {
+            } else if (isAnalyzing && isLastMessage && message.assistantCards.isEmpty()) {
+                // Only show the typing/recognizing indicator while a turn is actively in
+                // progress. A leftover empty assistant placeholder (e.g. after a stream +
+                // fallback both fail) must not display a permanent spinner.
                 if (isVisionPlaceholder) {
                     VisionImageRecognizingIndicator()
                 } else {

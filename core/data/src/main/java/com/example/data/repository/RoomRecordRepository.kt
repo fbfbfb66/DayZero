@@ -104,6 +104,8 @@ class RoomRecordRepository(
 
     override suspend fun clearAllRecords() {
         dao.deleteAllRecords()
+        // Purge queued business upserts so cleared records are not re-pushed to remote.
+        syncQueueDao?.deleteBusinessRecordTasks()
     }
 
     private suspend fun enqueueRecordUpsert(record: DailyRecord, identity: AppIdentity) {

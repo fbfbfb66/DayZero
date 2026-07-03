@@ -99,6 +99,7 @@ class ChatSyncQueueWriterTest {
         override suspend fun getTasksByStatus(status: String): List<com.example.data.local.entity.SyncQueueEntity> = emptyList()
         override suspend fun resetStuckProcessingTasks(beforeTimestamp: Long, now: Long): Int = 0
         override suspend fun deleteDoneOlderThan(beforeTimestamp: Long): Int = 0
+        override suspend fun deleteBusinessRecordTasks(): Int = 0
         override suspend fun getLastSyncAttemptAt(): Long? = null
         override suspend fun getLastSuccessfulSyncAt(): Long? = null
         override suspend fun getLastSyncFailureAt(): Long? = null

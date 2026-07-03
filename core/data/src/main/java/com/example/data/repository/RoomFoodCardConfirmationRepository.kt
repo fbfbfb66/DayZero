@@ -35,6 +35,10 @@ class RoomFoodCardConfirmationRepository(
         payloadSummary: PayloadSummary?
     ): ConfirmFoodCardResult {
         if (cardId.isBlank()) return ConfirmFoodCardResult.CardNotFound
+        // Resolve identity (which may perform remote sign-in/refresh over the network)
+        // BEFORE opening the Room write transaction, so network latency never blocks
+        // while holding the DB write lock.
+        val identity = identityProvider.currentIdentity()
         return database.withTransaction {
             val target = findTarget(cardId) ?: return@withTransaction ConfirmFoodCardResult.CardNotFound
             val cardState = target.confirmState()
@@ -55,7 +59,6 @@ class RoomFoodCardConfirmationRepository(
                 recordDate = recordDate,
                 payloadSummary = payloadSummary
             )
-            val identity = identityProvider.currentIdentity()
             dailyRecordDao.upsertRecord(dailyRecordMapper.toEntity(updatedRecord, identity.localOwnerId))
             failureInjector?.afterDailyRecordUpsert()
 
@@ -109,6 +112,8 @@ class RoomFoodCardConfirmationRepository(
 
     override suspend fun cancelFoodCard(cardId: String): ConfirmFoodCardResult {
         if (cardId.isBlank()) return ConfirmFoodCardResult.CardNotFound
+        // Resolve identity outside the Room write transaction (see confirmFoodCard).
+        val identity = identityProvider.currentIdentity()
         return database.withTransaction {
             val target = findTarget(cardId) ?: return@withTransaction ConfirmFoodCardResult.CardNotFound
             val cardState = target.confirmState()
@@ -127,7 +132,6 @@ class RoomFoodCardConfirmationRepository(
                 hasUpdatedWeightKg = false,
                 meals = null
             )
-            val identity = identityProvider.currentIdentity()
             val now = System.currentTimeMillis()
             val updatedMessage = target.message.copy(
                 assistantCardsJson = updatedCardsJson,
