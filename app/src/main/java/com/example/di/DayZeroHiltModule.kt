@@ -22,6 +22,7 @@ import com.example.data.repository.RemoteAiAssistantRepository
 import com.example.data.repository.RemoteAiDraftRepository
 import com.example.data.repository.RoomChatMediaTransactionRepository
 import com.example.data.repository.RoomFoodCardConfirmationRepository
+import com.example.data.repository.RoomFoodCardPhotoAssignmentRepository
 import com.example.data.repository.RoomConversationRepository
 import com.example.data.repository.RoomMediaRepository
 import com.example.data.repository.RoomRecordRepository
@@ -54,6 +55,7 @@ import com.example.domain.repository.ChatMediaTransactionRepository
 import com.example.domain.repository.ConversationRepository
 import com.example.domain.repository.FoodCardConfirmationRepository
 import com.example.domain.repository.MediaRepository
+import com.example.domain.repository.FoodCardPhotoAssignmentRepository
 import com.example.domain.repository.RecordRepository
 import com.example.domain.network.NetworkAvailabilityProvider
 import com.example.domain.time.CurrentDateProvider
@@ -259,11 +261,13 @@ object DayZeroHiltModule {
     @Provides
     @Singleton
     fun provideRecordRepository(
+        database: DayZeroDatabase,
         dailyRecordDao: DailyRecordDao,
         syncQueueDao: SyncQueueDao,
         identityProvider: CurrentIdentityProvider
     ): RecordRepository {
         return RoomRecordRepository(
+            database = database,
             dao = dailyRecordDao,
             syncQueueDao = syncQueueDao,
             identityProvider = identityProvider
@@ -316,6 +320,24 @@ object DayZeroHiltModule {
     ): ConfirmFoodCardUseCase {
         return ConfirmFoodCardUseCase(repository)
     }
+
+    @Provides
+    @Singleton
+    fun provideFoodCardPhotoAssignmentRepository(
+        database: DayZeroDatabase,
+        identityProvider: CurrentIdentityProvider,
+        chatSyncQueueWriter: ChatSyncQueueWriter
+    ): FoodCardPhotoAssignmentRepository = RoomFoodCardPhotoAssignmentRepository(
+        database,
+        identityProvider,
+        chatSyncQueueWriter
+    )
+
+    @Provides
+    fun provideUpdateFoodCardPhotoAssignmentsUseCase(
+        repository: FoodCardPhotoAssignmentRepository
+    ): com.example.domain.usecase.UpdateFoodCardPhotoAssignmentsUseCase =
+        com.example.domain.usecase.UpdateFoodCardPhotoAssignmentsUseCase(repository)
 
     @Provides
     @Singleton

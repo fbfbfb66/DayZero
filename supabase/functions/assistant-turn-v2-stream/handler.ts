@@ -5,9 +5,11 @@ import {
 } from "./normalization.ts";
 import {
   buildVisionAwareUserMessage,
+  parseAndValidateAttachments,
   VISION_PROMPT_ADDENDUM,
   VisionValidationError,
 } from "../_shared/assistant_vision.ts";
+import { selectStreamHeaderTimeoutMs } from "../_shared/assistant_upstream_timeout.ts";
 
 const MOONSHOT_API_URL = "https://api.moonshot.cn/v1/chat/completions";
 
@@ -66,7 +68,8 @@ export async function handler(req: Request): Promise<Response> {
       try {
         sendEvent("status", { state: "started" });
         const promptBuildStartedAt = performance.now();
-        const promptVersion = "stream_compact_v4_vision_continuation";
+        const promptVersion =
+          "stream_compact_v7_deterministic_multi_meal_photo_assignment";
         const promptCacheKey = normalizePromptCacheKey(body.promptCacheKey);
         const recentContext = buildRecentContext(body.recentMessages);
         const turnType = typeof body.turnType === "string"
@@ -85,7 +88,13 @@ export async function handler(req: Request): Promise<Response> {
         });
 
         let userMessage;
+        let validatedAttachments;
         try {
+          validatedAttachments = parseAndValidateAttachments(
+            body.attachments,
+            turnType,
+            userText,
+          );
           userMessage = buildVisionAwareUserMessage(
             body.attachments,
             turnType,
@@ -104,83 +113,36 @@ export async function handler(req: Request): Promise<Response> {
         }
         const promptBuiltAt = performance.now();
 
+        const attachmentCount = validatedAttachments.length;
+        const totalDecodedAttachmentBytes = validatedAttachments.reduce(
+          (total, attachment) => total + attachment.decodedByteSize,
+          0,
+        );
+        const selectedStreamHeaderTimeoutMs = selectStreamHeaderTimeoutMs(
+          attachmentCount,
+          totalDecodedAttachmentBytes,
+        );
+        const continuationHasMedia = hasContinuationMediaIds(interactionResult);
+        const hedgedAttemptCount = attachmentCount > 0 || continuationHasMedia ? 3 : 1;
+        const upstreamBudgetMs = attachmentCount > 0
+          ? 35_000
+          : continuationHasMedia
+          ? 20_000
+          : 15_000;
         const kimiRequestStartedAt = performance.now();
-        const abortController = new AbortController();
-        const timeoutId = setTimeout(() => abortController.abort(), 15_000);
-        const kimiResponse = await fetch(MOONSHOT_API_URL, {
-          method: "POST",
-          signal: abortController.signal,
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${moonshotApiKey}`,
-          },
-          body: JSON.stringify({
-            model: "kimi-k2.6",
-            messages: [
-              { role: "system", content: systemPrompt },
-              userMessage,
-            ],
-            response_format: { type: "json_object" },
-            stream: true,
-            prompt_cache_key: promptCacheKey,
-            max_tokens: 1500,
-            temperature: 0.6,
-            thinking: { type: "disabled" },
-          }),
-        }).finally(() => clearTimeout(timeoutId));
-
-        if (!kimiResponse.ok || !kimiResponse.body) {
-          const errorData = await kimiResponse.json().catch(() => ({
-            message: "Unknown error",
-          }));
-          sendEvent("error", {
-            message: errorData.error?.message || errorData.message ||
-              `Kimi HTTP ${kimiResponse.status}`,
-          });
-          controller.close();
-          return;
-        }
-
-        const reader = kimiResponse.body.getReader();
-        const decoder = new TextDecoder();
-        let sseBuffer = "";
-        let fullContent = "";
-        let emittedReplyLength = 0;
-        let firstTokenAt: number | null = null;
-
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-
-          sseBuffer += decoder.decode(value, { stream: true });
-          const lines = sseBuffer.split(/\r?\n/);
-          sseBuffer = lines.pop() ?? "";
-
-          for (const line of lines) {
-            if (!line.startsWith("data:")) continue;
-            const data = line.slice(5).trim();
-            if (!data || data === "[DONE]") continue;
-
-            const parsedChunk = JSON.parse(data);
-            const delta = parsedChunk?.choices?.[0]?.delta?.content;
-            if (typeof delta !== "string" || delta.length === 0) continue;
-
-            if (firstTokenAt == null) firstTokenAt = performance.now();
-            fullContent += delta;
-
-            const replyPrefix = extractStringFieldPrefix(fullContent, [
-              "r",
-              "reply",
-            ]);
-            if (replyPrefix.value.length > emittedReplyLength) {
-              const newText = replyPrefix.value.slice(emittedReplyLength);
-              emittedReplyLength = replyPrefix.value.length;
-              sendEvent("reply_delta", { text: newText });
-            }
-          }
-        }
-
-        const kimiStreamEndedAt = performance.now();
+        const race = await raceMoonshotCandidates({
+          apiKey: moonshotApiKey,
+          systemPrompt,
+          userMessage,
+          promptCacheKey,
+          attemptCount: hedgedAttemptCount,
+          budgetMs: upstreamBudgetMs,
+          onPrimaryDelta: (text) => sendEvent("reply_delta", { text }),
+        });
+        const fullContent = race.content;
+        const firstTokenAt = race.firstTokenAt;
+        const upstreamHeadersAt = race.firstHeadersAt;
+        const kimiStreamEndedAt = race.winnerCompletedAt;
         const kimiJsonParseStartedAt = performance.now();
         const parsed = JSON.parse(fullContent);
         const kimiJsonParsedAt = performance.now();
@@ -229,7 +191,7 @@ export async function handler(req: Request): Promise<Response> {
             continuationContext,
           );
         }
-        normalizeActions(
+        const photoAssignmentDebug = normalizeActions(
           actions,
           body.date ?? "",
           fallbackOriginalText,
@@ -244,6 +206,10 @@ export async function handler(req: Request): Promise<Response> {
         );
         validateActions(actions);
         const protocolValidatedAt = performance.now();
+
+        // These timestamps deliberately contain only phase timings.  They never include reply,
+        // action, media, or request payload content and make the card-latency handoff measurable.
+        const edgeFinalPreparedAt = performance.now();
 
         const debugTiming = {
           traceId,
@@ -263,6 +229,28 @@ export async function handler(req: Request): Promise<Response> {
           outputJsonChars: fullContent.length,
           compactJsonUsed,
           promptCacheKeyUsed: Boolean(promptCacheKey),
+          totalDecodedAttachmentBytes,
+          selectedStreamHeaderTimeoutMs,
+          upstreamBudgetMs,
+          hedgedAttemptCount,
+          winnerAttemptIndex: race.winnerAttemptIndex,
+          cancelledAttemptCount: race.cancelledAttemptCount,
+          provisionalTextReplaced: race.provisionalTextReplaced,
+          upstreamHeadersMs: round(upstreamHeadersAt - kimiRequestStartedAt),
+          upstreamTotalMs: round(kimiStreamEndedAt - kimiRequestStartedAt),
+          lastReplyContentAvailableMs: round(
+            kimiStreamEndedAt - functionStartedAt,
+          ),
+          actionsReadyMs: round(protocolValidatedAt - functionStartedAt),
+          edgeFinalEmittedMs: round(edgeFinalPreparedAt - functionStartedAt),
+          lastReplyToActionsReadyMs: round(
+            protocolValidatedAt - kimiStreamEndedAt,
+          ),
+          actionsReadyToEdgeFinalMs: round(
+            edgeFinalPreparedAt - protocolValidatedAt,
+          ),
+          timeoutStage: "NONE",
+          ...photoAssignmentDebug,
         };
 
         const normalized = {
@@ -276,9 +264,13 @@ export async function handler(req: Request): Promise<Response> {
         sendEvent("done", {});
       } catch (error) {
         sendEvent("error", {
-          message: error instanceof Error
-            ? error.message
-            : "assistant-turn-v2-stream failed",
+          code: error instanceof CandidateRaceError
+            ? error.code
+            : "PROTOCOL_INVALID_FINAL",
+          retryable: error instanceof CandidateRaceError,
+          message: error instanceof CandidateRaceError
+            ? "AI response is temporarily unavailable. Please retry."
+            : "AI response could not be validated.",
         });
       } finally {
         controller.close();
@@ -353,6 +345,11 @@ VISION CONTINUATION CONTRACT (this overrides the earlier no-payload rule only fo
 - For TurnType interaction_result, ContinuationContext is authoritative food context from the prior card. Never request the image again.
 - If CardAction is ask_missing_info_card and Selected is breakfast/lunch/dinner/snack, return show_confirm_card using ContinuationContext and that meal type. Do not repeat the meal question and do not return an empty action list.
 - If CardAction is ask_record_intent_card and Selected is record, use ContinuationContext: return show_confirm_card when mealType is known, otherwise ask_missing_info_card while preserving the same continuation object.
+- Current image inputs include an ImageAttachmentReferences table in the user message. The table lists stable aliases attachment_1, attachment_2, ... in exactly the same order as the following image_url blocks.
+- For image-origin show_confirm_card meals, raw sourceMediaIds should contain only those attachment_N aliases (or the equivalent 1-based index) assigned to the matching meal. The server will convert them to real sourceMediaIds. Never output Base64, URLs, file paths, or invented IDs.
+- Each image may belong to at most one meal. Keep sourceMediaIds order stable. Do not duplicate an attachment across meals.
+- Multi-image meal text is authoritative when explicit: if the user says image/photo 1 is breakfast, image/photo 2 is lunch, image/photo 3 is dinner, or equivalently mentions 一日三餐/早餐/午餐/晚餐 with clear mapping, return one show_confirm_card with separate meals, assign attachment_1/2/3 to breakfast/lunch/dinner respectively, and do not ask which meal to record.
+- When multiple meals are present and you cannot safely map each photo to a meal, omit sourceMediaIds rather than guessing; the client will keep all origin photos available for manual assignment.
 ${VISION_PROMPT_ADDENDUM}`;
 }
 
@@ -541,6 +538,206 @@ function jsonResponse(body: unknown, status = 200): Response {
       "Content-Type": "application/json",
     },
   });
+}
+
+type CandidateRace = {
+  content: string;
+  winnerAttemptIndex: number;
+  winnerCompletedAt: number;
+  firstHeadersAt: number;
+  firstTokenAt: number | null;
+  cancelledAttemptCount: number;
+  provisionalTextReplaced: boolean;
+};
+
+type CandidateResult = {
+  index: number;
+  content: string;
+  completedAt: number;
+  headersAt: number;
+  firstTokenAt: number | null;
+};
+
+class CandidateRaceError extends Error {
+  constructor(readonly code: "UPSTREAM_ALL_ATTEMPTS_FAILED" | "UPSTREAM_BUDGET_EXHAUSTED") {
+    super(code);
+  }
+}
+
+/**
+ * A vision turn has one client-to-Edge request but up to three independent Kimi
+ * candidates. Candidate zero is the only visible stream. A candidate cannot win
+ * until it contains a minimally valid final JSON response; all losers are aborted.
+ */
+async function raceMoonshotCandidates(input: {
+  apiKey: string;
+  systemPrompt: string;
+  userMessage: unknown;
+  promptCacheKey?: string;
+  attemptCount: number;
+  budgetMs: number;
+  onPrimaryDelta: (text: string) => void;
+}): Promise<CandidateRace> {
+  const controllers = Array.from(
+    { length: input.attemptCount },
+    () => new AbortController(),
+  );
+  const startedAt = performance.now();
+  let budgetExhausted = false;
+  const budget = setTimeout(() => {
+    budgetExhausted = true;
+    controllers.forEach((controller) => controller.abort());
+  }, input.budgetMs);
+  let primaryEmittedText = false;
+  try {
+    const pending = new Map<number, Promise<{ index: number; result?: CandidateResult; error?: unknown }>>();
+    for (let index = 0; index < input.attemptCount; index++) {
+      const promise = (index === 0
+        ? readStreamingCandidate(index, controllers[index], input, () => {
+          primaryEmittedText = true;
+        })
+        : readJsonCandidate(index, controllers[index], input)
+      ).then((result) => ({ index, result }), (error) => ({ index, error }));
+      pending.set(index, promise);
+    }
+    while (pending.size > 0) {
+      const settled = await Promise.race([...pending.values()]);
+      pending.delete(settled.index);
+      if (settled.result && isValidCandidateContent(settled.result.content)) {
+        let cancelledAttemptCount = 0;
+        controllers.forEach((controller, index) => {
+          if (index !== settled.index && !controller.signal.aborted) {
+            cancelledAttemptCount++;
+            controller.abort();
+          }
+        });
+        return {
+          content: settled.result.content,
+          winnerAttemptIndex: settled.index,
+          winnerCompletedAt: settled.result.completedAt,
+          firstHeadersAt: settled.result.headersAt,
+          firstTokenAt: settled.result.firstTokenAt,
+          cancelledAttemptCount,
+          provisionalTextReplaced: primaryEmittedText && settled.index !== 0,
+        };
+      }
+    }
+    throw new CandidateRaceError(
+      budgetExhausted ? "UPSTREAM_BUDGET_EXHAUSTED" : "UPSTREAM_ALL_ATTEMPTS_FAILED",
+    );
+  } finally {
+    clearTimeout(budget);
+  }
+}
+
+function candidateRequest(input: {
+  apiKey: string;
+  systemPrompt: string;
+  userMessage: unknown;
+  promptCacheKey?: string;
+  stream: boolean;
+  signal: AbortSignal;
+}): Promise<Response> {
+  return fetch(MOONSHOT_API_URL, {
+    method: "POST",
+    signal: input.signal,
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${input.apiKey}`,
+    },
+    body: JSON.stringify({
+      model: "kimi-k2.6",
+      messages: [{ role: "system", content: input.systemPrompt }, input.userMessage],
+      response_format: { type: "json_object" },
+      stream: input.stream,
+      prompt_cache_key: input.promptCacheKey,
+      max_tokens: 1500,
+      temperature: 0.6,
+      thinking: { type: "disabled" },
+    }),
+  });
+}
+
+async function readStreamingCandidate(
+  index: number,
+  controller: AbortController,
+  input: Parameters<typeof raceMoonshotCandidates>[0],
+  markPrimaryText: () => void,
+): Promise<CandidateResult> {
+  const response = await candidateRequest({ ...input, stream: true, signal: controller.signal });
+  const headersAt = performance.now();
+  if (!response.ok || !response.body) throw new Error(`Kimi HTTP ${response.status}`);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let content = "";
+  let emittedLength = 0;
+  let firstTokenAt: number | null = null;
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line.startsWith("data:")) continue;
+      const data = line.slice(5).trim();
+      if (!data || data === "[DONE]") continue;
+      const delta = JSON.parse(data)?.choices?.[0]?.delta?.content;
+      if (typeof delta !== "string" || delta.length === 0) continue;
+      if (firstTokenAt == null) firstTokenAt = performance.now();
+      content += delta;
+      const prefix = extractStringFieldPrefix(content, ["r", "reply"]);
+      if (prefix.value.length > emittedLength) {
+        input.onPrimaryDelta(prefix.value.slice(emittedLength));
+        markPrimaryText();
+        emittedLength = prefix.value.length;
+      }
+    }
+  }
+  return { index, content, headersAt, firstTokenAt, completedAt: performance.now() };
+}
+
+async function readJsonCandidate(
+  index: number,
+  controller: AbortController,
+  input: Parameters<typeof raceMoonshotCandidates>[0],
+): Promise<CandidateResult> {
+  const response = await candidateRequest({ ...input, stream: false, signal: controller.signal });
+  const headersAt = performance.now();
+  if (!response.ok) throw new Error(`Kimi HTTP ${response.status}`);
+  const json = await response.json();
+  const content = json?.choices?.[0]?.message?.content;
+  if (typeof content !== "string") throw new Error("Kimi returned empty content");
+  return { index, content, headersAt, firstTokenAt: null, completedAt: performance.now() };
+}
+
+export function isValidCandidateContent(content: string): boolean {
+  try {
+    const parsed = JSON.parse(content);
+    const reply = typeof parsed?.r === "string" ? parsed.r : parsed?.reply;
+    const actions = Array.isArray(parsed?.a) ? parsed.a : parsed?.actions ?? [];
+    if (typeof reply !== "string" || reply.trim().length === 0 || !Array.isArray(actions)) return false;
+    // Raw compact actions use t/p and are normalized only after a candidate wins.
+    // Reject structurally unsafe actions here without applying the final validator
+    // before normalization (which would incorrectly discard valid Card candidates).
+    return actions.every((action: unknown) => {
+      if (!action || typeof action !== "object" || Array.isArray(action)) return false;
+      const raw = action as Record<string, unknown>;
+      const type = raw.type ?? raw.t;
+      return typeof type === "string" && type.trim().length > 0;
+    });
+  } catch {
+    return false;
+  }
+}
+
+function hasContinuationMediaIds(interactionResult: unknown): boolean {
+  if (!interactionResult || typeof interactionResult !== "object") return false;
+  const context = (interactionResult as Record<string, unknown>).continuationContext;
+  if (!context || typeof context !== "object") return false;
+  const mediaIds = (context as Record<string, unknown>).mediaIds;
+  return Array.isArray(mediaIds) && mediaIds.length > 0;
 }
 
 function round(value: number): number {

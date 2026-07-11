@@ -189,7 +189,7 @@ class VisionAssistantTurnOrchestratorTest {
     }
 
     @Test
-    fun eligibleStreamFailure_fallsBack_reusesSamePayload() = runTest(mainDispatcherRule.testDispatcher) {
+    fun eligibleStreamFailure_isReturnedWithoutClientFallback() = runTest(mainDispatcherRule.testDispatcher) {
         val prepared = defaultPrepared(text = "look at this", mediaCount = 2)
         prepareRepository.nextResult = Result.success(prepared)
         assistantRepository.streamError = IOException("network timeout")
@@ -198,20 +198,16 @@ class VisionAssistantTurnOrchestratorTest {
         val result = orchestrator.runVisionTurn("conv-1", "user-1")
         advanceUntilIdle()
 
-        assertTrue(result is VisionAssistantTurnResult.Success)
+        assertTrue(result is VisionAssistantTurnResult.Failure)
         assertEquals(1, prepareRepository.prepareCount)
         assertEquals(1, assistantRepository.streamCount)
-        assertEquals(1, assistantRepository.sendCount)
+        assertEquals(0, assistantRepository.sendCount)
         assertEquals(1, releaseRepository.releaseCount)
 
         val streamRequest = assistantRepository.streamRequests.single()
-        val fallbackRequest = assistantRepository.sendRequests.single()
-
         assertEquals(prepared.effectiveAiText, streamRequest.userText)
-        assertEquals(prepared.effectiveAiText, fallbackRequest.userText)
         assertSameAttachments(prepared, streamRequest)
-        assertSameAttachments(prepared, fallbackRequest)
-        assertEquals(streamRequest.traceId, fallbackRequest.traceId)
+        assertTrue(assistantRepository.sendRequests.isEmpty())
         assertEquals(1, prepareRepository.prepareCount)
     }
 
@@ -228,7 +224,7 @@ class VisionAssistantTurnOrchestratorTest {
         assertTrue(result is VisionAssistantTurnResult.Failure)
         assertEquals(1, prepareRepository.prepareCount)
         assertEquals(1, assistantRepository.streamCount)
-        assertEquals(1, assistantRepository.sendCount)
+        assertEquals(0, assistantRepository.sendCount)
         assertEquals(1, releaseRepository.releaseCount)
         assertEquals(listOf(true, false), analyzingChanges)
     }
@@ -273,27 +269,19 @@ class VisionAssistantTurnOrchestratorTest {
     }
 
     @Test
-    fun cancellationDuringFallback_releases_rethrows() = runTest(mainDispatcherRule.testDispatcher) {
+    fun streamFailure_releasesWithoutStartingFallback() = runTest(mainDispatcherRule.testDispatcher) {
         val prepared = defaultPrepared()
         prepareRepository.nextResult = Result.success(prepared)
         assistantRepository.streamError = IOException("timeout")
         assistantRepository.sendSuspends = true
 
         val analyzingChanges = mutableListOf<Boolean>()
-        val job = launch(mainDispatcherRule.testDispatcher) {
-            try {
-                orchestrator.runVisionTurn("conv-1", "user-1") { analyzingChanges.add(it) }
-                fail("Expected CancellationException")
-            } catch (e: CancellationException) {
-                // expected
-            }
-        }
-        advanceUntilIdle()
-        job.cancelAndJoin()
+        val result = orchestrator.runVisionTurn("conv-1", "user-1") { analyzingChanges.add(it) }
 
+        assertTrue(result is VisionAssistantTurnResult.Failure)
         assertEquals(1, prepareRepository.prepareCount)
         assertEquals(1, assistantRepository.streamCount)
-        assertEquals(1, assistantRepository.sendCount)
+        assertEquals(0, assistantRepository.sendCount)
         assertEquals(1, releaseRepository.releaseCount)
         assertTrue(analyzingChanges.last() == false)
     }
@@ -330,7 +318,7 @@ class VisionAssistantTurnOrchestratorTest {
     }
 
     @Test
-    fun eofException_triggersFallback() = runTest(mainDispatcherRule.testDispatcher) {
+    fun eofException_doesNotStartClientFallback() = runTest(mainDispatcherRule.testDispatcher) {
         val prepared = defaultPrepared()
         prepareRepository.nextResult = Result.success(prepared)
         assistantRepository.streamError = EOFException("stream ended unexpectedly")
@@ -338,13 +326,13 @@ class VisionAssistantTurnOrchestratorTest {
 
         val result = orchestrator.runVisionTurn("conv-1", "user-1")
 
-        assertTrue(result is VisionAssistantTurnResult.Success)
+        assertTrue(result is VisionAssistantTurnResult.Failure)
         assertEquals(1, assistantRepository.streamCount)
-        assertEquals(1, assistantRepository.sendCount)
+        assertEquals(0, assistantRepository.sendCount)
     }
 
     @Test
-    fun jsonDataException_triggersFallback() = runTest(mainDispatcherRule.testDispatcher) {
+    fun jsonDataException_doesNotStartClientFallback() = runTest(mainDispatcherRule.testDispatcher) {
         val prepared = defaultPrepared()
         prepareRepository.nextResult = Result.success(prepared)
         assistantRepository.streamError = JsonDataException("malformed SSE payload")
@@ -352,13 +340,13 @@ class VisionAssistantTurnOrchestratorTest {
 
         val result = orchestrator.runVisionTurn("conv-1", "user-1")
 
-        assertTrue(result is VisionAssistantTurnResult.Success)
+        assertTrue(result is VisionAssistantTurnResult.Failure)
         assertEquals(1, assistantRepository.streamCount)
-        assertEquals(1, assistantRepository.sendCount)
+        assertEquals(0, assistantRepository.sendCount)
     }
 
     @Test
-    fun missingFinalProtocolException_triggersFallback() = runTest(mainDispatcherRule.testDispatcher) {
+    fun missingFinalProtocolException_doesNotStartClientFallback() = runTest(mainDispatcherRule.testDispatcher) {
         val prepared = defaultPrepared()
         prepareRepository.nextResult = Result.success(prepared)
         assistantRepository.streamError = ProtocolException("missing final event")
@@ -366,13 +354,13 @@ class VisionAssistantTurnOrchestratorTest {
 
         val result = orchestrator.runVisionTurn("conv-1", "user-1")
 
-        assertTrue(result is VisionAssistantTurnResult.Success)
+        assertTrue(result is VisionAssistantTurnResult.Failure)
         assertEquals(1, assistantRepository.streamCount)
-        assertEquals(1, assistantRepository.sendCount)
+        assertEquals(0, assistantRepository.sendCount)
     }
 
     @Test
-    fun wrappedRecoverableException_triggersFallback() = runTest(mainDispatcherRule.testDispatcher) {
+    fun wrappedRecoverableException_doesNotStartClientFallback() = runTest(mainDispatcherRule.testDispatcher) {
         val prepared = defaultPrepared()
         prepareRepository.nextResult = Result.success(prepared)
         assistantRepository.streamError = RuntimeException(
@@ -383,13 +371,13 @@ class VisionAssistantTurnOrchestratorTest {
 
         val result = orchestrator.runVisionTurn("conv-1", "user-1")
 
-        assertTrue(result is VisionAssistantTurnResult.Success)
+        assertTrue(result is VisionAssistantTurnResult.Failure)
         assertEquals(1, assistantRepository.streamCount)
-        assertEquals(1, assistantRepository.sendCount)
+        assertEquals(0, assistantRepository.sendCount)
     }
 
     @Test
-    fun temporaryHttpException_429_triggersFallback() = runTest(mainDispatcherRule.testDispatcher) {
+    fun temporaryHttpException_429_doesNotStartClientFallback() = runTest(mainDispatcherRule.testDispatcher) {
         val prepared = defaultPrepared()
         prepareRepository.nextResult = Result.success(prepared)
         assistantRepository.streamError = httpException(429)
@@ -397,13 +385,13 @@ class VisionAssistantTurnOrchestratorTest {
 
         val result = orchestrator.runVisionTurn("conv-1", "user-1")
 
-        assertTrue(result is VisionAssistantTurnResult.Success)
+        assertTrue(result is VisionAssistantTurnResult.Failure)
         assertEquals(1, assistantRepository.streamCount)
-        assertEquals(1, assistantRepository.sendCount)
+        assertEquals(0, assistantRepository.sendCount)
     }
 
     @Test
-    fun temporaryHttpException_503_triggersFallback() = runTest(mainDispatcherRule.testDispatcher) {
+    fun temporaryHttpException_503_doesNotStartClientFallback() = runTest(mainDispatcherRule.testDispatcher) {
         val prepared = defaultPrepared()
         prepareRepository.nextResult = Result.success(prepared)
         assistantRepository.streamError = httpException(503)
@@ -411,9 +399,9 @@ class VisionAssistantTurnOrchestratorTest {
 
         val result = orchestrator.runVisionTurn("conv-1", "user-1")
 
-        assertTrue(result is VisionAssistantTurnResult.Success)
+        assertTrue(result is VisionAssistantTurnResult.Failure)
         assertEquals(1, assistantRepository.streamCount)
-        assertEquals(1, assistantRepository.sendCount)
+        assertEquals(0, assistantRepository.sendCount)
     }
 
     @Test
@@ -465,8 +453,8 @@ class VisionAssistantTurnOrchestratorTest {
 
         val result = orchestrator.runVisionTurn("conv-1", "user-1")
 
-        assertTrue(result is VisionAssistantTurnResult.Success)
-        assertEquals(1, assistantRepository.sendCount)
+        assertTrue(result is VisionAssistantTurnResult.Failure)
+        assertEquals(0, assistantRepository.sendCount)
         assertEquals(1, releaseRepository.releaseCount)
     }
 
@@ -511,7 +499,7 @@ class VisionAssistantTurnOrchestratorTest {
     }
 
     @Test
-    fun fallbackSuccess_writesToSamePlaceholder() = runTest(mainDispatcherRule.testDispatcher) {
+    fun streamFailure_keepsSameEmptyRetryablePlaceholder() = runTest(mainDispatcherRule.testDispatcher) {
         val conversationId = "conv-fallback"
         val userMessageId = "user-fallback"
         val assistantMessageId = placeholderId(userMessageId)
@@ -543,9 +531,10 @@ class VisionAssistantTurnOrchestratorTest {
 
         val result = orchestrator.runVisionTurn(conversationId, userMessageId)
 
-        assertTrue(result is VisionAssistantTurnResult.Success)
+        assertTrue(result is VisionAssistantTurnResult.Failure)
         val final = draftRepository.getChatMessageById(assistantMessageId)
-        assertEquals("fallback final", final?.text)
+        assertEquals("", final?.text)
+        assertEquals(0, assistantRepository.sendCount)
     }
 
     @Test

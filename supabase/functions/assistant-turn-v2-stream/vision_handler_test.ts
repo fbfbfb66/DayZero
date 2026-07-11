@@ -1,8 +1,21 @@
 import { assertEquals } from "jsr:@std/assert@1";
-import { handler } from "./handler.ts";
+import { handler, isValidCandidateContent } from "./handler.ts";
 
 const VALID_BASE64_4B = "dGVzdA==";
 const MOONSHOT_API_URL = "https://api.moonshot.cn/v1/chat/completions";
+
+Deno.test("candidate validation accepts compact actions before normalization", () => {
+  assertEquals(
+    isValidCandidateContent(
+      '{"r":"ok","a":[{"t":"show_confirm_card","p":{"meals":[]}}]}',
+    ),
+    true,
+  );
+  assertEquals(
+    isValidCandidateContent('{"r":"ok","a":[null]}'),
+    false,
+  );
+});
 
 type CapturedRequest = {
   url: string | URL | Request;
@@ -24,6 +37,13 @@ function setupMocks() {
       init,
       body: JSON.parse(init?.body as string),
     });
+
+    const requestBody = JSON.parse(init?.body as string);
+    if (requestBody.stream === false) {
+      return Promise.resolve(new Response(JSON.stringify({
+        choices: [{ message: { content: '{"r":"backup","a":[]}' } }],
+      }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    }
 
     const encoder = new TextEncoder();
     const chunks = [
@@ -158,7 +178,7 @@ Deno.test("streaming handler: vision request uses array user content", async () 
     const errorEvents = events.filter((e) => e.event === "error");
     assertEquals(errorEvents.length, 0);
 
-    assertEquals(mocks.captured.length, 1);
+    assertEquals(mocks.captured.length, 3);
     const outbound = mocks.captured[0].body;
     const messages = outbound.messages as Record<string, unknown>[];
     assertEquals(messages[1].role, "user");
@@ -169,6 +189,14 @@ Deno.test("streaming handler: vision request uses array user content", async () 
     assertEquals(
       (content[0] as { text: string }).text.includes("User:look at this"),
       true,
+    );
+    assertEquals(
+      (content[0] as { text: string }).text.includes("attachment_1: image 1"),
+      true,
+    );
+    assertEquals(
+      (content[0] as { text: string }).text.includes("mediaId"),
+      false,
     );
     assertEquals(content[1], {
       type: "image_url",

@@ -10,6 +10,7 @@ import com.example.domain.model.ai.assistant.AiAssistantRequest
 import com.example.domain.model.ai.assistant.AskMissingInfoCardPayload
 import com.example.domain.model.ai.assistant.AskMissingInfoOption
 import com.example.domain.model.ai.assistant.ConfirmCardItem
+import com.example.domain.model.ai.assistant.ConfirmCardMeal
 import com.example.domain.model.ai.assistant.DateMismatchGuardCardPayload
 import com.example.domain.model.ai.assistant.PreparedVisionAttachment
 import com.example.domain.model.ai.assistant.PreparedVisionRequest
@@ -29,6 +30,41 @@ class AiAssistantRemoteMapperTest {
     private val actionMapper = AssistantTurnV2ResponseMapper()
     private val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
     private val chatCardAdapter = moshi.adapter(AiChatCardDto::class.java)
+
+    @Test
+    fun confirmMealSourceMediaIds_preserveMissingNullEmptyAndOrderedArrays() {
+        fun parseMeal(sourceField: String): ConfirmCardMeal {
+            val json = """{"type":"show_confirm_card","id":"c","confirmType":"food_record","title":"t","message":"m","meals":[{"mealType":"lunch","items":[]$sourceField}],"buttons":[]}"""
+            return (mapper.toCardDomain(chatCardAdapter.fromJson(json)!!) as ShowConfirmCardPayload).meals!!.single()
+        }
+        assertNull(parseMeal("").sourceMediaIds)
+        assertNull(parseMeal(",\"sourceMediaIds\":null").sourceMediaIds)
+        assertEquals(emptyList<String>(), parseMeal(",\"sourceMediaIds\":[]").sourceMediaIds)
+        assertEquals(listOf("m2", "m1"), parseMeal(",\"sourceMediaIds\":[\"m2\",\"m1\"]").sourceMediaIds)
+
+        val card = ShowConfirmCardPayload("c", "food_record", "t", "m", null, null, emptyList(),
+            meals = listOf(ConfirmCardMeal("lunch", null, 0, emptyList(), listOf("m2", "m1"))), buttons = emptyList())
+        val json = chatCardAdapter.toJson(mapper.toDto(card))
+        assertTrue(json.contains("\"sourceMediaIds\":[\"m2\",\"m1\"]"))
+        assertTrue(!json.contains("\"sourceMediaIds\":\"["))
+    }
+
+    @Test
+    fun dateGuardPendingOriginalCard_preservesNullEmptyAndOrderedPhotoAssignments() {
+        val variants = listOf<List<String>?>(null, emptyList(), listOf("m2", "m1"))
+        variants.forEachIndexed { index, ids ->
+            val original = ShowConfirmCardPayload(
+                "c$index", "food_record", "t", "m", null, null, emptyList(),
+                meals = listOf(ConfirmCardMeal("lunch", null, 0, emptyList(), ids)), buttons = emptyList()
+            )
+            val guard = DateMismatchGuardCardPayload(
+                "g$index", "conv", LocalDate.of(2026, 7, 6), LocalDate.of(2026, 7, 7),
+                pendingOriginalCard = original
+            )
+            val back = mapper.toCardDomain(mapper.toDto(guard)!!) as DateMismatchGuardCardPayload
+            assertEquals(ids, back.pendingOriginalCard.meals!!.single().sourceMediaIds)
+        }
+    }
 
     @Test
     fun askCardContinuationContext_roundTripsUnknownSafeFields_andLegacyCardRemainsCompatible() {

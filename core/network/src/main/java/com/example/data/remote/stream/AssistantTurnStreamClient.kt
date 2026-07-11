@@ -4,6 +4,7 @@ import com.example.data.remote.SupabaseConfig
 import com.example.data.remote.dto.assistant.AiAssistantRequestDto
 import com.example.data.remote.dto.assistant.AssistantTurnV2ResponseDto
 import com.example.domain.model.ai.assistant.ProtocolException
+import com.example.domain.model.ai.assistant.AiAssistantRemoteException
 import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Moshi
 import kotlinx.coroutines.Dispatchers
@@ -22,11 +23,13 @@ class AssistantTurnStreamClient(
     private val deltaAdapter = moshi.adapter(ReplyDeltaEventDto::class.java)
     private val timingAdapter = moshi.adapter(StreamDebugTimingEventDto::class.java)
     private val errorAdapter = moshi.adapter(StreamErrorEventDto::class.java)
+    private val errorResponseAdapter = moshi.adapter(StreamErrorResponseDto::class.java)
 
     suspend fun stream(
         requestDto: AiAssistantRequestDto,
         onDelta: suspend (String) -> Unit,
-        onTiming: suspend (StreamDebugTimingEventDto) -> Unit
+        onTiming: suspend (StreamDebugTimingEventDto) -> Unit,
+        onFinalReceived: suspend () -> Unit = {}
     ): AssistantTurnV2ResponseDto = withContext(Dispatchers.IO) {
         if (!SupabaseConfig.isConfigured()) {
             throw ProtocolException("Supabase AI runtime config is missing")
@@ -41,7 +44,17 @@ class AssistantTurnStreamClient(
         okHttpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
                 val errorBody = response.body?.string().orEmpty()
-                throw ProtocolException("assistant-turn-v2-stream HTTP ${response.code}: ${errorBody.take(120)}")
+                val parsed = runCatching { errorResponseAdapter.fromJson(errorBody) }.getOrNull()
+                val errorCode = parsed?.errorCode?.takeIf { it.isNotBlank() }
+                    ?: parsed?.code?.takeIf { it.isNotBlank() }
+                    ?: "HTTP_${response.code}"
+                throw AiAssistantRemoteException(
+                    errorCode = errorCode,
+                    retryable = parsed?.retryable ?: (response.code == 408 || response.code == 429 || response.code >= 500),
+                    stage = parsed?.stage,
+                    message = parsed?.message?.takeIf { it.isNotBlank() }
+                        ?: "AI service request failed"
+                )
             }
 
             val source = response.body?.source() ?: throw ProtocolException("协议错误")
@@ -61,12 +74,20 @@ class AssistantTurnStreamClient(
                         timingAdapter.fromJson(data)?.let { onTiming(it) }
                     }
                     "actions", "final" -> {
+                        onFinalReceived()
                         finalResponse = finalAdapter.fromJson(data)
                     }
                     "done" -> Unit
                     "error" -> {
-                        val message = errorAdapter.fromJson(data)?.message ?: "assistant-turn-v2-stream failed"
-                        throw ProtocolException(message)
+                        val error = errorAdapter.fromJson(data)
+                        val message = error?.message ?: "assistant-turn-v2-stream failed"
+                        val code = error?.code?.trim().orEmpty()
+                        throw AiAssistantRemoteException(
+                            errorCode = code.ifEmpty { "STREAM_ERROR" },
+                            retryable = error?.retryable ?: true,
+                            stage = error?.stage,
+                            message = message
+                        )
                     }
                 }
                 eventName = "message"
@@ -109,10 +130,28 @@ data class StreamDebugTimingEventDto(
     val promptChars: Int? = null,
     val outputJsonChars: Int? = null,
     val compactJsonUsed: Boolean? = null,
-    val promptCacheKeyUsed: Boolean? = null
+    val promptCacheKeyUsed: Boolean? = null,
+    val lastReplyContentAvailableMs: Double? = null,
+    val actionsReadyMs: Double? = null,
+    val edgeFinalEmittedMs: Double? = null,
+    val lastReplyToActionsReadyMs: Double? = null,
+    val actionsReadyToEdgeFinalMs: Double? = null
 )
 
 @JsonClass(generateAdapter = true)
 data class StreamErrorEventDto(
-    val message: String? = null
+    val message: String? = null,
+    val code: String? = null,
+    val retryable: Boolean? = null,
+    val stage: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class StreamErrorResponseDto(
+    val message: String? = null,
+    val error: String? = null,
+    val code: String? = null,
+    val errorCode: String? = null,
+    val retryable: Boolean? = null,
+    val stage: String? = null
 )

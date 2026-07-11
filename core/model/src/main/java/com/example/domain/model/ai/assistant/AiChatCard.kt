@@ -148,7 +148,8 @@ data class ConfirmCardMeal(
     val mealType: String,
     val mealLabel: String?,
     val subtotalCalories: Int?,
-    val items: List<ConfirmCardItem>
+    val items: List<ConfirmCardItem>,
+    val sourceMediaIds: List<String>? = null
 )
 
 data class ConfirmCardItem(

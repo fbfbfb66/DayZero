@@ -26,7 +26,11 @@ import com.example.domain.model.ai.assistant.AiAssistantRequest
 import com.example.domain.model.ai.assistant.AiChatCard
 import com.example.domain.model.ai.assistant.DateMismatchGuardCardPayload
 import com.example.domain.model.ai.assistant.ShowConfirmCardPayload
+import com.example.domain.model.ai.assistant.assistantPlaceholderId
+import com.example.domain.model.ai.assistant.normalizeCardPhotoAssignments
 import com.example.domain.model.ai.assistant.ProtocolException
+import com.example.domain.model.ai.assistant.AiAssistantRemoteException
+import com.example.domain.model.ai.assistant.sanitizeFinalAssistantCards
 import com.example.domain.model.ai.assistant.VisionAssistantTurnResult
 import com.example.domain.network.NetworkAvailabilityProvider
 import com.example.domain.repository.ConfirmFoodCardResult
@@ -61,6 +65,9 @@ sealed class UiEvent {
     object RecordConfirmed : UiEvent()
     data class Error(val message: String) : UiEvent()
 }
+
+private fun List<com.example.domain.model.ai.assistant.AiChatCard>.typeOrder(): String =
+    joinToString(">") { it.type.name }.ifBlank { "none" }
 
 @HiltViewModel
 class DayZeroViewModel @Inject constructor(
@@ -292,6 +299,16 @@ class DayZeroViewModel @Inject constructor(
                 when (result) {
                     is VisionAssistantTurnResult.Success -> {
                         Log.d("DayZeroAiV2", "vision assistant turn completed successfully")
+                        _uiState.update { state ->
+                            val failure = state.conversationState as? AiRecordConversationState.Error
+                            if (failure?.conversationId == conversationId &&
+                                failure.userMessageId == userMessageId
+                            ) {
+                                state.copy(conversationState = AiRecordConversationState.Idle)
+                            } else {
+                                state
+                            }
+                        }
                     }
                     is VisionAssistantTurnResult.AlreadyCompleted -> {
                         Log.d(
@@ -304,7 +321,20 @@ class DayZeroViewModel @Inject constructor(
                         _uiEvents.emit(UiEvent.Error("无法启动图片识别：${result.reason}"))
                     }
                     is VisionAssistantTurnResult.Failure -> {
-                        handleAssistantTurnV2Error(result.error)
+                        val message = localizeAssistantError(result.error)
+                        _uiState.update { state ->
+                            state.copy(
+                                isAnalyzing = false,
+                                conversationState = AiRecordConversationState.Error(
+                                    message = message,
+                                    conversationId = conversationId,
+                                    userMessageId = userMessageId,
+                                    assistantMessageId = assistantPlaceholderId(userMessageId),
+                                    retryable = (result.error as? AiAssistantRemoteException)?.retryable ?: true
+                                )
+                            )
+                        }
+                        _uiEvents.emit(UiEvent.Error(message))
                     }
                 }
             } finally {
@@ -408,6 +438,13 @@ class DayZeroViewModel @Inject constructor(
                 val targetConversationId = sourceMessage?.conversationId
                     ?: _uiState.value.activeConversationId
                     ?: error("Cannot resolve conversation for interaction $interactionId")
+                // Authoritative media source for a resulting image-origin confirm card: the persisted
+                // image user message that owns this interaction chain (paired to the clicked card's
+                // assistant message via the deterministic assistantPlaceholderId). Never guessed.
+                val allowedSourceMediaIds = resolveInteractionImageMediaIds(
+                    conversationId = targetConversationId,
+                    clickedCardMessageId = sourceMessage?.id
+                )
                 val continuationContext = sourceMessage?.assistantCards
                     ?.firstOrNull { it.id == interactionId }
                     ?.let { card ->
@@ -455,7 +492,8 @@ class DayZeroViewModel @Inject constructor(
                     request = request,
                     traceId = traceId,
                     targetConversationId = targetConversationId,
-                    fallbackReply = "这是我为你生成的记录。"
+                    fallbackReply = "这是我为你生成的记录。",
+                    allowedSourceMediaIds = allowedSourceMediaIds
                 )
             } catch (e: Exception) {
                 Log.e("DayZeroAiV2", "assistant-turn-v2 interaction_result error", e)
@@ -468,7 +506,8 @@ class DayZeroViewModel @Inject constructor(
         request: AiAssistantRequest,
         traceId: String,
         targetConversationId: String,
-        fallbackReply: String
+        fallbackReply: String,
+        allowedSourceMediaIds: List<String> = emptyList()
     ) {
         val assistantMessage = AiChatMessage(
             conversationId = targetConversationId,
@@ -576,25 +615,25 @@ class DayZeroViewModel @Inject constructor(
                 }
                 streamFinished = true
             }
-            typewriterJob.join()
+            // The final is authoritative.  Do not let a deliberately paced typewriter keep cards
+            // behind the last visible character: finish its remaining text and enter final/card UI
+            // state together.  Room persistence follows this in-memory handoff.
+            typewriterJob.cancelAndJoin()
             
             val endTime = System.currentTimeMillis()
             val duration = if (firstDeltaTime > 0) endTime - firstDeltaTime else 0
             Log.i("DayZeroAiStream", "delta count / accumulated length | count=$deltaCount length=${targetText.length} | conversationId=$targetConversationId | messageId=${assistantMessage.id} | source=$turnSource")
             Log.i("DayZeroAiStream", "stream final received | conversationId=$targetConversationId | messageId=${assistantMessage.id} | source=$turnSource | fallback=false | duration=$duration ms")
             
-            latencyLogger.mark(
-                traceId,
-                "ui_streaming_text_animation_complete",
-                mapOf("textLength" to latestMessage.text.length)
-            )
+            latencyLogger.mark(traceId, "ui_last_visible_text")
             completeAssistantMessage(
                 traceId = traceId,
                 baseMessage = latestMessage,
                 reply = turn.replyText,
                 cards = turn.cards,
                 fallbackReply = fallbackReply,
-                metadata = mapOf("fallbackUsed" to false)
+                metadata = mapOf("fallbackUsed" to false),
+                allowedSourceMediaIds = allowedSourceMediaIds
             )
             Log.d("DayZeroAiV2", "assistant-turn-v2-stream success")
         } catch (streamError: Exception) {
@@ -605,39 +644,13 @@ class DayZeroViewModel @Inject constructor(
                 streamFinished = true
             }
             typewriterJob.cancelAndJoin()
-            Log.w("DayZeroAiV2", "assistant-turn-v2-stream fallback to assistant-turn-v2", streamError)
-            
-            Log.i("DayZeroAiStream", "fallback started + exact reason | reason=$fallbackReason | conversationId=$targetConversationId | messageId=${assistantMessage.id} | source=$turnSource")
-            
+            Log.w("DayZeroAiV2", "assistant-turn-v2-stream failed after Edge candidate race", streamError)
             latencyLogger.mark(
                 traceId,
-                "remote_repository_stream_failed_fallback_start",
+                "remote_repository_stream_failed",
                 mapOf("error" to (streamError.message ?: streamError::class.java.simpleName))
             )
-            val turn = aiAssistantRepository.sendMessage(request)
-            
-            val endTime = System.currentTimeMillis()
-            val duration = if (firstDeltaTime > 0) endTime - firstDeltaTime else 0
-            Log.i("DayZeroAiStream", "fallback completed | conversationId=$targetConversationId | messageId=${assistantMessage.id} | source=$turnSource | fallback=true | duration=$duration ms")
-            
-            latencyLogger.mark(
-                traceId,
-                "remote_repository_send_complete",
-                mapOf(
-                    "cardsCount" to turn.cards.size,
-                    "cardTypes" to turn.cards.joinToString(",") { it.type.name },
-                    "fallbackUsed" to true
-                )
-            )
-            completeAssistantMessage(
-                traceId = traceId,
-                baseMessage = latestMessage,
-                reply = turn.replyText,
-                cards = turn.cards,
-                fallbackReply = fallbackReply,
-                metadata = mapOf("fallbackUsed" to true)
-            )
-            Log.d("DayZeroAiV2", "assistant-turn-v2 fallback success")
+            throw streamError
         }
     }
 
@@ -647,30 +660,71 @@ class DayZeroViewModel @Inject constructor(
         reply: String,
         cards: List<com.example.domain.model.ai.assistant.AiChatCard>,
         fallbackReply: String,
-        metadata: Map<String, Any?>
+        metadata: Map<String, Any?>,
+        allowedSourceMediaIds: List<String> = emptyList()
     ) {
         val finalReply = reply.trim().ifBlank { fallbackReply }
-        val finalCards = cards.withDateMismatchGuardIfNeeded(baseMessage.conversationId)
+        // Assign photo ownership before persisting so an interaction_result confirm card (e.g. a
+        // meal-type answer for an image-only turn) carries the originating image's sourceMediaIds,
+        // matching the vision-turn finalize path. No-op when allowedSourceMediaIds is empty.
+        val normalizedCards = cards.normalizeCardPhotoAssignments(allowedSourceMediaIds)
+        val sanitizedCards = normalizedCards.sanitizeFinalAssistantCards()
+        logFinalCardSanitizer(
+            assistantMessageId = baseMessage.id,
+            before = cards,
+            after = sanitizedCards,
+            fallbackUsed = metadata["fallbackUsed"] == true
+        )
+        val finalCards = sanitizedCards.withDateMismatchGuardIfNeeded(baseMessage.conversationId)
         val finalMessage = baseMessage.copy(
             text = finalReply,
             assistantCards = finalCards
         )
         latencyLogger.bindAssistantMessage(traceId, finalMessage.id, conversationTypeForCards(finalCards))
         latencyLogger.mark(traceId, "actions_received", mapOf("cardsCount" to finalCards.size) + metadata)
-        latencyLogger.mark(traceId, "room_assistant_message_update_final_start")
-        aiDraftRepository.updateChatMessage(finalMessage)
-        finalMessage.conversationId?.let { aiDraftRepository.clearStreamingState(it) }
-        latencyLogger.mark(traceId, "room_assistant_message_update_final_complete")
-
-        _uiState.update {
-            it.copy(
+        // This is the conversation-scoped source of truth for the first Card frame.  It is
+        // intentionally before Room/sync work so a slow database, queue, or thumbnail cannot
+        // gate visibility.  The subsequent Room write remains a single final persistence.
+        _uiState.update { state ->
+            state.copy(
+                chatMessages = state.chatMessages.map { message ->
+                    if (message.id == finalMessage.id) finalMessage else message
+                },
                 isAnalyzing = false,
                 conversationState = AiRecordConversationState.Idle
             )
         }
-        latencyLogger.mark(traceId, "ui_state_assistant_complete")
+        latencyLogger.mark(traceId, "ui_card_state_entered", mapOf("cardsCount" to finalCards.size))
+        latencyLogger.mark(traceId, "room_assistant_message_update_final_start")
+        aiDraftRepository.updateChatMessage(finalMessage)
+        finalMessage.conversationId?.let { aiDraftRepository.clearStreamingState(it) }
+        latencyLogger.mark(traceId, "room_assistant_message_update_final_complete")
         
         Log.i("DayZeroAiStream", "final persisted | conversationId=${finalMessage.conversationId} | messageId=${finalMessage.id}")
+    }
+
+    /**
+     * Resolves the authoritative allowed media ids for a confirm card produced by an
+     * interaction_result turn (e.g. the user answering the meal-type question for an image-only
+     * message). The clicked card lives in the assistant message [clickedCardMessageId]; the
+     * originating image user message is the one whose deterministic [assistantPlaceholderId]
+     * equals that id and that carries persisted `sourceMediaIds`. Returns that message's media ids
+     * in original order, or empty when there is no such image origin (never guesses across the
+     * conversation, never fabricates ids).
+     */
+    private suspend fun resolveInteractionImageMediaIds(
+        conversationId: String,
+        clickedCardMessageId: String?
+    ): List<String> {
+        if (clickedCardMessageId.isNullOrBlank()) return emptyList()
+        return aiDraftRepository.getRecentChatMessages(conversationId, RECENT_MESSAGES_FOR_MEDIA_ORIGIN)
+            .firstOrNull { message ->
+                message.role == ChatRole.User &&
+                    message.sourceMediaIds.isNotEmpty() &&
+                    assistantPlaceholderId(message.id) == clickedCardMessageId
+            }
+            ?.sourceMediaIds
+            .orEmpty()
     }
 
     private suspend fun List<AiChatCard>.withDateMismatchGuardIfNeeded(
@@ -751,11 +805,7 @@ class DayZeroViewModel @Inject constructor(
 
     private suspend fun handleAssistantTurnV2Error(error: Throwable, traceId: String? = null) {
         Log.e("DayZeroAiV2", "assistant-turn-v2 error", error)
-        val errorMessage = if (error is ProtocolException) {
-            error.message ?: "协议错误"
-        } else {
-            error.message ?: "assistant-turn-v2 failed"
-        }
+        val errorMessage = localizeAssistantError(error)
         _uiState.update {
             it.copy(
                 isAnalyzing = false,
@@ -764,6 +814,18 @@ class DayZeroViewModel @Inject constructor(
         }
         _uiEvents.emit(UiEvent.Error(errorMessage))
         latencyLogger.fail(traceId, error)
+    }
+
+    private fun localizeAssistantError(error: Throwable): String = when (error) {
+        is AiAssistantRemoteException -> when (error.errorCode) {
+            "UPSTREAM_BUDGET_EXHAUSTED" -> "AI 处理超时，请重试。"
+            "UPSTREAM_ALL_ATTEMPTS_FAILED" -> "AI 暂时无法完成请求，请重试。"
+            "PROTOCOL_INVALID_FINAL" -> "AI 返回的数据不完整，请重试。"
+            else -> if (error.retryable) "AI 暂时无法回复，请重试。" else "AI 无法处理这条消息。"
+        }
+        is ProtocolException -> error.message ?: "AI 返回的数据无法验证，请重试。"
+        else -> error.message?.takeIf { it.isNotBlank() }
+            ?: "AI 暂时无法回复，请重试。"
     }
 
     fun clearAllData() {
@@ -1066,9 +1128,34 @@ class DayZeroViewModel @Inject constructor(
         )
     }
 
+    fun markAssistantCardFirstComposed(message: AiChatMessage) {
+        // `completeByRenderedMessage` removes the binding, so record the card-first-frame event
+        // before completing the trace through the message-aware logger API.
+        latencyLogger.markCardFirstComposed(message.id)
+        latencyLogger.completeByRenderedMessage(
+            messageId = message.id,
+            fallbackConversationType = conversationTypeForCards(message.assistantCards)
+        )
+    }
+
     private fun conversationTypeForCards(cards: List<com.example.domain.model.ai.assistant.AiChatCard>): String {
         if (cards.isEmpty()) return "ai_reply_chat_only"
         return "ai_reply_with_card:${cards.joinToString(",") { it.type.name }}"
+    }
+
+    private fun logFinalCardSanitizer(
+        assistantMessageId: String,
+        before: List<com.example.domain.model.ai.assistant.AiChatCard>,
+        after: List<com.example.domain.model.ai.assistant.AiChatCard>,
+        fallbackUsed: Boolean
+    ) {
+        Log.i(
+            "DayZeroAiV2",
+            "FINAL_CARD_SANITIZER | assistantMessageId=${assistantMessageId.take(8)} " +
+                "fallbackUsed=$fallbackUsed " +
+                "beforeCount=${before.size} beforeTypes=${before.typeOrder()} " +
+                "afterCount=${after.size} afterTypes=${after.typeOrder()}"
+        )
     }
 
     private fun triggerBackgroundSync(reason: String) {
@@ -1145,6 +1232,9 @@ class DayZeroViewModel @Inject constructor(
 
     private companion object {
         const val TAG_NETWORK_GATE = "DayZeroNetworkGate"
+
+        /** Lookback window for pairing an interaction_result confirm card to its origin image message. */
+        const val RECENT_MESSAGES_FOR_MEDIA_ORIGIN = 30
     }
 
 }

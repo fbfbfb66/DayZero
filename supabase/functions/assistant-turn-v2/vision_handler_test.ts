@@ -117,6 +117,14 @@ Deno.test("fallback handler: vision request uses array user content", async () =
       (content[0] as { text: string }).text.includes("User:look at this"),
       true,
     );
+    assertEquals(
+      (content[0] as { text: string }).text.includes("attachment_1: image 1"),
+      true,
+    );
+    assertEquals(
+      (content[0] as { text: string }).text.includes("mediaId"),
+      false,
+    );
     assertEquals(content[1], {
       type: "image_url",
       image_url: { url: `data:image/jpeg;base64,${VALID_BASE64_4B}` },

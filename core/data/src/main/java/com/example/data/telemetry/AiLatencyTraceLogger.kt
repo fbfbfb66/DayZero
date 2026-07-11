@@ -34,7 +34,7 @@ class AiLatencyTraceLogger(context: Context) {
             traceId = traceId,
             startedWallTimeMs = System.currentTimeMillis(),
             turnType = turnType,
-            userTextPreview = userText.take(80),
+            userTextLength = userText.length,
             triggerActionType = actionType,
             selectedOptionId = selectedOptionId
         )
@@ -74,6 +74,11 @@ class AiLatencyTraceLogger(context: Context) {
         val conversationType = assistantMessageToConversationType.remove(messageId) ?: fallbackConversationType
         mark(traceId, "compose_assistant_message_rendered", mapOf("messageId" to messageId))
         complete(traceId, status = "rendered", conversationType = conversationType)
+    }
+
+    fun markCardFirstComposed(messageId: String) {
+        val traceId = assistantMessageToTrace[messageId] ?: return
+        mark(traceId, "compose_card_first_composed", mapOf("messageId" to messageId))
     }
 
     fun complete(traceId: String?, status: String, conversationType: String, metadata: Map<String, Any?> = emptyMap()) {
@@ -122,7 +127,7 @@ class AiLatencyTraceLogger(context: Context) {
             "conversationType" to conversationType,
             "triggerActionType" to trace.triggerActionType,
             "selectedOptionId" to trace.selectedOptionId,
-            "userTextPreview" to trace.userTextPreview,
+            "userTextLength" to trace.userTextLength,
             "totalMs" to totalMs,
             "events" to trace.events.map {
                 mapOf(
@@ -131,7 +136,8 @@ class AiLatencyTraceLogger(context: Context) {
                     "metadata" to it.metadata
                 )
             },
-            "segments" to segments
+            "segments" to segments,
+            "cardLatencyMs" to cardLatency(trace.events)
         )
 
         outputFile.appendText(toJson(body) + "\n")
@@ -141,6 +147,30 @@ class AiLatencyTraceLogger(context: Context) {
     private fun percent(durationMs: Long, totalMs: Long): Double {
         if (totalMs <= 0L) return 0.0
         return String.format(Locale.US, "%.2f", durationMs * 100.0 / totalMs).toDouble()
+    }
+
+    /**
+     * Safe, content-free client-side portions of the Card timeline. Edge-side portions are
+     * carried in `server_stream_debug_timing_received` metadata because their clock is remote.
+     */
+    private fun cardLatency(events: List<TraceEvent>): Map<String, Long> {
+        fun at(name: String): Long? = events.firstOrNull { it.name == name }?.elapsedMs
+        fun gap(from: String, to: String): Long? {
+            val start = at(from) ?: return null
+            val end = at(to) ?: return null
+            return (end - start).coerceAtLeast(0L)
+        }
+        return buildMap {
+            gap("client_edge_final_received", "ui_card_state_entered")?.let {
+                put("EDGE_FINAL_TO_CLIENT_CARD_STATE_MS", it)
+            }
+            gap("ui_card_state_entered", "compose_card_first_composed")?.let {
+                put("CARD_STATE_TO_FIRST_COMPOSE_MS", it)
+            }
+            gap("ui_last_visible_text", "compose_card_first_composed")?.let {
+                put("LAST_VISIBLE_TEXT_TO_CARD_FIRST_COMPOSE_MS", it)
+            }
+        }
     }
 
     private fun toJson(value: Any?): String {
@@ -176,7 +206,7 @@ class AiLatencyTraceLogger(context: Context) {
         val startedWallTimeMs: Long,
         val startedElapsedMs: Long = SystemClock.elapsedRealtime(),
         val turnType: String,
-        val userTextPreview: String,
+        val userTextLength: Int,
         val triggerActionType: String?,
         val selectedOptionId: String?,
         val events: MutableList<TraceEvent> = mutableListOf(),

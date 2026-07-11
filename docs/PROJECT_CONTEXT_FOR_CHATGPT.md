@@ -4,6 +4,7 @@
 
 - **Major Architecture Refactor Complete (Multi-module + Hilt)**. The project has been split from a single large `:app` module into a maintainable layered module graph: `:app`, `:core:model`, `:core:domain`, `:core:database`, `:core:network`, `:core:data`, `:core:sync`, `:core:ui`, `:feature:ai-record`, `:feature:calendar`, and `:feature:trends`.
 - **Hilt Dependency Injection Enabled**. `DayZeroApplication` is annotated with `@HiltAndroidApp`, `MainActivity` is an `@AndroidEntryPoint`, and `DayZeroViewModel` is now an `@HiltViewModel`. Manual dependency construction in the old `DayZeroViewModel.Factory` has been removed and replaced with constructor injection plus `DayZeroHiltModule`.
+- **Photo Assignment Editor — implemented but was UNBUILT (Phase 4B-1-R reality audit, 2026-07-10)**. User reported "编辑模式还没有" (no photo-edit mode on device). Read-only audit found the *entire* editor is present and correctly wired in source — entry `FoodDraftConfirmCard.kt:292` ("整理照片 · N 张") gated by `AssistantCardRenderer.kt:155-171`; origin resolution via deterministic `assistantPlaceholderId` pairing in `PhotoEditorCardResolver`; full-screen overlay host `AiRecordScreen.kt:602-620` reusing `PhotoViewerOverlay`; ViewModel session + save in `AiRecordViewModel`; atomic persistence in `RoomFoodCardPhotoAssignmentRepository` (preserves unknown JSON/nutrition/weight, supports `date_mismatch_guard_card.pendingOriginalCard`, exactly-once sync enqueue); DI at `DayZeroHiltModule.kt:326/337`. **The first broken link was delivery, not code**: the whole feature was uncommitted working-tree changes (`photoeditor/` dir + UseCase + Repo untracked; wiring files modified-uncommitted; empty git history) never compiled into the installed APK. Fix = a fresh `app-debug.apk` build (no source change; the second-editor rule forbids re-implementing). Verified: all photo-editor module tests + `:app:assembleDebug` PASS; `:app:testDebugUnitTest` = only the 2 whitelisted timezone-baseline failures, no new failures. Status: `READY_FOR_PHOTO_EDITOR_DEVICE_RETEST` (user must install the fresh APK and retest on device; PHASE_4B_COMPLETE / DEVICE_TEST_PASSED NOT declared). No Edge/Prompt/Schema/Room-version/MealEntry/Calendar/cloud-sync change; no Git write, no device install.
 - **Module Ownership Boundaries**:
   - `:app` owns application startup, activity, navigation, and Hilt wiring.
   - `:core:model` owns pure Kotlin domain/UI state models.
@@ -16,7 +17,7 @@
   - `:feature:*` modules own screen-level Compose UI for AI Record, Calendar, and Trends.
 - **ViewModel Scope Reduced**. `DayZeroViewModel` remains the shared app state holder for now, but dependencies are injected and clear/confirm flows have started moving into domain use cases. `ClearLocalDataUseCase` handles local cleanup policy and `ConfirmFoodRecordUseCase` handles `show_confirm_card(food_record)` persistence.
 - **AI Record UI Decoupled**. AI Record screens no longer receive `DayZeroViewModel` directly. They use `AiRecordViewModel` for conversation history/detail state and an `AiRecordActionHandler` bridge for existing send/card/confirm actions. AI business card dispatch stays in `AssistantCardRenderer`, so new card types should be added there instead of expanding the main screen body.
-- **Build Verification After Refactor**: `./gradlew :app:assembleDebug :app:testDebugUnitTest` and `./gradlew test` pass after the module split and Hilt migration.
+- **Current Build Baseline (2026-07-03)**: `:app:assembleDebug` and the targeted core/feature unit-test tasks pass. `:app:testDebugUnitTest` and root `test` exit non-zero only because of the two documented timezone-fragile tests; this is not recorded as an all-green root suite.
 - **Local-First Sync Architecture (Phase 5) implemented**. Established local-first sync foundation for daily records, meals, food entries, and weight records using Room as the local source of truth.
 - **Identity Layer & Fixed Development Auth**: Added `CurrentIdentityProvider` and `CompositeIdentityProvider`. The current Hilt production path wires `SupabaseFixedPasswordIdentityProvider` with `FixedDevelopmentAccountCredentialsProvider`, exposes it as `SupabaseAuthSessionProvider`, and rejects anonymous or unexpected-user stored sessions. `SupabaseAnonymousIdentityProvider` remains in source/history but is not the current Hilt-provided remote identity path.
 - **Supabase Remote Sync Gateway**: Added `SupabaseRemoteSyncGateway` which maps queued `SyncPayload` items and pushes them to Supabase via REST/PostgREST. Gracefully falls back to `NoopRemoteSyncGateway` if Supabase config is missing.
@@ -36,9 +37,12 @@
 - **Phase 4D-1 Complete**: Real database writing for `show_confirm_card` (`food_record`) has been fully implemented on the client side, now supporting multiple meals (`meals[]`) and optional weight recording (`weightKg`).
 - **Draft Card State Persistence Fix**: Resolved a critical bug where manually edited weight/meals on the draft card were reset in the UI once the card status transitioned to "confirmed". Now, the local UI state in `FoodDraftConfirmCard.kt` is keyed on `card.id` instead of `card.state` to prevent resets, and `updateCardState(...)` in `DayZeroViewModel.kt` persists the final user edits directly into the Room database chat history.
 - **Weight Pre-population**: Configured the server-side normalization wrapper `normalizeActions()` to read `todayRecord` from the database and pre-populate `action.payload.weightKg` with the existing weight record in the database if the AI does not output a new weight.
-- **Fast Fallback (15s Timeout)**: Reduced the Deno streaming fetch abort timeout in `assistant-turn-v2-stream` from **35 seconds** to **15 seconds**. If Kimi API hangs or suffers from high TTFT, Deno will abort after 15s, triggering immediate client fallback to the non-streaming `assistant-turn-v2` endpoint, saving 20 seconds of empty waiting time.
+- **Fast Fallback (15s Timeout)** *(Superseded 2026-07-10 by the dynamic upstream timeout — see the v17/v28 bullet below; kept as history)*: Reduced the Deno streaming fetch abort timeout in `assistant-turn-v2-stream` from **35 seconds** to **15 seconds**. If Kimi API hangs or suffers from high TTFT, Deno will abort after 15s, triggering immediate client fallback to the non-streaming `assistant-turn-v2` endpoint, saving 20 seconds of empty waiting time.
 - **Kimi Latency Analysis**: Identified that high latency is 100% caused by Kimi (Moonshot API `kimi-k2.6`) response time and network routing between Supabase (outside China) and Moonshot (inside China). Deno edge function execution overhead is negligible (< 2ms).
-- `assistant-turn-v2-stream` (Version 12) is the current primary AI runtime entrypoint. `assistant-turn-v2` (Version 21) remains as a compatibility fallback.
+- `assistant-turn-v2-stream` (**Version 17**, `stream_compact_v7_deterministic_multi_meal_photo_assignment`) is the current primary AI runtime entrypoint. `assistant-turn-v2` (**Version 28**, `compact_v8_deterministic_multi_meal_photo_assignment`) remains as the compatibility fallback. Both are `ACTIVE` with `verify_jwt=false`. (The Version 15/24 and `_v4/_v5` values elsewhere in this doc are historical.)
+- **Dynamic upstream timeout replaces the old fixed 15s (2026-07-10, deployed v17/v28)**. The streaming Kimi-fetch abort is no longer a flat 15s. It is now `selectStreamHeaderTimeoutMs` = clamp(25s, 15s + 10s/MiB of decoded attachment bytes, 50s) in `supabase/functions/_shared/assistant_upstream_timeout.ts`; text-only requests keep 15s. On abort the stream emits a `{code:"UPSTREAM_HEADER_TIMEOUT", retryable:true}` SSE error; the non-streaming fallback got a matching 50s total-timeout that returns HTTP 504 `UPSTREAM_TOTAL_TIMEOUT`. This fixed the "picture reply is not streamed, it just pops out" symptom, whose root cause was: the old 15s only wrapped connect+upload+Kimi vision prefill up to response headers (not the body), so real multi-image requests were aborted at 15s, converted to a client `ProtocolException` ("协议错误"), and silently routed to the one-shot fallback (no typewriter effect). See DEVELOPMENT_LOG "Vision Runtime Forensic Audit + Dynamic Upstream Timeout Deployment (2026-07-10)".
+- **Vision-latency correction (2026-07-10)**: the dominant multi-image cost is Moonshot's *vision prefill* (pixel-bound), not upload bytes. In streaming mode Moonshot withholds response headers until prefill completes (verified: `upstreamHeadersMs ≈ kimiTimeToFirstTokenMs`). Reducing JPEG *quality* does not help prefill; only reducing *pixels* does. The 2026-07-10 derivative reduction (1280px→1024px, ~36% fewer pixels) helps in normal periods but cannot overcome Moonshot's peak-congestion vision windows (evening ~19:00–23:00 CST), where even a single 500KB/1280px image can exceed 25s to headers. This is an upstream-capacity/temporal condition, not a client-fixable one.
+- **Photo Feature Phase 2B-3 is complete**: `PHASE_2B_3_COMPLETE`. The product/device acceptance baseline is `READY_FOR_PHASE_4A_1`; `P2_6_VERIFIED`, `BASELINE_READY_FOR_PHASE_4A_1`, `READY_FOR_PHASE_4A_1`.
 - Room chat persistence is fully enabled. User messages, AI replies, and cards are fully persistent.
 - **AI history conversation data foundation (Phase 1) complete**. Local Room now has a `conversations` table and every `ai_chat_messages` row belongs to a non-null `conversationId`. The database migration from version 9 to 10 safely groups the old single chat stream by device-local natural day, creates one legacy conversation per day with a stable UUID, and copies existing messages without changing message text, card payload JSON, card state, or ordering.
 - **AI history UI (Phase 3) is implemented locally**. The AI tab now opens an AI home screen with a large first-message input and a Room-backed history list. Conversation detail is a second-level route that renders only the selected `conversationId` messages and hides the app bottom navigation bar.
@@ -104,11 +108,11 @@ Note: Several legacy interfaces/classes still exist in migrated modules for comp
 - Phase 6A deployment status: applied to Supabase project `sybenxmxnwwtlvkeojtj` via MCP on 2026-06-21. Static schema/RLS/grant/index/trigger verification was read back from the project.
 - Phase 6B RLS probe status: two real anonymous authenticated sessions verified A-owned conversation insert/read/update, B isolation from A rows, B message attach rejection with HTTP 403, and unauthenticated rejection with HTTP 401. The separate `user_id` mutation probe and hard DELETE probe were also verified with a local powershell script using the anon key: cross-user updates and hard deletes returned HTTP 403, and management readbacks by User A confirmed the data remained safely owned by User A. The probe row was tombstoned.
 - Phase 6B Push verification status: Real-device verification of Chat Push has been successfully completed. Verified that new conversations and final messages are successfully pushed. No placeholders or `reply_delta` messages are uploaded to Supabase. Card payload is saved as native JSONB without double-encoding. Card status updates reuse the same message ID without duplicate row generation. After app restart and repeated backfill sync execution, remote table rows remain stable (conversations = 3, messages = 16) with no duplicates. Chat push is triggered automatically in the background by the existing SyncScheduler. Phase 6D Chat Pull real-device recovery verification is also complete.
-- Primary Edge Function: `assistant-turn-v2-stream` (Version 12, timeout=15s)
-- Fallback Edge Function: `assistant-turn-v2` (Version 21)
+- Primary Edge Function: `assistant-turn-v2-stream` (**Version 17**, dynamic header timeout clamp(25s, 15s+10s/MiB, 50s); text-only stays 15s)
+- Fallback Edge Function: `assistant-turn-v2` (**Version 28**, 50s total upstream timeout → HTTP 504 `UPSTREAM_TOTAL_TIMEOUT`)
 - Retired Edge Function: `ai-assistant-turn` should stay deleted/unused
 - Remote status: `ACTIVE`
-- Remote current prompt versions: `assistant-turn-v2-stream` uses `stream_compact_v2`; `assistant-turn-v2` uses `compact_v3_timing`.
+- Remote current prompt versions: `assistant-turn-v2-stream` uses `stream_compact_v7_deterministic_multi_meal_photo_assignment`; `assistant-turn-v2` uses `compact_v8_deterministic_multi_meal_photo_assignment`. (v17/v28 only changed timeout logic; prompt version strings are unchanged from v16/v27.)
 - The 2026-06-26 nutrition Edge Function deployment is complete. There is no longer a local-only pending Edge Function prompt version for these two functions.
 - `verify_jwt=false`
 
@@ -1582,7 +1586,7 @@ Independent verification (`Phase 2B-3A-V`). After acceptance, Phase 2B-3B may re
 
 ### Correction and current status
 
-This chapter preserves the F1 audit trail but supersedes its completion claim. The user's real-device evidence confirmed only the Vision “识别图片” shimmer and one-decimal weight formatting from F1. Image-request visual streaming, the fully-offline send gate, and image-origin Card continuation all failed on the device. Current status is **`NEEDS_FURTHER_FIXES` until the user completes the post-install manual device checklist**; local tests, remote HTTP 200, and controlled smokes are not treated as final acceptance.
+This chapter preserves the F1 audit trail but supersedes its completion claim. The user's real-device evidence at that historical checkpoint confirmed only the Vision “识别图片” shimmer and one-decimal weight formatting from F1. Image-request visual streaming, the fully-offline send gate, and image-origin Card continuation all failed on the device. The historical checkpoint status was **`NEEDS_FURTHER_FIXES` pending the post-install manual device checklist**; it is superseded by the 2026-07-03 final device-acceptance closure below.
 
 ### Audited request chains
 
@@ -1638,3 +1642,236 @@ No timeout value was changed. The existing stream `15_000` ms AbortController pr
 * Partial post-install real-device evidence is now available. Read-only logcat captured one single-image turn with 65 true deltas, TTFD 6,517 ms, total stream 10,757 ms, and no fallback. It also captured two offline media attempts with active/internet/validated=true but physicalValidated=false; both stopped at `before_media_transaction`. Read-only Room metadata in the same conversation shows `ask_record_intent_card -> ask_missing_info_card -> show_confirm_card`; both ask Cards persisted one recognized-food context and contained no Base64/data URL/file-path markers. These prove the network/media gate and Card data path, but they do not substitute for the user's visual confirmation.
 * Still pending from the user: offline text and Card visual behavior, draft retention/recovery, confirmation that the 65 deltas were visibly progressive before final, text regression, shimmer, and weight precision.
 * Room remains version 12. No Database Schema, migration, Supabase Database Schema, RLS, Storage, Auth, or secrets were changed. No Base64, image path, full request/response, token, or secret was logged. No git commit/push/reset/clean/checkout/restore was executed.
+
+## Photo Feature Phase 2B-3 Final Device Acceptance & Closure (2026-07-03)
+
+用户于本轮开始前完成并确认真机人工验收。本轮未重新执行真机测试，也未操作真机或模拟器。用户确认：图文、纯图片、多图发送；Kimi Vision 真实识别；图片回复在 final 前分批显示；离线纯文字不进入聊天；离线图片不提交且文字和附件草稿保留；恢复网络后原草稿可正常发送；离线 Card interaction 被阻止；图片餐次选择后生成 `show_confirm_card`；普通文字 streaming 无回归；“识别图片”流光 UI 正常；体重一位小数正常；切换页面不会写错 conversation；无重复用户消息或 assistant 回复。
+
+```text
+PHASE_2B_3_COMPLETE
+READY_FOR_PHASE_4A_1
+```
+
+该验收关闭真实图片 streaming、offline gate、interaction continuation、`show_confirm_card`、流光 UI、体重精度和普通文字回归。F1/F2 的 `VISION_STREAM_TIMEOUT_CONFIRMED_REQUIRES_EDGE_DECISION`、`NEEDS_FURTHER_FIXES` 与 `READY_TO_CLOSE_PHASE_2B_3C` 均为历史状态，已被本节后续真机验收取代，但历史审计记录保留。
+
+当前权威远端状态：`assistant-turn-v2` v24 / `compact_v5_vision_continuation` / `ACTIVE` / `verify_jwt=false`；`assistant-turn-v2-stream` v15 / `stream_compact_v4_vision_continuation` / `ACTIVE` / `verify_jwt=false`。Room version 仍为 12。本轮未调用、修改或部署 Edge Function，未修改 Supabase Database Schema、RLS、Storage、Auth 或 secrets。下一产品阶段为 Phase 4A-1 `PhotoViewerOverlay`；Gate 0 工程准入仍须先完成下述 P2-6 定向修复与复验，本轮没有开始 Phase 4A-1。
+
+## Claude Fable Full-Project Audit — Remediation Backlog
+
+### 已施工，本轮独立验证结论
+
+* P1-1：`RoomFoodCardConfirmationRepository` confirm/cancel 与 `RoomChatMediaTransactionRepository` 均在 Room 写事务前解析 identity；通过。`RemoteAiDraftRepository` 原本已在事务外解析 identity，原审计对该文件的 P1-1 归因属于误报，未修改该文件。
+* P1-2：终态失败时空 assistant placeholder 不再渲染 bubble、typing dots 或“识别图片”；retry 仍复用原 placeholder。空行仍保留在 Room，因此这是用户可见 UI 修复，数据层残留属于后续技术债，不能描述为数据库占位已删除。
+* P1-4：`dayzero_supabase_auth.xml` 已从 legacy full backup、Android 12+ cloud backup 和 device transfer 排除，debug/release merged Manifest 均引用实际 XML。这里只验证“不会通过备份带出”；Token 仍然是明文落盘；EncryptedSharedPreferences/Keystore 尚未实现。
+* P2-6：`deleteBusinessRecordTasks()` 仅覆盖 `daily_record`、`meal`、`food_entry`、`weight_record`，按 DAO 真实语义删除这些 entity 的所有状态（包括 `DONE` / `FAILED_FATAL`），不删除 AI conversation/message 或未来 media queue。但 `clearAllRecords()` 只是相邻调用记录删除与 queue 删除，未处于同一个 Room transaction；失败或 cancellation 不能整体回滚。状态：`AUDIT_FIXES_NEED_TARGETED_REPAIR`。
+
+P2-6 最小修复范围：让 `RoomRecordRepository` 获得同一个 `DayZeroDatabase` 事务边界，在单个 `database.withTransaction` 内执行记录与业务 queue 删除，重新抛出 cancellation，并用真实 in-memory Room 测试覆盖失败回滚、取消回滚、幂等、聊天/媒体/身份保留和 scheduler 不会重新上传已清数据。修复并复验前不得进入 Phase 4A-1。
+
+## Claude Audit Remediation P2-6 — Atomic Business Clear Targeted Repair (2026-07-03)
+
+原缺陷是 `RoomRecordRepository.clearAllRecords()` 顺序调用 `DailyRecordDao.deleteAllRecords()` 与 `SyncQueueDao.deleteBusinessRecordTasks()`，但没有共同 Room transaction。现在 repository 通过 Hilt 接收现有 `DayZeroDatabase`，并在同一个真实 `database.withTransaction { dao.deleteAllRecords(); syncQueueDao.deleteBusinessRecordTasks() }` 中执行两步；domain/UI 未接触数据库实例，`RecordRepository` 接口未改变。`deleteBusinessRecordTasks()` 的 SQL 与范围未改变：仍只删除 `daily_record`、`meal`、`food_entry`、`weight_record` 的全部状态（含 `PENDING`、`PROCESSING`、`FAILED_RETRYABLE`、`WAITING_FOR_AUTH`、`DONE`、`FAILED_FATAL`），保留 AI conversation/message、media 与未知未来 entity queue。
+
+新增 `RoomRecordRepositoryTest` 使用真实 in-memory Room/SQLite：成功路径验证业务记录及四类业务 queue 清空，并保留 conversation、chat message、MediaAsset、AI conversation/message queue、media queue 与未知 queue；SQLite trigger 使第二步 DELETE 失败，验证第一步记录删除回滚且 queue 完整不变；另一 trigger 使第一步 DELETE 失败，验证 queue 不变且异常上抛；连续清理两次验证幂等。身份/auth 与 Pull cursor 不属于本次数据库删除语句且未被修改。没有为了 cancellation 测试引入生产 hook，未进行确定性“两个 DELETE 中间”取消注入；生产路径没有 `catch`/`runCatching`，Room `withTransaction` 的 cancellation/异常会终止并回滚，`CancellationException` 没有吞掉或转换。
+
+并发只读检查发现 clear 与正在运行的 Push 没有共同 coordinator 锁：本地 transaction 只能防止本地半提交，不能撤回 transaction 前已发出的远端请求。清空后 backfill 扫描不到业务记录，不会立即、确定性重建已删 queue；该 in-flight Push 竞态作为独立后续风险记录，本轮不扩大为 Scheduler/Coordinator 重构。明确入口 `clearLocalBusinessRecordsForDebug()` 仅在 debug 生效；另有现存通用本地清理入口，均复用同一 use case/repository transaction。
+
+验证使用 Android Studio JBR。`:core:data:testDebugUnitTest`、`:core:database:testDebugUnitTest`、`:core:sync:testDebugUnitTest`、`:app:assembleDebug` 均 exit 0。`:app:testDebugUnitTest` 为 130 tests / 128 pass / 2 fail，仍仅是 `DayZeroConversationMigrationTest.migrationWithMultipleNaturalDaysCreatesConversationPerDay` 与 `DayZeroConversationPhase2Test.continuingConversationKeepsDateAndTitleButUpdatesPreviewAndActivity`。root `test` 只运行一次，`ROOT_TEST_EXIT_CODE=1`，同两项既知时区失败，无新增失败。
+
+本轮没有修改 Room Schema、database version、Migration、Supabase/Edge/RLS/Storage/Auth、设备数据或 APK；没有执行远端写、设备操作或 Git commit/push/reset/clean/checkout/restore。当前定向施工状态：`P2_6_VERIFIED`；`BASELINE_READY_FOR_PHASE_4A_1`；`READY_FOR_PHASE_4A_1`。
+
+### Claude Audit Remediation P2-6-V — Independent Atomicity Reverification
+
+* **独立验证者**：Gemini
+* **真实 transaction 边界**：`RoomRecordRepository.clearAllRecords()` 在同一个真实的 `database.withTransaction` lambda 内调用 `DailyRecordDao.deleteAllRecords()` 与 `SyncQueueDao.deleteBusinessRecordTasks()`，无异常捕获、异常吞噬或异步操作。
+* **Hilt 数据库实例结论**：Hilt 单例 `DayZeroDatabase` provider 同步为 repository 和 DAO 提供了同一个数据库实例，不存在独立或静态的第二实例。
+* **queue 删除范围**：真实 SQL `DELETE FROM sync_queue WHERE entityType IN ('daily_record', 'meal', 'food_entry', 'weight_record')` 覆盖 4 类业务 queue 的全部状态，严格保留了 `ai_conversation`、`ai_chat_message`、`media_asset` 及其它未知数据。
+* **成功路径**：`RoomRecordRepositoryTest` 使用真实 Room In-Memory 数据库插入业务及非业务 queue 后，验证了业务记录和业务 queue 清空，聊天、媒体数据及非业务 queue 完全保留。
+* **第二步 rollback 证据**：使用真实的 SQLite Trigger 在 queue DELETE 时触发 `RAISE(ABORT)`，证明由于使用了真实事务，第二步失败会引发整体 rollback，业务记录保持原样，异常正确向外抛出。
+* **第一步失败证据**：同理，使用 Trigger 拦截业务记录删除，证明第一步失败时，第二步未执行，queue 保持原样，异常抛出。
+* **幂等证据**：连续两次调用 `clearAllRecords()` 不会抛出异常或删除非业务数据，符合预期。
+* **cancellation 结论**：没有执行确定性的事务中段 cancellation 注入测试；取消安全依据真实 `withTransaction` 语义与无吞取消路径。
+* **in-flight Push 后续风险**：确认 `clearAllRecords` 与 Push 无共同 Coordinator 锁。由于本地 transaction 无法撤回已经发出的远端请求，若 Push 已读出数据，可能引发云端重建；清理入口为 Debug 场景，非正式用户删云端数据承诺，该风险可延后处理。
+* **测试命令**：
+  `.\gradlew.bat :core:data:testDebugUnitTest --tests "*RoomRecordRepositoryTest*" --no-daemon`
+  `.\gradlew.bat :core:data:testDebugUnitTest --no-daemon`
+  `.\gradlew.bat :core:database:testDebugUnitTest --no-daemon`
+  `.\gradlew.bat :core:sync:testDebugUnitTest --no-daemon`
+  `.\gradlew.bat :app:assembleDebug --no-daemon`
+  `.\gradlew.bat :app:testDebugUnitTest --no-daemon`
+  `.\gradlew.bat test --no-daemon`
+* **root exit code**：`ROOT_TEST_EXIT_CODE=1`
+* **既有失败**：仅有 `DayZeroConversationMigrationTest` 与 `DayZeroConversationPhase2Test` 两个既有时区失败。
+* **新增失败**：无新增失败。
+* **未修改范围**：未修改 Schema、远端、设备，未执行 Git 写操作。
+* **当前正式状态**：`BASELINE_READY_FOR_PHASE_4A_1`
+
+### 需要用户单独授权的近期安全任务
+
+* P0-2：删除远端遗留函数 `classify-user-intent`、`generate-checkin-draft`、`generate-daily-summary`。
+* 对保留 Edge Functions 评估 JWT、应用层鉴权和限流。
+
+本轮未删除、修改或部署任何远端函数。
+
+### 正式 Release 阻断项
+
+* P0-1：正式登录、注册和 release 凭据来源。
+* Token 加密存储以及明文 Token 迁移。
+* release 变体鉴权测试。
+* 清理或脱敏 `AiLatencyTraceLogger` 用户文本预览。
+
+### 高容量同步前
+
+* P2-4：业务 Pull 使用 `(updated_at, id)` 复合游标。
+* P2-2：补齐可复现的远端 Migration 历史。
+* P2-3：daily record 日期与状态唯一性策略。
+
+### 性能、兼容与最终发布
+
+* P1-3：全表消息 Flow 收敛。
+* 自然日和时区语义；修复两个时区脆弱测试。
+* P2-1：版本 1～4 数据库升级策略。
+* P2-5：退休链路和死代码清理。
+* 进程死亡后的后台同步恢复策略。
+
+上述未实施项目均为 backlog，不得标记为完成。
+
+## Phase 4A-1: Reusable PhotoViewerOverlay & Chat Image Integration (2026-07-03)
+
+### 目标与实现
+- **Media Path Helper extraction**: Extracted `getSafeMediaFile(context, relativePath, mediaType)` function to enforce sandbox constraints recursively (prevent path traversal like `..`), ensuring path security.
+- **PhotoViewerOverlay component**:
+  - Implemented HorizontalPager with `userScrollEnabled = scale <= 1.05f`.
+  - Supports double-tap to zoom (animating scale to 2.5f centered on tap position, or resetting to 1f).
+  - Supports pinch-to-zoom (1f to 4f) using multitouch centroid logic.
+  - Clamps pan offsets according to target image bounds.
+  - Supports swipe-down to dismiss with alpha backdrop decay when scale <= 1.05f.
+  - Scopes viewer state to `conversationId` so switching conversations dismisses the viewer.
+- **Wired Chat Image Clicks**:
+  - Updated `UserMessage`, `UserMessageMediaGrid`, and `UserMessageSingleMedia` inside `AiRecordScreen.kt` to propagate index and trigger click callbacks on message thumbnail images.
+  - Provided contentDescription semantics on thumbnails to support accessibility and test assertions.
+  - Applied `invisibleToUser()` semantics to background layout Box when the viewer is open to prevent TalkBack focus leakage.
+
+### 测试与验证结果
+- **Unit Tests**:
+  - Created `PhotoViewerOverlayTest.kt` in `:core:ui`.
+  - 100% coverage of transform/clamp/tap logic: index clamping (below 0, above size), scale clamping (1f..4f), double-tap targets, offset boundaries (landscape, portrait, small images, container resize), dismiss threshold checks, and single-trigger callback execution.
+  - Test task: `.\gradlew.bat :core:ui:testDebugUnitTest --no-daemon` — PASS.
+- **Compose Integration Tests**:
+  - Created `PhotoViewerOverlayIntegrationTest.kt` in `:feature:ai-record`.
+  - Covered bubble click opening viewer, correct initial page indexing, indices rendering, close button dismissal, background accessibility invisibility, missing and invalid master path placeholders, and chat messages preservation.
+  - Test task: `.\gradlew.bat :feature:ai-record:testDebugUnitTest --no-daemon` — PASS.
+- **Overall Build**:
+  - `.\gradlew.bat :app:assembleDebug --no-daemon` — BUILD SUCCESSFUL.
+  - Root tests execution exit code was `1` as expected, with exactly the two baseline timezone failures and zero new failures.
+  - Device safe installation script `scripts/install-debug-preserve-data.ps1` reviewed and confirmed to preserve local data safely.
+
+- **Bugfix: Gesture Cancellation Resolution**:
+  - Replaced mutable keys `containerWidth`, `containerHeight`, `scale`, and `isSelected` in `pointerInput` calls with `Unit` inside `PhotoViewerOverlay.kt`.
+  - This prevents `pointerInput` from being torn down and recreated on every scale / dimension update frame, resolving touch cancellation bugs and enabling smooth, continuous double-tap, pinch-to-zoom, and vertical drag actions.
+
+- **Refinement: Swipe Up/Down to Dismiss & Smooth Collapse Animation**:
+  - Supported swiping both UP and DOWN to dismiss the viewer when scale is normal (`scale <= 1.01f`), utilizing absolute values for offset and threshold calculations.
+  - Resolved local float variable capture bugs (`displayedWidth`, `displayedHeight`, `swipeOffsetY`) in long-lived gesture detectors by wrapping them with `rememberUpdatedState`.
+  - Integrated smooth slide-and-shrink collapse exit animations within the overlay scope. When a dismiss gesture is triggered, the overlay animates its scale down to `0.3f`, backdrop alpha to `0f`, and slides off-screen before finally invoking `onDismiss()` to remove the component.
+
+## Photo Feature Phase 4A-1-F1 — Viewer Gesture & Safe Path Targeted Repair (2026-07-03)
+
+- Codex 独立验收中“向上关闭是错误”的判断已由用户产品要求纠正。PhotoViewerOverlay 正式支持向上或向下纵向拖动达到既有距离阈值后关闭；不启用速度甩动关闭。
+- UI 与视觉未修改：保留背景、控制栏、48dp 关闭按钮、序号、缺失占位、Pager 页面、拖动跟手、回位和进入/退出动画。
+- 每个 pointer event 重新计算有效 pointer 数；单指中加入第二指转入 PINCH、清除 dismiss offset 并禁用 Pager。pinch 结束后，scale > 1 的剩余单指进入 PAN；基础 scale 进入 PINCH_END_WAIT，等待新手势。
+- 生产状态机按 touch slop 和纵向 1.2 倍优势分类；横向交给 Pager，纵向才进入双向距离 dismiss；真实 pagerState.isScrollInProgress、pinch 和 scale > 1 均阻断 dismiss。PhotoViewerDismissGate 保证关闭只启动一次。
+- 容器、显示尺寸、scale 或页面变化时使用生产 clampOffset 重新约束 offset；基础 scale 归一到 1 且 offset 归零，页面切换重置 transform。
+- 固定 SafeMediaRoot.MASTER / THUMBNAIL 取代任意字符串根目录。Viewer 只解析 files/media/master/；LocalMediaThumbnail 只解析 files/media/thumbnail/。解析器拒绝空白、绝对路径、URI scheme、.. 段、相似前缀、目录、不存在/不可读文件和 canonical/symlink escape，失败返回 null且不记录路径。
+- PhotoViewerOverlayTest 直接调用生产 PhotoViewerGeometry、PhotoViewerGestureState、PhotoViewerDismissGate 和 resolveSafeMediaFile，覆盖双向阈值、方向、Pager/scale/pinch 阻断、动态第二指、pinch offset 清除、pinch 后 PAN/WAIT、resize clamp、单次关闭、根隔离及非法路径。
+- Gradle：core:ui、feature:ai-record、core:model、core:domain、core:data 聚焦测试以及 app compile/assemble 均通过。app 单测与根级 test 仍仅有两个既有时区失败；ROOT_TEST_EXIT_CODE=1，无新增失败。
+- 既有失败：DayZeroConversationMigrationTest.migrationWithMultipleNaturalDaysCreatesConversationPerDay；DayZeroConversationPhase2Test.continuingConversationKeepsDateAndTitleButUpdatesPreviewAndActivity。
+- 未执行 instrumentation、自动手势、真机数据读取或安全覆盖安装。用户仍需复测动态多点触控、上下双向关闭及横向 Pager 仲裁。
+- 未修改 Room Schema、MediaAsset/contentJson 契约、Supabase、Edge、Card、Calendar 或 PinnedPhotoStrip；未执行 Git 写操作。
+- 当前状态：READY_FOR_PHASE_4A_1_REVERIFICATION。未声明 PHASE_4A_1_VERIFIED 或 READY_FOR_PHASE_4A_2。
+## Status Update (2026-07-07)
+- Created PinnedPhotoStrip UI component.
+
+## Photo Feature Phase 4C — Confirm Card Meal Photos (2026-07-07)
+
+- Phase 4A-2 actual audit: `PinnedPhotoStrip.kt` exposes ordered `PhotoViewerItem` input plus clicked index and uses `LocalMediaThumbnail`, deterministic Polaroid rotation, overlap/count/accessibility, entry animation and missing placeholders. Its original test covered rotation only, and before Phase 4C it was not connected to a production Card.
+- `ConfirmCardMeal.sourceMediaIds: List<String>? = null` is formal: null is historical/not supplied/unassigned, `[]` is explicit no-photo, and non-empty is ordered ownership. Model, action/Card DTOs, both mappers, Room JSON and Date Guard nested cards preserve these states as JSON arrays, never strings.
+- Android Vision finalization validates assignments against the exact persisted user message's prepared attachments. Blank/fictional and Meal/card duplicates are removed; only a sole Meal with 1..6 attachments receives the safe ordered default. Multiple Meals without assignment remain null.
+- Local v24/v15 source audit found no prior meal-level support. Both local fallback/stream normalization and prompts now whitelist attachment IDs, dedupe across Meals, preserve attachment order, apply only the sole-Meal default and prevent text-only invention. No remote call/deploy/secrets change occurred.
+- Added `UpdateFoodCardPhotoAssignmentsUseCase` -> `FoodCardPhotoAssignmentRepository` -> `RoomFoodCardPhotoAssignmentRepository`. It re-reads Room, identifies the exact originating user message through the deterministic reply ID, checks Card/Guard editability, validates assignments while retaining legal IDs whose `MediaAsset` is missing, raw-updates only `meals[].sourceMediaIds`, preserves unknown/nutrition/weight/state fields, updates the same message and enqueues `UPSERT_AI_CHAT_MESSAGE` in one transaction, is idempotent and rolls back/rethrows cancellation. It never writes DailyRecord, MealEntry or business sync.
+- Card merge now protects null-vs-empty semantics, terminal states, unknown fields and cross-Meal uniqueness; the existing active message dirty queue remains the overwrite boundary. Approved Date Guards retain/edit/render nested assignments; cancelled Guards do not render the original.
+- Production `FoodDraftConfirmCard` now shows `PinnedPhotoStrip` only for non-empty Meal assignments. `ObserveConversationMediaUseCase`/`MediaRepository` supplies assets; current-Meal order/index and missing placeholders are retained. Clicks reuse the single `AiConversationScreen` `PhotoViewerOverlay` with current-Meal items and exact index. Viewer visuals and bidirectional dismiss gestures were unchanged.
+- Passed Model/Network/Data/Sync/Core UI/Feature tests, app compile and app assemble. Deno fmt/lint/check/tests passed (17/17). App tests: 130 with only the two known timezone failures. Root test ran once: `ROOT_TEST_EXIT_CODE=1`, only the same two failures, no new failures.
+- Not implemented: Phase 4B, `MealEntry.mediaIds`, DailyRecord photo persistence, Schema/Migration, Calendar, remote Supabase/Edge deployment, media transport changes. No device install/start/user-media access. Status: `READY_FOR_PHASE_4C_DEVICE_TEST` (superseded — see Phase 4C-F1).
+
+## Photo Feature Phase 4C-F1 — Single-Meal Photo Assignment Production Path Fix (2026-07-07)
+
+- The real-device Phase 4C test (new conversation, one photo, single-Meal `show_confirm_card`) showed NO `PinnedPhotoStrip`/placeholder, refuting `READY_FOR_PHASE_4C_DEVICE_TEST`.
+- Root cause: for an image-only message the deployed Edge first returns `ask_missing_info_card` (meal-type question); the confirm card arrives on the follow-up `interaction_result` turn, finalized by `DayZeroViewModel.completeAssistantMessage`, which had no photo-ownership normalization. Only the vision-turn `VisionAssistantTurnOrchestrator` normalized, so `meals[0].sourceMediaIds` stayed null and the strip was skipped. Confirmed via APK dex (vision callsite present but never reached by continuation cards) and by the deployed Edge lacking `normalizeMealSourceMediaIds`.
+- Fix (client only): a single-source `normalizeCardPhotoAssignments(allowed)` in `core:model`; the orchestrator delegates to it, and `completeAssistantMessage` now applies it before persisting. `resolveInteractionImageMediaIds` supplies the authoritative allowed ids from the origin image user message paired to the clicked card's assistant message via the deterministic `assistantPlaceholderId` (no whole-conversation guessing, no fabricated/cross-message ids). Single meal + 1..6 attachments → all origin image ids in order; text-only → no-op. Streaming and fallback share `completeAssistantMessage`, so both are identical.
+- New real production-path tests: `VisionSingleMealPhotoAssignmentProductionPathTest` (real prep chain + orchestrator + Room, streaming + fallback) and `DayZeroInteractionResultPhotoAssignmentTest` (real `DayZeroViewModel` + Room, streaming + fallback) both assert a non-empty `"sourceMediaIds":[…]` in the persisted `assistantCardsJson` and the mapped domain meal; `AiRecordPhase3Test` adds single-meal renders through the real `AssistantCardRenderer` asserting `PinnedPhotoStrip` + "餐次照片，共 1 张" and a missing-asset placeholder.
+- Tests: core Model/Network/Data/UI + feature green; `:app:compileDebugKotlin`/`:app:assembleDebug` green; `:app:testDebugUnitTest` = 134 tests with only the two known timezone failures; root `test` ran once (`ROOT_TEST_EXIT_CODE=1`, same two failures, no new failures).
+- No Edge deploy, no Room Schema change, no `PhotoViewerOverlay` change, no remote/device data mutation, no Git writes. Status: `READY_FOR_PHASE_4C_DEVICE_RETEST`.
+
+## Photo Feature Phase 4C — Device Retest PASSED (2026-07-09)
+
+- User completed the real-device manual retest: new conversation with photos → Vision / interaction_result meal continuation → single-Meal `show_confirm_card` → `PinnedPhotoStrip` rendered with real photos → tapping opens the existing `PhotoViewerOverlay`. Only remaining issue was visual quality (tech-demo look), not functionality.
+- Official status: `PHASE_4C_DEVICE_RETEST_PASSED`, `READY_FOR_PHASE_4B`. This does NOT declare the whole photo feature complete.
+
+## Photo Feature Phase 4B-1 — Strip Visual Redesign + Fan Photo Assignment Editor Core (2026-07-09)
+
+- Old strip's problems (analysis grounded in the old implementation source — the promised device screenshot file was not present in the workspace — plus the user's itemized on-device observations): thick polaroid frame, dirty translucent-black tape, ±3.9° rotation, cramped −16dp overlap, black count pill fighting the meal title, replaying bouncy entry animation, heavy shadow, no dark variants.
+- Redesigned `PinnedPhotoStrip` (core:ui): quiet journal style — 84dp photo on a thin warm mat, rotation 0° single / ≤±1.6° multi (stable per mediaId, damped ends), gentle 0/3dp stair-step, one weak warm tape only (no pin, never stacked), 2dp soft shadow, no entry animation, count+edit merged into one weak trailing text "整理照片 · N 张", no empty shell, soft placeholder for missing photos, dark-theme mat/tape variants, previews for 1/2/4/6/missing/narrow/large-font/dark. Shared `JournalPhotoTile` reused by strip and editor.
+- Edit entry legality (AssistantCardRenderer): only pending cards with non-empty `meals` and a legal 1..6 origin photo set (resolved strictly from the paired origin image user message via `assistantPlaceholderId`); approved Guard exposes the inner card's entry; pending/cancelled Guard and terminal/text-only cards never do; all-unassigned cards get a single weak card-level entry instead of an empty shell.
+- Stale-draft fix: `FoodDraftConfirmCard` draft state now keyed on the full card so a photo-assignment save can never be overwritten by a stale Compose meals copy on the next food edit.
+- Editor: immersive full-screen overlay hosted in `AiConversationScreen` (same pattern as the viewer host), session state in `AiRecordViewModel` (`photoEditor: StateFlow<PhotoAssignmentEditorUiState?>`) so recomposition/rotation/viewer round trips keep the edit state; full process-death restoration is an explicit non-goal. Structure: top bar (取消/整理餐次照片/保存 with spinner+debounce), real-meal pill switcher with per-meal counts, central fan deck of unassigned photos (`FanDeckMath`: ±7°/slot capped ±16°, scale ≥0.72, snap-to-nearest with light haptics, tap-center-to-assign, tap-side-to-center, missing photos keep their slot), restrained completion state, bottom current-meal wall (order-preserving, tap → existing viewer, 移除/移至 with menu). `PhotoAssignmentDraft` is the immutable local snapshot (one photo ≤ one meal, order kept, unassigned allowed); editing writes nothing to Room. Cancel: clean exit or discard confirmation; discard leaves the card untouched. Save: re-validates live card editability (terminal card → safe failure, exit only), calls the existing `UpdateFoodCardPhotoAssignmentsUseCase` exactly once, keeps state + retryable error on failure, propagates cancellation, exits and refreshes the card on success. `ConfirmCardMeal.sourceMediaIds` contract unchanged; persistence path unchanged.
+- Viewer reuse: single `PhotoViewerOverlay` host serves card strips and the editor; gestures/zoom/bidirectional dismiss untouched; accurate initialIndex; edit state survives viewer open/close; no auto-save.
+- Accessibility: ownership per photo, current meal (Tab+selected), unassigned count, remove/move/save/cancel button semantics, missing photos, 1..6 counts; background invisible to TalkBack while editor/viewer open. Haptics on snap/assign/remove only.
+- Tests: strip logic + strip UI (empty/1..6/order/click/missing/count/no-replay/entry legality incl. Guard matrix), `PhotoAssignmentDraft`, `FanDeckMath`, resolver, ViewModel session (open rules, local-only edits, cancel≠save, save-once debounce, failure retains state, terminal-safe, conversation switch closes), editor screen UI (chips/deck/wall/dialog/error/missing assets/viewer index), viewer-reuse host test, and app-level `AiRecordPhotoEditorSavePersistenceTest` (real use case + real Room: raw JSON update, unknown fields kept, chat-sync queue +1, idempotent re-save, zero `daily_records` writes).
+- Verification: core model/ui/data + feature (98 tests) green; `:app:compileDebugKotlin`, `:app:assembleDebug` green; `:app:testDebugUnitTest` 135 tests with only the two known timezone failures; root `test` ran once, `ROOT_TEST_EXIT_CODE=1`, same two failures only, no new failures.
+- Not implemented: `MealEntry.mediaIds`, DailyRecord photo persistence, Calendar photos, Supabase Storage/media transport/cloud restore, Schema/Migration, Edge Functions, AI prompts, multi-device media sync, deletion/GC policy, Phase 5/6, editor-internal camera/gallery adding (future entry space reserved, no dead buttons). No remote or dangerous device operations, no Git writes.
+- Status: `READY_FOR_PHASE_4B_1_DEVICE_TEST` (real-device visual/gesture acceptance remains with the user; PHASE_4B_COMPLETE / READY_FOR_PHASE_5 NOT declared).
+## Photo Feature Phase 4B-1-F1 - Multi-Image Fallback Targeted Fix (2026-07-09)
+
+- Status before fix: `PHASE_4B_1_DEVICE_TEST_FAILED`. Real-device flow was: new image conversation, one user message with 3 photos and explicit breakfast/lunch/dinner text, Vision streaming failed into fallback, final UI showed a `show_confirm_card` with no photos, no photo editor entry, an unnecessary meal question, and an `ask_missing_info_card` visually after the confirm card.
+- Code-evidenced root causes: same-message confirm+ask conflicts were possible because neither Edge normalization nor Android final persistence sanitized final cards; stale-card merge was possible because `RemoteAiDraftRepository.mergeGeneratedCardsWithPersistedUnknowns` appended persisted cards absent from the generated final card set. That merge could append a prior ask after a fallback confirm. No code evidence pointed to UI sorting or automatic post-confirm interaction triggering.
+- Fallback request contract: the Vision path reuses one `PreparedVisionRequest` for stream and fallback with the same requestId, effectiveAiText, 3 attachments, original order, and deterministic assistant placeholder. New production-path tests lock this down.
+- Android fixes: added `sanitizeFinalAssistantCards()` in core model; applied it before Date Guard and Room persistence in `VisionAssistantTurnOrchestrator` and `DayZeroViewModel.completeAssistantMessage`; changed card merge to preserve unknown fields only on matching card ids and never append old absent cards; added safe diagnostics with short ids/card types/counts only.
+- Photo editor rule: pending confirm / approved guard show `整理照片 · N 张` when the deterministic origin image message has a legal 1..6 source id set, even if all `meals[].sourceMediaIds` are null/empty. N is origin-photo count. Text-only, confirmed/cancelled, pending guard, and cancelled guard stay hidden. Initial editor assignments still come from `meals[].sourceMediaIds`; the unassigned pool comes from origin `contentJson.media.sourceMediaIds`; missing assets remain placeholders.
+- Edge local-source fixes, not deployed: fallback promptVersion `compact_v6_multi_meal_card_sanitizer`, streaming promptVersion `stream_compact_v5_multi_meal_card_sanitizer`; both normalizers now sanitize action arrays; meal-hint parsing supports breakfast/lunch/dinner/snack Chinese and English equivalents and is used only to prevent unsafe meal asks / guide prompt context, not to invent foods or photo assignments.
+- Tests added/updated: model sanitizer, real three-photo stream-delta-to-fallback production path with no source ids, same path with legal breakfast/lunch/dinner source ids, stale persisted ask merge regression, real renderer `整理照片 · 3 张`, and Deno confirm/ask conflict plus stream/fallback parity tests.
+- Verification: `:core:model:test`, `:core:network:testDebugUnitTest`, `:core:data:testDebugUnitTest`, `:core:sync:testDebugUnitTest`, `:core:ui:testDebugUnitTest`, `:feature:ai-record:testDebugUnitTest`, `:app:compileDebugKotlin`, and `:app:assembleDebug` passed. `:app:testDebugUnitTest` ran 138 tests with only the two known allowed failures. Root `test` ran once: `ROOT_TEST_EXIT_CODE=1`, same two failures only. Edge-targeted `deno fmt --check`, `deno lint`, `deno check`, and `deno test` passed; root `deno check/test` passed. Root `deno fmt --check` is blocked by existing non-Edge `.idea`, `.vs`, and historical markdown formatting; root `deno lint` is blocked by pre-existing `classify-user-intent/index.ts` lint issues.
+- Deployment: semantic prevention of "explicit three meals still asks meal" requires deploying the local Edge prompt/normalization. Deploy `assistant-turn-v2` first, smoke-test HTTP/protocol/promptVersion/no confirm+ask, then deploy `assistant-turn-v2-stream` and smoke again. Current recorded remote versions: fallback v24, streaming v15; read-only verify and back up remote source/metadata first. Roll back on HTTP/protocol/promptVersion/smoke failure or confirm+ask reappearance.
+- Boundaries observed: no Supabase MCP writes, no remote deploy, no schema/RLS/storage/auth/secrets change, no Room schema/version/migration, no device data operation, no connected instrumentation, no Git commit/push/reset/clean/checkout/restore, and no Phase 5 / Calendar / MealEntry.mediaIds / cloud media sync work.
+- Current final state: `READY_FOR_CONTROLLED_EDGE_DEPLOY`.
+
+## Photo Feature Phase 4B-1-F1-D - Controlled Edge Deployment Attempt (2026-07-09)
+
+- Deployment attempt status: `EDGE_DEPLOYMENT_BLOCKED`.
+- Preflight completed: project docs and git status/diff were reviewed; local Edge source still matches the F1 tested prompt versions (`compact_v6_multi_meal_card_sanitizer`, `stream_compact_v5_multi_meal_card_sanitizer`); targeted Edge `deno fmt --check`, `deno lint`, `deno check`, and `deno test` passed.
+- Remote read-only baseline confirmed through Supabase connector list/get: project `sybenxmxnwwtlvkeojtj`; `assistant-turn-v2` v24 ACTIVE verify_jwt=false ezbr SHA `0dfb403217d38d263e8ad92723609f62e4be8f356e94214144ff435a51e04df2`; `assistant-turn-v2-stream` v15 ACTIVE verify_jwt=false ezbr SHA `d1dfc8a9e21d75d863b4245a8059368564406d6b639269741cf772f0b5619525`.
+- Backup created outside the repo at `%TEMP%\DayZero-Phase4B-1-F1-D-EdgeBackup-20260709-140743`, with metadata, baseline source snapshot, SHA-256 manifest, and recursive SHA `eb80ad9a7eb3e6d4ba6dcea7eee735fc2d761b6dda5f6991f57c0af86e77acd9`.
+- Blocking reason: the current shell has no `supabase` CLI, no npm/npx, and no accessible Supabase access token. The available Supabase connector can list/get/deploy functions, but its deploy API only accepts inline file contents and cannot safely upload the local function directory from disk or provide a reliable symmetric rollback upload path from the backup directory. Because the required deployment gate includes full backup, deploy, smoke, readback, and immediate rollback on failure, deployment was not attempted.
+- No remote deploy, rollback, schema/RLS/storage/auth/secrets change, Room change, Android change, APK install, device operation, or Git write was performed.
+
+## Phase 4B-1-F2-D2 - MCP-Native Edge Deployment Result (2026-07-09)
+
+- Final status: `EDGE_DEPLOYMENT_ROLLED_BACK`.
+- Fully bypassed terminal source output/copying: Supabase MCP get snapshots -> in-memory Git-diff replay -> deploy -> list/get readback. Fallback v24 and streaming v15 returned files/metadata were retained as rollback inputs.
+- Fallback candidate: 4 files, `source/index.ts`, `verify_jwt=false`, `compact_v7_multi_meal_photo_identity`, 50,863 UTF-8 bytes, candidate manifest SHA `cc72bbf012614dccb2323b8ef5ce5c294e40b6ba914ec4dcf724225a8f6e9d83`.
+- Fallback deployed v24 -> v25. Readback was ACTIVE, `verify_jwt=false`, exact filenames/UTF-8 lengths/SHA-256/prompt, and matching bundle SHA `3158dfd49a25c701de4dcafe2711aafe6ca188db0775da1a528be7b5b58f9c4d`; UTF-8 round-trip, import closure, no U+FFFD/NUL/truncation, and 87 targeted Deno tests passed.
+- Smoke: text-only was HTTP 200; generated-JPEG single image was HTTP 200 with one confirm and the whitelisted breakfast assignment. All 3 explicit 3-image meal attempts failed the required one-confirm/no-ask/correct-three-assignment gate; the third was HTTP 200 but had zero confirm cards. No response body, Base64, or full media ID was logged.
+- Fallback was immediately rolled back from the in-memory v24 MCP files, creating v26. Readback was ACTIVE, `verify_jwt=false`, exact v24 source bytes, restored `compact_v5_vision_continuation`, v7 absent, no U+FFFD/NUL. Rollback bundle SHA: `9c90e67f616e6a8d5609e88e9b37b63567ad22c03c98a5e31057c3f03a9999a9`.
+- Streaming was not deployed and remains v15 ACTIVE, `verify_jwt=false`, `stream_compact_v4_vision_continuation`. Its unwritten candidate was 4 files / `source/index.ts` / `stream_compact_v6_multi_meal_photo_identity` / 54,524 UTF-8 bytes / SHA `b1e62ecf0c8dc09e743961cc4b8bfcb19ca8588388e19397c4735fb23eb3c8dc`.
+- Unchanged: Android, Schema/RLS/Storage/Auth/Secrets, timeout, device actions, and all Git operations. Device-retest readiness is not declared.
+
+## Phase 4B-1-F3 - Deterministic Explicit Multi-Meal Photo Assignment (2026-07-09)
+
+- Final status: `READY_FOR_MULTI_MEAL_PHOTO_DEVICE_RETEST`.
+- F2-D2 diagnosis (safe fields only): attempt 1 `HTTP=NOT_RETAINED`, raw/normalized card and meal counts `NOT_RETAINED`, final assignments `NOT_RETAINED`, ask types `NOT_RETAINED`; the result aggregation itself stopped on a null meal array, so classification is H (diagnostic artifact incomplete), not photo-identity failure. Attempt 2 `HTTP=NO_HTTP_RESPONSE`, all raw/normalized counts `NOT_RETAINED`, classification H (synthetic-image/request failure before a safe response artifact). Attempt 3 `HTTP=200`, raw action/confirm/meal/photo-reference counts `0`, normalized confirm/meal/final assignment counts `0`, ask types `[]`; classification A `MODEL_DID_NOT_RETURN_CONFIRM_CARD`, not photo assignment failure. Connector logs retained no trace-correlated payload structure.
+- New shared pure helper `explicit_photo_meal_assignment.ts` parses explicit ordered photo-to-meal statements (Chinese first/second/third, Arabic `1..6`, image/photo variants, count-matched Chinese respectively/in-order lists, and English first/second/third). It rejects out-of-range indexes, conflicts, vague wording, and count-mismatched lists. Explicit user mappings override model aliases, remove the mapped image from other Meals, add it to one unique canonical Meal in attachment order, leave duplicate/missing Meals unassigned, and never creates a Meal, food, or confirm card.
+- Fallback and streaming normalizers both invoke that same production helper after valid confirm-card Meal normalization. Legal model references remain for unmapped images. New safe debugTiming counts contain only attachment/card/meal/reference counts, assignment counts, unmatched count, and path enum; they never contain media IDs, text, images, URLs, or Base64.
+- Local verification: targeted `deno fmt --check`, `deno lint`, `deno check`, and 94 Deno tests passed. This includes parser syntax/conflict/ambiguity coverage, explicit-over-model precedence, duplicate/missing Meal safety, no-confirm safety, fallback/stream parity, sanitizer compatibility, text-only, and interaction-result attachment checks.
+- Deployment was MCP-native only: get snapshots -> in-memory diff application -> deploy -> list/get readback. No terminal source transfer. Fallback v26 -> v27, ACTIVE, `verify_jwt=false`, prompt `compact_v8_deterministic_multi_meal_photo_assignment`, readback file content exactly matched the 5-file candidate and deploy/readback bundle SHA `2d636f83b1c1bd3e08b9a7bda5fa9fab0d6d9d321309ba9657c85ccbca25a51e`.
+- Fallback smoke used valid generated JPEGs and Android-equivalent DTO field omission (only userText/date/turnType/ordered attachments; no null fields or promptCacheKey). Text-only and single-image calls were HTTP 200. Explicit three-meal call was HTTP 200 with one confirm, breakfast/lunch/dinner Meals, no ask card, `explicitPhotoHintCount=3`, deterministic=3, final=3, and one whitelisted source photo per Meal.
+- Streaming v15 -> v16, ACTIVE, `verify_jwt=false`, prompt `stream_compact_v7_deterministic_multi_meal_photo_assignment`, with exact 5-file content readback and bundle SHA `f3e1d322a4eadcc3821d8abab8d77f67b7ec80b135e83e7af27f385e08dd76ab`. Text, single-image, and explicit three-image SSE calls passed; multi-image event order was status -> reply_delta* -> final -> debug_timing -> done, final was exactly once, no error/ask, and the three safe assignment counters were all 3.
+- No rollback occurred in F3. Unchanged: Android auto-assignment, Schema/RLS/Storage/Auth/Secrets, Room, timeout, device operations, and Git operations.

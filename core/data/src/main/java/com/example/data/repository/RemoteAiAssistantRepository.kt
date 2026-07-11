@@ -62,9 +62,17 @@ class RemoteAiAssistantRepository(
                         "promptChars" to timing.promptChars,
                         "outputJsonChars" to timing.outputJsonChars,
                         "compactJsonUsed" to timing.compactJsonUsed,
-                        "promptCacheKeyUsed" to timing.promptCacheKeyUsed
+                        "promptCacheKeyUsed" to timing.promptCacheKeyUsed,
+                        "lastReplyContentAvailableMs" to timing.lastReplyContentAvailableMs,
+                        "actionsReadyMs" to timing.actionsReadyMs,
+                        "edgeFinalEmittedMs" to timing.edgeFinalEmittedMs,
+                        "lastReplyToActionsReadyMs" to timing.lastReplyToActionsReadyMs,
+                        "actionsReadyToEdgeFinalMs" to timing.actionsReadyToEdgeFinalMs
                     )
                 )
+            },
+            onFinalReceived = {
+                latencyLogger?.mark(request.traceId, "client_edge_final_received")
             }
         )
         latencyLogger?.mark(
@@ -81,7 +89,7 @@ class RemoteAiAssistantRepository(
     override suspend fun sendMessage(request: AiAssistantRequest): AiAssistantTurn {
         Log.d(
             "AssistantTurnV2",
-            "sendMessage start: userText='${request.userText.take(50)}', date=${request.date}, recentMessagesCount=${request.recentMessages.size}"
+            "sendMessage start: userTextLength=${request.userText.length}, date=${request.date}, recentMessagesCount=${request.recentMessages.size}"
         )
 
         latencyLogger?.mark(request.traceId, "repository_dto_map_start")

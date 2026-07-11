@@ -112,6 +112,20 @@ class ChatMessageCardMergePolicyTest {
         assertTrue(policy.semanticallyEqual("""{"b":2,"a":1}""", """{"a":1,"b":2}"""))
     }
 
+    @Test
+    fun photoAssignments_nullCannotEraseExplicit_emptyCanClear_andCrossMealDuplicatesAreRemoved() {
+        val local = """[{"type":"show_confirm_card","id":"c","state":"pending","meals":[{"sourceMediaIds":["a","b"]},{"sourceMediaIds":["c"]}]}]"""
+        val remoteNull = """[{"type":"show_confirm_card","id":"c","state":"pending","meals":[{"sourceMediaIds":null},{"sourceMediaIds":["b","c"]}]}]"""
+        val mergedNull = JSONArray(policy.mergeAssistantCards("m", local, remoteNull, true)).getJSONObject(0).getJSONArray("meals")
+        assertEquals(listOf("a", "b"), mergedNull.getJSONObject(0).getJSONArray("sourceMediaIds").strings())
+        assertEquals(listOf("c"), mergedNull.getJSONObject(1).getJSONArray("sourceMediaIds").strings())
+
+        val remoteEmpty = """[{"type":"show_confirm_card","id":"c","state":"pending","meals":[{"sourceMediaIds":[]},{"sourceMediaIds":["a","c"]}]}]"""
+        val mergedEmpty = JSONArray(policy.mergeAssistantCards("m", local, remoteEmpty, true)).getJSONObject(0).getJSONArray("meals")
+        assertEquals(emptyList<String>(), mergedEmpty.getJSONObject(0).getJSONArray("sourceMediaIds").strings())
+        assertEquals(listOf("a", "c"), mergedEmpty.getJSONObject(1).getJSONArray("sourceMediaIds").strings())
+    }
+
     private fun mergeShowState(local: String, remote: String): String {
         val merged = policy.mergeAssistantCards(
             "m1",
@@ -137,3 +151,5 @@ class ChatMessageCardMergePolicyTest {
             .let { JSONArray().put(it).toString() }
     }
 }
+
+private fun JSONArray.strings(): List<String> = (0 until length()).map { getString(it) }

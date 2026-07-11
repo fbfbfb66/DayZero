@@ -145,7 +145,45 @@ class ChatMessageCardMergePolicy {
         if (winningState != STATE_PENDING && merged.has("resolved")) {
             merged.put("resolved", true)
         }
+        mergePhotoAssignments(merged, local, remote, preferRemoteSnapshot)
         return merged
+    }
+
+    private fun mergePhotoAssignments(
+        merged: JSONObject,
+        local: JSONObject,
+        remote: JSONObject,
+        preferRemoteSnapshot: Boolean
+    ) {
+        val mergedMeals = merged.optJSONArray("meals") ?: return
+        val localMeals = local.optJSONArray("meals")
+        val remoteMeals = remote.optJSONArray("meals")
+        val claimed = mutableSetOf<String>()
+        for (index in 0 until mergedMeals.length()) {
+            val meal = mergedMeals.optJSONObject(index) ?: continue
+            val localMeal = localMeals?.optJSONObject(index)
+            val remoteMeal = remoteMeals?.optJSONObject(index)
+            val localExplicit = localMeal?.takeIf {
+                it.has("sourceMediaIds") && !it.isNull("sourceMediaIds")
+            }?.optJSONArray("sourceMediaIds")
+            val remoteExplicit = remoteMeal?.takeIf {
+                it.has("sourceMediaIds") && !it.isNull("sourceMediaIds")
+            }?.optJSONArray("sourceMediaIds")
+            val selected = when {
+                preferRemoteSnapshot && remoteExplicit != null -> remoteExplicit
+                localExplicit != null -> localExplicit
+                remoteExplicit != null -> remoteExplicit
+                else -> null
+            }
+            if (selected != null) {
+                val normalized = JSONArray()
+                for (mediaIndex in 0 until selected.length()) {
+                    val id = selected.optString(mediaIndex).trim()
+                    if (id.isNotEmpty() && claimed.add(id)) normalized.put(id)
+                }
+                meal.put("sourceMediaIds", normalized)
+            }
+        }
     }
 
     private fun mergeDateMismatchGuardCard(

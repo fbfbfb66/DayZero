@@ -1,5 +1,6 @@
 package com.example.data.repository
 
+import android.util.Log
 import androidx.room.withTransaction
 import com.example.data.local.database.DayZeroDatabase
 import com.example.data.local.entity.ConversationEntity
@@ -23,6 +24,8 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.UUID
+import org.json.JSONArray
+import org.json.JSONObject
 
 class RemoteAiDraftRepository(
     private val apiService: AiDraftApiService,
@@ -199,7 +202,19 @@ class RemoteAiDraftRepository(
             ?: chatDao.getMessageById(message.id)?.conversationId
             ?: ensureCurrentConversation(message).id
         val messageWithConversation = message.copy(conversationId = conversationId)
-        val messageEntity = chatMapper.toEntity(messageWithConversation, conversationId)
+        var messageEntity = chatMapper.toEntity(messageWithConversation, conversationId)
+        val persistedBeforeUpdate = chatDao.getMessageById(message.id)
+        val mergedCardsJson = mergeGeneratedCardsWithPersistedUnknowns(
+            generatedRaw = messageEntity.assistantCardsJson,
+            persistedRaw = persistedBeforeUpdate?.assistantCardsJson
+        )
+        logCardMerge(
+            messageId = message.id,
+            generatedRaw = messageEntity.assistantCardsJson,
+            persistedRaw = persistedBeforeUpdate?.assistantCardsJson,
+            mergedRaw = mergedCardsJson
+        )
+        messageEntity = messageEntity.copy(assistantCardsJson = mergedCardsJson)
         val identity = identityProvider.currentIdentity()
         val updatedAt = System.currentTimeMillis()
         database.withTransaction {
@@ -221,6 +236,82 @@ class RemoteAiDraftRepository(
                 chatSyncQueueWriter?.enqueueMessageUpsert(updatedEntity, identity)
             }
         }
+    }
+
+    private fun mergeGeneratedCardsWithPersistedUnknowns(
+        generatedRaw: String?,
+        persistedRaw: String?
+    ): String? {
+        if (generatedRaw == null) return persistedRaw
+        if (persistedRaw == null) return generatedRaw
+        return runCatching {
+            val generated = JSONArray(generatedRaw)
+            val persisted = JSONArray(persistedRaw)
+            val persistedById = (0 until persisted.length()).mapNotNull { index ->
+                persisted.optJSONObject(index)?.let { card ->
+                    card.optString("id").takeIf(String::isNotBlank)?.let { it to card }
+                }
+            }.toMap()
+            for (index in 0 until generated.length()) {
+                val card = generated.optJSONObject(index) ?: continue
+                val id = card.optString("id")
+                persistedById[id]?.let { mergeMissingJson(card, it) }
+            }
+            generated.toString()
+        }.getOrElse { generatedRaw }
+    }
+
+    private fun logCardMerge(
+        messageId: String,
+        generatedRaw: String?,
+        persistedRaw: String?,
+        mergedRaw: String?
+    ) {
+        Log.i(
+            "RemoteAiDraftRepository",
+            "CARD_PERSIST_MERGE | messageId=${messageId.take(8)} " +
+                "persistedTypes=${cardTypeOrder(persistedRaw)} " +
+                "generatedTypes=${cardTypeOrder(generatedRaw)} " +
+                "mergedTypes=${cardTypeOrder(mergedRaw)}"
+        )
+    }
+
+    private fun cardTypeOrder(raw: String?): String {
+        if (raw.isNullOrBlank()) return "none"
+        return runCatching {
+            val array = JSONArray(raw)
+            (0 until array.length())
+                .mapNotNull { index -> array.optJSONObject(index)?.optString("type")?.takeIf(String::isNotBlank) }
+                .joinToString(">")
+                .ifBlank { "none" }
+        }.getOrDefault("invalid")
+    }
+
+    private fun mergeMissingJson(primary: JSONObject, fallback: JSONObject) {
+        fallback.keys().forEach { key ->
+            if (!primary.has(key)) {
+                primary.put(key, cloneJsonValue(fallback.get(key)))
+            } else {
+                mergeNestedJson(primary.get(key), fallback.get(key))
+            }
+        }
+    }
+
+    private fun mergeNestedJson(primary: Any, fallback: Any) {
+        when {
+            primary is JSONObject && fallback is JSONObject -> mergeMissingJson(primary, fallback)
+            primary is JSONArray && fallback is JSONArray -> {
+                for (index in 0 until minOf(primary.length(), fallback.length())) {
+                    mergeNestedJson(primary.get(index), fallback.get(index))
+                }
+            }
+        }
+    }
+
+    private fun cloneJsonValue(value: Any): Any = when (value) {
+        is JSONObject -> JSONObject(value.toString())
+        is JSONArray -> JSONArray(value.toString())
+        else -> value
     }
 
     override suspend fun clearChatMessages() {

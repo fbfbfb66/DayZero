@@ -320,6 +320,14 @@ class AiRecordPhase2ATest {
             sendUserMessageWithMediaUseCase = sendUserMessageWithMediaUseCase,
             currentIdentityProvider = currentIdentityProvider,
             networkAvailabilityProvider = com.example.domain.network.NetworkAvailabilityProvider { true },
+            updateFoodCardPhotoAssignmentsUseCase = com.example.domain.usecase.UpdateFoodCardPhotoAssignmentsUseCase(
+                object : com.example.domain.repository.FoodCardPhotoAssignmentRepository {
+                    override suspend fun updatePhotoAssignments(
+                        cardId: String,
+                        assignments: List<com.example.domain.repository.MealPhotoAssignment>
+                    ) = com.example.domain.repository.UpdateFoodCardPhotoAssignmentsResult.Unchanged
+                }
+            ),
             savedStateHandle = savedStateHandle
         )
     }

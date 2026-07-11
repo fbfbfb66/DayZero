@@ -1,6 +1,7 @@
 import { assertEquals, assertThrows } from "jsr:@std/assert@1";
 import {
   applyVisionContentToCurrentUserMessage,
+  buildAttachmentIdentityPrompt,
   buildKimiUserContent,
   buildVisionAwareUserMessage,
   calculateDecodedBase64Size,
@@ -320,7 +321,12 @@ Deno.test("buildKimiUserContent: one text part and one image part", () => {
     [makeVisionAttachment("m1", VALID_BASE64_4B, 4)],
   );
   assertEquals(content.length, 2);
-  assertEquals(content[0], { type: "text", text: "look at this" });
+  const text = (content[0] as { type: "text"; text: string }).text;
+  assertEquals(content[0].type, "text");
+  assertEquals(text.includes("ImageAttachmentReferences:"), true);
+  assertEquals(text.includes("attachment_1: image 1"), true);
+  assertEquals(text.includes("m1"), false);
+  assertEquals(text.endsWith("look at this"), true);
   assertEquals(content[1], {
     type: "image_url",
     image_url: { url: `data:image/jpeg;base64,${VALID_BASE64_4B}` },
@@ -334,7 +340,10 @@ Deno.test("buildKimiUserContent: six image parts preserve order", () => {
   );
   const content = buildKimiUserContent("look", attachments);
   assertEquals(content.length, 7);
-  assertEquals(content[0], { type: "text", text: "look" });
+  const text = (content[0] as { type: "text"; text: string }).text;
+  assertEquals(text.includes("attachment_1: image 1"), true);
+  assertEquals(text.includes("attachment_6: image 6"), true);
+  assertEquals(text.endsWith("look"), true);
   for (let i = 0; i < 6; i++) {
     assertEquals(content[i + 1].type, "image_url");
     assertEquals(
@@ -342,6 +351,17 @@ Deno.test("buildKimiUserContent: six image parts preserve order", () => {
       `data:image/jpeg;base64,${VALID_BASE64_4B}`,
     );
   }
+});
+
+Deno.test("buildAttachmentIdentityPrompt: exposes aliases but not media ids", () => {
+  const prompt = buildAttachmentIdentityPrompt([
+    makeVisionAttachment("media-secret-1", VALID_BASE64_4B, 4),
+    makeVisionAttachment("media-secret-2", VALID_BASE64_4B, 4),
+  ]);
+  assertEquals(prompt.includes("attachment_1: image 1"), true);
+  assertEquals(prompt.includes("attachment_2: image 2"), true);
+  assertEquals(prompt.includes("media-secret"), false);
+  assertEquals(prompt.includes("base64"), false);
 });
 
 Deno.test("buildKimiUserContent: throws without attachments", () => {
@@ -396,10 +416,11 @@ Deno.test("buildVisionAwareUserMessage: vision returns array content", () => {
     "full prompt text",
   );
   assertEquals(Array.isArray(message.content), true);
-  assertEquals((message.content as unknown[])[0], {
-    type: "text",
-    text: "full prompt text",
-  });
+  const firstPart = (message.content as { type: string; text: string }[])[0];
+  assertEquals(firstPart.type, "text");
+  assertEquals(firstPart.text.includes("attachment_1: image 1"), true);
+  assertEquals(firstPart.text.endsWith("full prompt text"), true);
+  assertEquals(firstPart.text.includes("m1"), false);
 });
 
 Deno.test("buildVisionAwareUserMessage: interaction_result with attachments throws", () => {

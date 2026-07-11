@@ -10,10 +10,12 @@ import com.example.domain.model.ai.assistant.AiAssistantRequest
 import com.example.domain.model.ai.assistant.AiAssistantTurn
 import com.example.domain.model.ai.assistant.AiChatCard
 import com.example.domain.model.ai.assistant.DateMismatchGuardCardPayload
+import com.example.domain.model.ai.assistant.normalizeCardPhotoAssignments
 import com.example.domain.model.ai.assistant.PreparedVisionRequest
 import com.example.domain.model.ai.assistant.ProtocolException
 import com.example.domain.model.ai.assistant.ShowConfirmCardPayload
 import com.example.domain.model.ai.assistant.assistantPlaceholderId
+import com.example.domain.model.ai.assistant.sanitizeFinalAssistantCards
 import com.example.domain.model.ai.assistant.VisionAssistantTurnResult
 import com.example.domain.model.ai.assistant.VisionPreparationFailure
 import com.example.domain.repository.AiAssistantRepository
@@ -294,22 +296,11 @@ open class VisionAssistantTurnOrchestrator(
                     streamError = streamError
                 )
 
-                // Clear transient streaming partials before fallback final arrives.
+                // Edge now owns the bounded, parallel candidate race. Starting another
+                // full client-side request here would turn one failed turn into a 25s + 50s
+                // serial wait and duplicate image uploads.
                 aiDraftRepository.clearStreamingState(targetConversationId)
-
-                val fallbackTurn = aiAssistantRepository.sendMessage(request)
-                latencyLogger.mark(
-                    traceId,
-                    "vision_fallback_complete",
-                    mapOf("cardsCount" to fallbackTurn.cards.size)
-                )
-                logFallbackCompleted(
-                    requestId = requestId,
-                    conversationId = targetConversationId,
-                    userMessageId = targetUserMessageId,
-                    assistantMessageId = targetAssistantMessageId
-                )
-                fallbackTurn to true
+                throw streamError
             }
 
             finalizeAssistantMessage(
@@ -317,6 +308,7 @@ open class VisionAssistantTurnOrchestrator(
                 conversationId = targetConversationId,
                 assistantMessageId = targetAssistantMessageId,
                 turn = turn,
+                allowedSourceMediaIds = prepared.attachments.map { it.mediaId },
                 fallbackUsed = fallbackUsed
             )
             logSuccess(
@@ -444,10 +436,19 @@ open class VisionAssistantTurnOrchestrator(
         conversationId: String,
         assistantMessageId: String,
         turn: AiAssistantTurn,
+        allowedSourceMediaIds: List<String>,
         fallbackUsed: Boolean
     ) {
         val finalReply = turn.replyText.trim()
-        val finalCards = turn.cards.withDateMismatchGuardIfNeeded(conversationId)
+        val normalizedCards = turn.cards.normalizeCardPhotoAssignments(allowedSourceMediaIds)
+        val sanitizedCards = normalizedCards.sanitizeFinalAssistantCards()
+        logFinalCardSanitizer(
+            assistantMessageId = assistantMessageId,
+            before = turn.cards,
+            after = sanitizedCards,
+            fallbackUsed = fallbackUsed
+        )
+        val finalCards = sanitizedCards.withDateMismatchGuardIfNeeded(conversationId)
         val finalMessage = AiChatMessage(
             id = assistantMessageId,
             conversationId = conversationId,
@@ -534,6 +535,7 @@ open class VisionAssistantTurnOrchestrator(
      * Base64, file paths, or full payloads.
      */
     private enum class FallbackReason {
+        UPSTREAM_HEADER_TIMEOUT,
         TIMEOUT,
         PROTOCOL_ERROR,
         HTTP_ERROR,
@@ -544,6 +546,7 @@ open class VisionAssistantTurnOrchestrator(
         companion object {
             fun from(error: Throwable): FallbackReason {
                 return when {
+                    error.isUpstreamHeaderTimeout() -> UPSTREAM_HEADER_TIMEOUT
                     error.isTimeoutLike() -> TIMEOUT
                     error is HttpException -> HTTP_ERROR
                     error is ProtocolException -> PROTOCOL_ERROR
@@ -558,7 +561,16 @@ open class VisionAssistantTurnOrchestrator(
                 return causes(maxDepth = 4).any { cause ->
                     val name = cause::class.java.simpleName.lowercase()
                     name.contains("timeout") || name.contains("abort") ||
-                        (cause is HttpException && cause.code() == 408)
+                        (cause is HttpException && (cause.code() == 408 || cause.code() == 504))
+                }
+            }
+
+            private fun Throwable.isUpstreamHeaderTimeout(): Boolean {
+                return causes(maxDepth = 4).any { cause ->
+                    val message = cause.message.orEmpty().lowercase()
+                    message.contains("upstream_header_timeout") ||
+                        message.contains("upstream vision request timed out") ||
+                        message.contains("signal has been aborted")
                 }
             }
 
@@ -765,10 +777,30 @@ open class VisionAssistantTurnOrchestrator(
         Log.d(TAG, "vision attachments released | requestId=$requestId")
     }
 
+    private fun logFinalCardSanitizer(
+        assistantMessageId: String,
+        before: List<AiChatCard>,
+        after: List<AiChatCard>,
+        fallbackUsed: Boolean
+    ) {
+        Log.i(
+            TAG,
+            "VISION_FINAL_CARD_SANITIZER | assistantMessageId=${assistantMessageId.shortId()} " +
+                "fallbackUsed=$fallbackUsed " +
+                "beforeCount=${before.size} beforeTypes=${before.typeOrder()} " +
+                "afterCount=${after.size} afterTypes=${after.typeOrder()}"
+        )
+    }
+
     companion object {
         private const val TAG = "VisionAssistantTurn"
     }
 }
+
+private fun String.shortId(): String = take(8)
+
+private fun List<AiChatCard>.typeOrder(): String =
+    joinToString(">") { it.type.name }.ifBlank { "none" }
 
 private fun Throwable.causes(maxDepth: Int): Sequence<Throwable> = sequence {
     val seen = mutableSetOf<Throwable>()

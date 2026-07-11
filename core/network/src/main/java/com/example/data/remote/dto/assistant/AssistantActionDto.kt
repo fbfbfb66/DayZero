@@ -33,7 +33,8 @@ data class AssistantActionMealDto(
     val mealType: String,
     val mealLabel: String? = null,
     val subtotalCalories: Int? = null,
-    val items: List<AssistantActionItemDto>
+    val items: List<AssistantActionItemDto>,
+    val sourceMediaIds: List<String>? = null
 )
 
 @JsonClass(generateAdapter = true)

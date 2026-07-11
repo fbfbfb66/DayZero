@@ -61,6 +61,7 @@ import com.example.ui.screens.AiRecordHomeScreen
 import com.example.ui.screens.AiRecordViewModel
 import com.example.ui.screens.CalendarScreen
 import com.example.ui.screens.TrendsScreen
+import com.example.ui.screens.photoeditor.PhotoAssignmentEditorActions
 import com.example.ui.theme.BrandGreen
 import com.example.ui.theme.WarmBackground
 import kotlinx.coroutines.delay
@@ -162,6 +163,10 @@ fun MainApp() {
 
             override fun markAssistantMessageRendered(message: AiChatMessage) {
                 viewModel.markAssistantMessageRendered(message)
+            }
+
+            override fun markAssistantCardFirstComposed(message: AiChatMessage) {
+                viewModel.markAssistantCardFirstComposed(message)
             }
         }
     }
@@ -341,6 +346,19 @@ fun MainApp() {
                             aiRecordViewModel.openConversation(conversationId)
                         }
                     }
+                    val photoEditorState by aiRecordViewModel.photoEditor.collectAsState()
+                    val photoEditorActions = remember(aiRecordViewModel) {
+                        PhotoAssignmentEditorActions(
+                            onSelectMeal = aiRecordViewModel::photoEditorSelectMeal,
+                            onAssignToSelectedMeal = aiRecordViewModel::photoEditorAssignToSelectedMeal,
+                            onRemove = aiRecordViewModel::photoEditorRemove,
+                            onMove = aiRecordViewModel::photoEditorMove,
+                            onRequestClose = aiRecordViewModel::requestClosePhotoEditor,
+                            onDismissDiscard = aiRecordViewModel::dismissPhotoEditorDiscardDialog,
+                            onConfirmDiscard = aiRecordViewModel::discardPhotoEditor,
+                            onSave = aiRecordViewModel::savePhotoAssignments
+                        )
+                    }
                     AiConversationScreen(
                         conversationId = conversationId,
                         detailState = aiRecordUiState.detail,
@@ -361,7 +379,12 @@ fun MainApp() {
                         },
                         onSetPickerOpen = aiRecordViewModel::setPickerOpen,
                         onSubmitMediaMessage = aiRecordViewModel::submitMediaMessage,
-                        onClearDetailError = { aiRecordViewModel.setDetailError(null) }
+                        onClearDetailError = { aiRecordViewModel.setDetailError(null) },
+                        photoEditorState = photoEditorState,
+                        photoEditorActions = photoEditorActions,
+                        onOpenPhotoEditor = { cardId, mealIndex ->
+                            aiRecordViewModel.openPhotoAssignmentEditor(cardId, mealIndex)
+                        }
                     )
                 }
                 composable(

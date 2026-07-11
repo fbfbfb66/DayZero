@@ -197,6 +197,7 @@ class AiAssistantRemoteMapper {
                         mealType = mealDto.mealType,
                         mealLabel = mealDto.mealLabel,
                         subtotalCalories = mealDto.subtotalCalories,
+                        sourceMediaIds = mealDto.sourceMediaIds,
                         items = mealDto.items.map { 
                             ConfirmCardItem(
                                 id = it.id,
@@ -375,6 +376,7 @@ class AiAssistantRemoteMapper {
                         mealType = meal.mealType,
                         mealLabel = meal.mealLabel,
                         subtotalCalories = meal.subtotalCalories,
+                        sourceMediaIds = meal.sourceMediaIds,
                         items = meal.items.map { 
                             ConfirmCardItemDto(
                                 id = it.id,

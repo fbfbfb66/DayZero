@@ -218,6 +218,7 @@ class DayZeroSyncBackfillTest {
             )
         )
         val repository = RoomRecordRepository(
+            database = database,
             dao = database.dailyRecordDao(),
             syncQueueDao = database.syncQueueDao(),
             identityProvider = StaticIdentityProvider(canRemoteSync = true)

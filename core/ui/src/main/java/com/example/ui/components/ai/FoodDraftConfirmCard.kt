@@ -74,6 +74,8 @@ import com.example.domain.model.ai.assistant.PayloadSummary
 import com.example.domain.model.ai.assistant.ShowConfirmCardPayload
 import com.example.domain.model.formatWeightKg
 import com.example.domain.model.normalizeWeightKg
+import com.example.ui.components.PhotoViewerItem
+import com.example.ui.components.PinnedPhotoStrip
 import com.example.ui.theme.BorderLight
 import com.example.ui.theme.BrandGreen
 import com.example.ui.theme.BrandRed
@@ -96,6 +98,8 @@ object FoodDraftConfirmCardTestTags {
     const val EditFoodButton = "food_draft_edit_food_button"
     const val DeleteFoodButton = "food_draft_delete_food_button"
     const val AddFoodButton = "food_draft_add_food_button"
+    const val PhotoStrip = "food_draft_photo_strip"
+    const val CardLevelPhotoEditEntry = "food_draft_card_photo_edit_entry"
 }
 
 private data class FoodEditTarget(
@@ -107,13 +111,20 @@ private data class FoodEditTarget(
 fun FoodDraftConfirmCard(
     card: ShowConfirmCardPayload,
     onOptionSelected: (interactionId: String, optionId: String, optionLabel: String, payloadSummary: PayloadSummary) -> Unit,
-    onDraftChanged: (interactionId: String, weightKg: Double?, meals: List<ConfirmCardMeal>) -> Unit = { _, _, _ -> }
+    onDraftChanged: (interactionId: String, weightKg: Double?, meals: List<ConfirmCardMeal>) -> Unit = { _, _, _ -> },
+    photoItemsForMeal: (ConfirmCardMeal) -> List<PhotoViewerItem> = { emptyList() },
+    onMealPhotoClick: (items: List<PhotoViewerItem>, index: Int) -> Unit = { _, _ -> },
+    onEditPhotos: ((mealIndex: Int) -> Unit)? = null,
+    editableOriginPhotoCount: Int = 0
 ) {
     val context = LocalContext.current
     val initialMeals = remember(card) { card.normalizedMeals() }
 
-    var draftMeals by remember(card.id) { mutableStateOf(initialMeals) }
-    var weightKg by remember(card.id) { mutableStateOf(card.weightKg) }
+    // Keyed on the full card (not card.id) so a photo-assignment save that
+    // refreshes the Room card can never be overwritten later by a stale
+    // Compose draft copy of meals/sourceMediaIds.
+    var draftMeals by remember(card) { mutableStateOf(initialMeals) }
+    var weightKg by remember(card) { mutableStateOf(card.weightKg) }
     var showWeightDialog by remember { mutableStateOf(false) }
     var showEditDialog by remember { mutableStateOf<FoodEditTarget?>(null) }
 
@@ -251,10 +262,15 @@ fun FoodDraftConfirmCard(
             onClick = { showWeightDialog = true }
         )
 
+        val anyMealShowsPhotos = draftMeals.any { it.items.isNotEmpty() && photoItemsForMeal(it).isNotEmpty() }
+
         draftMeals.forEachIndexed { mealIndex, meal ->
             if (meal.items.isNotEmpty()) {
                 MealSection(
                     meal = meal,
+                    photoItems = photoItemsForMeal(meal),
+                    onPhotoClick = onMealPhotoClick,
+                    onEditPhotos = onEditPhotos?.let { edit -> { edit(mealIndex) } },
                     pending = card.state == "pending",
                     onEdit = { itemIndex -> showEditDialog = FoodEditTarget(mealIndex, itemIndex) },
                     onDelete = { itemIndex ->
@@ -266,6 +282,37 @@ fun FoodDraftConfirmCard(
                         persistDraft(meals = newMeals)
                     },
                     onAdd = { showEditDialog = FoodEditTarget(mealIndex, null) }
+                )
+            }
+        }
+
+        // The card still owns legal origin photos even when every meal strip is
+        // empty (all photos unassigned). Keep a single weak re-entry point so the
+        // editor stays reachable without rendering an empty photo shell.
+        if (onEditPhotos != null && !anyMealShowsPhotos) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp, end = 4.dp),
+                horizontalArrangement = Arrangement.End
+            ) {
+                val entryText = if (editableOriginPhotoCount > 0) {
+                    "整理照片 · $editableOriginPhotoCount 张"
+                } else {
+                    "整理照片"
+                }
+                Text(
+                    text = entryText,
+                    color = TextTertiary,
+                    fontSize = 11.sp,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { onEditPhotos(0) }
+                        .padding(horizontal = 6.dp, vertical = 4.dp)
+                        .testTag(FoodDraftConfirmCardTestTags.CardLevelPhotoEditEntry)
+                        .semantics(mergeDescendants = true) {
+                            contentDescription = entryText
+                        }
                 )
             }
         }
@@ -388,6 +435,9 @@ private fun WeightSection(
 @Composable
 private fun MealSection(
     meal: ConfirmCardMeal,
+    photoItems: List<PhotoViewerItem>,
+    onPhotoClick: (List<PhotoViewerItem>, Int) -> Unit,
+    onEditPhotos: (() -> Unit)?,
     pending: Boolean,
     onEdit: (Int) -> Unit,
     onDelete: (Int) -> Unit,
@@ -418,6 +468,18 @@ private fun MealSection(
                 Text(text = "$mealCalories kcal", color = BrandGreen, fontWeight = FontWeight.Medium)
             }
             Spacer(modifier = Modifier.height(8.dp))
+
+            if (photoItems.isNotEmpty()) {
+                PinnedPhotoStrip(
+                    items = photoItems,
+                    onPhotoClick = { index -> onPhotoClick(photoItems, index) },
+                    onEditClick = onEditPhotos,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag(FoodDraftConfirmCardTestTags.PhotoStrip)
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+            }
 
             meal.items.forEachIndexed { itemIndex, item ->
                 Row(

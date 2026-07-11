@@ -17,6 +17,8 @@ import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
 import com.example.ui.components.LocalMediaThumbnail
+import com.example.ui.components.PhotoViewerOverlay
+import com.example.ui.components.PhotoViewerItem
 import androidx.compose.animation.animateColor
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.RepeatMode
@@ -86,6 +88,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
@@ -101,6 +105,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.invisibleToUser
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.coerceAtLeast
@@ -113,6 +118,10 @@ import com.example.domain.model.ai.Conversation
 import com.example.domain.model.ai.assistant.ConfirmCardMeal
 import com.example.domain.model.ai.assistant.PayloadSummary
 import com.example.domain.ai.isVisionAssistantPlaceholder
+import com.example.ui.screens.photoeditor.PhotoAssignmentEditorActions
+import com.example.ui.screens.photoeditor.PhotoAssignmentEditorScreen
+import com.example.ui.screens.photoeditor.PhotoAssignmentEditorUiState
+import com.example.ui.screens.photoeditor.resolveOriginMediaIds
 import com.example.ui.theme.BorderNormal
 import com.example.ui.theme.BrandGreen
 import com.example.ui.theme.CardBackground
@@ -173,6 +182,7 @@ interface AiRecordActionHandler {
     fun clearAllData()
     fun clearCloudBackupForDebug()
     fun markAssistantMessageRendered(message: AiChatMessage)
+    fun markAssistantCardFirstComposed(message: AiChatMessage) = Unit
 }
 
 @Composable
@@ -263,6 +273,7 @@ fun AiRecordHomeScreen(
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun AiConversationScreen(
     conversationId: String,
@@ -277,7 +288,10 @@ fun AiConversationScreen(
     onNavigateToCamera: (String) -> Unit,
     onSetPickerOpen: (String, Boolean) -> Unit,
     onSubmitMediaMessage: (String, String, List<String>) -> Unit,
-    onClearDetailError: () -> Unit = {}
+    onClearDetailError: () -> Unit = {},
+    photoEditorState: PhotoAssignmentEditorUiState? = null,
+    photoEditorActions: PhotoAssignmentEditorActions? = null,
+    onOpenPhotoEditor: (cardId: String, mealIndex: Int) -> Unit = { _, _ -> }
 ) {
     LaunchedEffect(conversationId) {
         actionHandler.setActiveConversationId(conversationId)
@@ -286,6 +300,8 @@ fun AiConversationScreen(
     val context = LocalContext.current
     val capturedConversationId = remember(conversationId) { conversationId }
     var inputText by remember(conversationId) { mutableStateOf("") }
+    var activePhotoViewerItems by remember(conversationId) { mutableStateOf<List<PhotoViewerItem>?>(null) }
+    var activePhotoViewerInitialIndex by remember(conversationId) { mutableStateOf(0) }
 
     LaunchedEffect(events, conversationId) {
         events.collect { event ->
@@ -296,22 +312,29 @@ fun AiConversationScreen(
     }
     val messagesWithMedia = detailState.messagesWithMedia
     val messages = detailState.messages
+    val conversationMediaById = remember(detailState.mediaAssets) { detailState.mediaAssets.associateBy { it.id } }
     val isCurrentConversationAnalyzing = appState.isAnalyzing && appState.activeConversationId == conversationId
     val hasAssistantPlaceholder = messages.lastOrNull()?.let { message ->
         message.role == ChatRole.Assistant && message.text.isBlank() && message.assistantCards.isEmpty()
     } == true
 
-    val retryUserMessageId = if (
-        !isCurrentConversationAnalyzing &&
-        detailState.errorMessage != null &&
-        hasAssistantPlaceholder &&
-        messages.size >= 2
-    ) {
-        val previous = messages[messages.size - 2]
-        if (previous.role == ChatRole.User) previous.id else null
-    } else {
-        null
-    }
+    val appFailure = appState.conversationState as? com.example.domain.model.ai.AiRecordConversationState.Error
+    val retryUserMessageId = appFailure
+        ?.takeIf { failure ->
+            !isCurrentConversationAnalyzing &&
+                hasAssistantPlaceholder &&
+                failure.retryable &&
+                failure.conversationId == conversationId &&
+                failure.userMessageId != null
+        }
+        ?.userMessageId
+        ?.takeIf { failedUserMessageId ->
+            messages.any { message ->
+                message.id == failedUserMessageId &&
+                    message.role == ChatRole.User &&
+                    message.sourceMediaIds.isNotEmpty()
+            }
+        }
 
     val listState = remember(conversationId) {
         val lastMsgIndex = (messages.size - 1).coerceAtLeast(0)
@@ -405,137 +428,214 @@ fun AiConversationScreen(
             .background(WarmBackground)
             .testTag(AiRecordTestTags.Conversation)
     ) {
-        LazyColumn(
-            state = listState,
+        val isViewerOpen = activePhotoViewerItems != null
+        val isEditorOpen = photoEditorState != null
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .testTag(AiRecordTestTags.ConversationMessages),
-            contentPadding = PaddingValues(start = 16.dp, top = 92.dp, end = 16.dp, bottom = 116.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .semantics {
+                    if (isViewerOpen || isEditorOpen) {
+                        invisibleToUser()
+                    }
+                }
         ) {
-            if (messages.isEmpty() && !detailState.isSending) {
-                item {
-                    AiMessage("Start chatting with DayZero.", 0L)
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .testTag(AiRecordTestTags.ConversationMessages),
+                contentPadding = PaddingValues(start = 16.dp, top = 92.dp, end = 16.dp, bottom = 116.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                if (messages.isEmpty() && !detailState.isSending) {
+                    item {
+                        AiMessage("Start chatting with DayZero.", 0L)
+                    }
+                }
+
+                items(items = messagesWithMedia, key = { it.message.id }) { messageWithMedia ->
+                    ChatMessageRow(
+                        messageWithMedia = messageWithMedia,
+                        allMessages = messages,
+                        isAnalyzing = isCurrentConversationAnalyzing,
+                        isLastMessage = messageWithMedia.message.id == messages.lastOrNull()?.id,
+                        actionHandler = actionHandler,
+                        mediaById = conversationMediaById,
+                        onOpenPhotoEditor = onOpenPhotoEditor,
+                        onMealPhotoClick = { items, clickedIndex ->
+                            activePhotoViewerItems = items
+                            activePhotoViewerInitialIndex = clickedIndex
+                        },
+                        onMediaClick = { clickedIndex ->
+                            val items = messageWithMedia.media.mapIndexed { index, reference ->
+                                when (reference) {
+                                    is MessageMediaReference.LocalReady -> {
+                                        PhotoViewerItem(
+                                            mediaId = reference.mediaAsset.id,
+                                            masterRelativePath = reference.mediaAsset.masterRelativePath,
+                                            thumbnailRelativePath = reference.mediaAsset.thumbnailRelativePath,
+                                            width = reference.mediaAsset.width,
+                                            height = reference.mediaAsset.height,
+                                            accessibilityLabel = "图片 ${index + 1}，共 ${messageWithMedia.media.size} 张"
+                                        )
+                                    }
+                                    else -> {
+                                        PhotoViewerItem(
+                                            mediaId = "missing-$index",
+                                            masterRelativePath = null,
+                                            thumbnailRelativePath = null,
+                                            width = null,
+                                            height = null,
+                                            accessibilityLabel = "图片未找到 ${index + 1}，共 ${messageWithMedia.media.size} 张"
+                                        )
+                                    }
+                                }
+                            }
+                            activePhotoViewerItems = items
+                            activePhotoViewerInitialIndex = clickedIndex
+                        }
+                    )
+                }
+
+                if (isCurrentConversationAnalyzing && !hasAssistantPlaceholder) {
+                    item(key = "analyzing") {
+                        AiMessageComponent {
+                            TypingIndicator()
+                        }
+                    }
+                }
+
+                if (retryUserMessageId != null) {
+                    item(key = "vision_retry") {
+                        VisionRetryCard(
+                            errorMessage = appFailure?.message ?: "图片识别失败",
+                            onRetry = {
+                                onClearDetailError()
+                                actionHandler.startVisionAssistantTurnForExistingUserMessage(
+                                    conversationId,
+                                    retryUserMessageId
+                                )
+                            }
+                        )
+                    }
                 }
             }
 
-            items(items = messagesWithMedia, key = { it.message.id }) { messageWithMedia ->
-                ChatMessageRow(
-                    messageWithMedia = messageWithMedia,
-                    allMessages = messages,
-                    isAnalyzing = isCurrentConversationAnalyzing,
-                    isLastMessage = messageWithMedia.message.id == messages.lastOrNull()?.id,
-                    actionHandler = actionHandler
+            ConversationTopBar(
+                title = detailState.currentConversation?.title ?: "Conversation",
+                subtitle = detailState.currentConversation?.let { formatConversationDateLabel(it.conversationDate) },
+                onBack = onBack
+            )
+
+            if (isPlusMenuOpen) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { isPlusMenuOpen = false }
                 )
             }
 
-            if (isCurrentConversationAnalyzing && !hasAssistantPlaceholder) {
-                item(key = "analyzing") {
-                    AiMessageComponent {
-                        TypingIndicator()
+            ConversationInputBar(
+                modifier = Modifier.align(Alignment.BottomCenter),
+                inputText = inputText,
+                enabled = !appState.isAnalyzing && !detailState.isSubmitting,
+                isAnalyzing = isCurrentConversationAnalyzing,
+                isSubmitting = detailState.isSubmitting,
+                inputTestTag = AiRecordTestTags.ConversationInput,
+                sendTestTag = AiRecordTestTags.ConversationSend,
+                onInputChange = { inputText = it },
+                detailState = detailState,
+                isPlusMenuOpen = isPlusMenuOpen,
+                onPlusMenuToggle = { isPlusMenuOpen = it },
+                onTakePhoto = {
+                    isPlusMenuOpen = false
+                    onNavigateToCamera(capturedConversationId)
+                },
+                onSelectPhotos = {
+                    isPlusMenuOpen = false
+                    val draft = detailState.draftState
+                    val currentCount = (draft?.attachmentIds?.size ?: 0) + (draft?.importingCount ?: 0)
+                    if (currentCount >= 6) {
+                        Toast.makeText(context, "最多只能添加6张图片", Toast.LENGTH_SHORT).show()
+                    } else {
+                        onSetPickerOpen(capturedConversationId, true)
+                        pickerLauncher.launch(
+                            androidx.activity.result.PickVisualMediaRequest(
+                                ActivityResultContracts.PickVisualMedia.ImageOnly
+                            )
+                        )
+                    }
+                },
+                onRemoveAttachment = { mediaId ->
+                    onRemoveAttachment(capturedConversationId, mediaId)
+                },
+                onRetryAttachment = { mediaId ->
+                    onRetryAttachment(capturedConversationId, mediaId)
+                },
+                onSubmit = {
+                    val draft = detailState.draftState
+                    val targetConversationId = conversationId
+                    val currentText = inputText
+                    val orderedAttachmentIds = draft?.attachmentIds.orEmpty()
+                    val importingCount = draft?.importingCount ?: 0
+
+                    when {
+                        orderedAttachmentIds.isEmpty() && currentText.isBlank() -> {
+                            // Nothing to send; ignore.
+                        }
+
+                        orderedAttachmentIds.isNotEmpty() && importingCount > 0 -> {
+                            Toast.makeText(context, "图片仍在导入中，请稍后再试", Toast.LENGTH_SHORT).show()
+                        }
+
+                        orderedAttachmentIds.isNotEmpty() -> {
+                            onSubmitMediaMessage(targetConversationId, currentText, orderedAttachmentIds)
+                        }
+
+                        else -> {
+                            if (currentText.isNotBlank()) {
+                                val accepted = actionHandler.sendAiMessage(targetConversationId, currentText)
+                                if (accepted) inputText = ""
+                            }
+                        }
                     }
                 }
-            }
-
-            if (retryUserMessageId != null) {
-                item(key = "vision_retry") {
-                    VisionRetryCard(
-                        errorMessage = detailState.errorMessage ?: "图片识别失败",
-                        onRetry = {
-                            onClearDetailError()
-                            actionHandler.startVisionAssistantTurnForExistingUserMessage(
-                                conversationId,
-                                retryUserMessageId
-                            )
-                        }
-                    )
-                }
-            }
-        }
-
-        ConversationTopBar(
-            title = detailState.currentConversation?.title ?: "Conversation",
-            subtitle = detailState.currentConversation?.let { formatConversationDateLabel(it.conversationDate) },
-            onBack = onBack
-        )
-
-        if (isPlusMenuOpen) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) { isPlusMenuOpen = false }
             )
         }
 
-        ConversationInputBar(
-            modifier = Modifier.align(Alignment.BottomCenter),
-            inputText = inputText,
-            enabled = !appState.isAnalyzing && !detailState.isSubmitting,
-            isAnalyzing = isCurrentConversationAnalyzing,
-            isSubmitting = detailState.isSubmitting,
-            inputTestTag = AiRecordTestTags.ConversationInput,
-            sendTestTag = AiRecordTestTags.ConversationSend,
-            onInputChange = { inputText = it },
-            detailState = detailState,
-            isPlusMenuOpen = isPlusMenuOpen,
-            onPlusMenuToggle = { isPlusMenuOpen = it },
-            onTakePhoto = {
-                isPlusMenuOpen = false
-                onNavigateToCamera(capturedConversationId)
-            },
-            onSelectPhotos = {
-                isPlusMenuOpen = false
-                val draft = detailState.draftState
-                val currentCount = (draft?.attachmentIds?.size ?: 0) + (draft?.importingCount ?: 0)
-                if (currentCount >= 6) {
-                    Toast.makeText(context, "最多只能添加6张图片", Toast.LENGTH_SHORT).show()
-                } else {
-                    onSetPickerOpen(capturedConversationId, true)
-                    pickerLauncher.launch(
-                        androidx.activity.result.PickVisualMediaRequest(
-                            ActivityResultContracts.PickVisualMedia.ImageOnly
-                        )
-                    )
-                }
-            },
-            onRemoveAttachment = { mediaId ->
-                onRemoveAttachment(capturedConversationId, mediaId)
-            },
-            onRetryAttachment = { mediaId ->
-                onRetryAttachment(capturedConversationId, mediaId)
-            },
-            onSubmit = {
-                val draft = detailState.draftState
-                val targetConversationId = conversationId
-                val currentText = inputText
-                val orderedAttachmentIds = draft?.attachmentIds.orEmpty()
-                val importingCount = draft?.importingCount ?: 0
-
-                when {
-                    orderedAttachmentIds.isEmpty() && currentText.isBlank() -> {
-                        // Nothing to send; ignore.
-                    }
-
-                    orderedAttachmentIds.isNotEmpty() && importingCount > 0 -> {
-                        Toast.makeText(context, "图片仍在导入中，请稍后再试", Toast.LENGTH_SHORT).show()
-                    }
-
-                    orderedAttachmentIds.isNotEmpty() -> {
-                        onSubmitMediaMessage(targetConversationId, currentText, orderedAttachmentIds)
-                    }
-
-                    else -> {
-                        if (currentText.isNotBlank()) {
-                            val accepted = actionHandler.sendAiMessage(targetConversationId, currentText)
-                            if (accepted) inputText = ""
+        if (photoEditorState != null && photoEditorActions != null) {
+            PhotoAssignmentEditorScreen(
+                state = photoEditorState,
+                mediaById = conversationMediaById,
+                actions = photoEditorActions,
+                onOpenViewer = { items, index ->
+                    activePhotoViewerItems = items
+                    activePhotoViewerInitialIndex = index
+                },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .semantics {
+                        if (isViewerOpen) {
+                            invisibleToUser()
                         }
                     }
-                }
-            }
-        )
+                    .pointerInput(Unit) {}
+            )
+        }
+
+        if (activePhotoViewerItems != null) {
+            PhotoViewerOverlay(
+                items = activePhotoViewerItems!!,
+                initialIndex = activePhotoViewerInitialIndex,
+                onDismiss = { activePhotoViewerItems = null },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {}
+            )
+        }
     }
 }
 
@@ -713,19 +813,28 @@ private fun ChatMessageRow(
     allMessages: List<AiChatMessage>,
     isAnalyzing: Boolean,
     isLastMessage: Boolean,
-    actionHandler: AiRecordActionHandler
+    actionHandler: AiRecordActionHandler,
+    mediaById: Map<String, com.example.domain.model.media.MediaAsset>,
+    onOpenPhotoEditor: (cardId: String, mealIndex: Int) -> Unit,
+    onMealPhotoClick: (List<PhotoViewerItem>, Int) -> Unit,
+    onMediaClick: (Int) -> Unit
 ) {
     val message = messageWithMedia.message
     if (message.role == ChatRole.User) {
         UserMessage(
             text = message.text,
             createdAt = message.createdAt,
-            media = messageWithMedia.media
+            media = messageWithMedia.media,
+            onMediaClick = onMediaClick
         )
     } else {
-        LaunchedEffect(message.id, message.text, message.assistantCards.size) {
+        LaunchedEffect(message.id, message.text, message.assistantCards.map { it.id }) {
             if (message.text.isNotBlank() || message.assistantCards.isNotEmpty()) {
-                actionHandler.markAssistantMessageRendered(message)
+                if (message.assistantCards.isNotEmpty()) {
+                    actionHandler.markAssistantCardFirstComposed(message)
+                } else {
+                    actionHandler.markAssistantMessageRendered(message)
+                }
             }
         }
         val isVisionPlaceholder = com.example.domain.ai.isVisionAssistantPlaceholder(message, allMessages)
@@ -744,8 +853,18 @@ private fun ChatMessageRow(
                     }
                 }
             }
+            val originMediaIds = remember(message.id, allMessages) {
+                resolveOriginMediaIds(allMessages, message.id)
+            }
             message.assistantCards.forEach { card ->
-                AssistantCardRenderer(card = card, actionHandler = actionHandler)
+                AssistantCardRenderer(
+                    card = card,
+                    actionHandler = actionHandler,
+                    mediaById = mediaById,
+                    onMealPhotoClick = onMealPhotoClick,
+                    originMediaIds = originMediaIds,
+                    onEditMealPhotos = onOpenPhotoEditor
+                )
             }
         }
     }
@@ -1310,7 +1429,8 @@ private fun VisionImageRecognizingIndicator() {
 private fun UserMessage(
     text: String,
     createdAt: Long,
-    media: List<MessageMediaReference> = emptyList()
+    media: List<MessageMediaReference> = emptyList(),
+    onMediaClick: (Int) -> Unit = {}
 ) {
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -1325,7 +1445,7 @@ private fun UserMessage(
         ) {
             Column {
                 if (media.isNotEmpty()) {
-                    UserMessageMediaGrid(media = media)
+                    UserMessageMediaGrid(media = media, onMediaClick = onMediaClick)
                     if (text.isNotBlank()) {
                         Spacer(modifier = Modifier.height(8.dp))
                     }
@@ -1350,20 +1470,25 @@ private fun UserMessage(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun UserMessageMediaGrid(media: List<MessageMediaReference>) {
+private fun UserMessageMediaGrid(
+    media: List<MessageMediaReference>,
+    onMediaClick: (Int) -> Unit
+) {
     when (media.size) {
-        1 -> UserMessageSingleMedia(media = media.single())
+        1 -> UserMessageSingleMedia(media = media.single(), onClick = { onMediaClick(0) })
         2 -> {
             Row(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 modifier = Modifier.widthIn(max = 260.dp)
             ) {
-                media.forEach { reference ->
+                media.forEachIndexed { index, reference ->
                     UserMessageMediaItem(
                         reference = reference,
+                        contentDescription = "图片 ${index + 1}，共 ${media.size} 张",
                         modifier = Modifier
                             .weight(1f)
                             .aspectRatio(1f)
+                            .clickable { onMediaClick(index) }
                     )
                 }
             }
@@ -1375,13 +1500,15 @@ private fun UserMessageMediaGrid(media: List<MessageMediaReference>) {
                 maxItemsInEachRow = 2,
                 modifier = Modifier.widthIn(max = 260.dp)
             ) {
-                media.forEach { reference ->
+                media.forEachIndexed { index, reference ->
                     val fraction = if (media.size == 3 || media.size >= 5) 0.48f else 0.48f
                     UserMessageMediaItem(
                         reference = reference,
+                        contentDescription = "图片 ${index + 1}，共 ${media.size} 张",
                         modifier = Modifier
                             .fillMaxWidth(fraction)
                             .aspectRatio(1f)
+                            .clickable { onMediaClick(index) }
                     )
                 }
             }
@@ -1390,33 +1517,45 @@ private fun UserMessageMediaGrid(media: List<MessageMediaReference>) {
 }
 
 @Composable
-private fun UserMessageSingleMedia(media: MessageMediaReference) {
+private fun UserMessageSingleMedia(media: MessageMediaReference, onClick: () -> Unit) {
     Box(
         modifier = Modifier
             .widthIn(max = 220.dp)
             .heightIn(max = 220.dp)
             .aspectRatio(1f)
+            .clickable { onClick() }
     ) {
-        UserMessageMediaItem(reference = media, modifier = Modifier.fillMaxSize())
+        UserMessageMediaItem(
+            reference = media,
+            contentDescription = "图片 1，共 1 张",
+            modifier = Modifier.fillMaxSize()
+        )
     }
 }
 
 @Composable
 private fun UserMessageMediaItem(
     reference: MessageMediaReference,
+    contentDescription: String?,
     modifier: Modifier = Modifier
 ) {
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(12.dp))
-            .background(Color(0xFF4A7C59)),
+            .background(Color(0xFF4A7C59))
+            .semantics {
+                if (contentDescription != null) {
+                    this.contentDescription = contentDescription
+                }
+            },
         contentAlignment = Alignment.Center
     ) {
         when (reference) {
             is MessageMediaReference.LocalReady -> {
                 LocalMediaThumbnail(
                     thumbnailRelativePath = reference.mediaAsset.thumbnailRelativePath,
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.fillMaxSize(),
+                    contentDescription = contentDescription
                 )
             }
             is MessageMediaReference.MissingLocalAsset -> {

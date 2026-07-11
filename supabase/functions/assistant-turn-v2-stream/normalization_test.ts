@@ -237,5 +237,104 @@ Deno.test("streaming and fallback normalization produce the same output for the 
     weightKg: 68,
   });
 
+  streamActions[0].id = "confirm-fixed";
+  fallbackActions[0].id = "confirm-fixed";
+  streamActions[0].id = "confirm-fixed";
+  fallbackActions[0].id = "confirm-fixed";
   assertEquals(streamActions, fallbackActions);
+});
+
+Deno.test("streaming and fallback convert multi-meal attachment aliases identically", () => {
+  const fixture: JsonObject[] = [{
+    type: "show_confirm_card",
+    payload: {
+      meals: [
+        {
+          mealType: "breakfast",
+          items: [{ id: "fixture_item", name: "fixture", calories: 0 }],
+          sourceMediaIds: ["attachment_1"],
+        },
+        {
+          mealType: "lunch",
+          items: [{ id: "fixture_item", name: "fixture", calories: 0 }],
+          sourceMediaIds: ["2"],
+        },
+        {
+          mealType: "dinner",
+          items: [{ id: "fixture_item", name: "fixture", calories: 0 }],
+          sourceMediaIds: ["image_3"],
+        },
+      ],
+    },
+  }];
+  const streamActions = structuredClone(fixture);
+  const fallbackActions = structuredClone(fixture);
+
+  normalizeActions(
+    streamActions,
+    "2026-07-09",
+    "第一张早餐，第二张午餐，第三张晚餐",
+    null,
+    {
+      mediaIds: ["media1", "media2", "media3"],
+    },
+  );
+  normalizeFallbackActions(
+    fallbackActions,
+    "2026-07-09",
+    "第一张早餐，第二张午餐，第三张晚餐",
+    null,
+    {
+      mediaIds: ["media1", "media2", "media3"],
+    },
+  );
+
+  streamActions[0].id = "confirm-fixed";
+  fallbackActions[0].id = "confirm-fixed";
+  assertEquals(streamActions, fallbackActions);
+  assertEquals(mealsOf(streamActions[0])[0].sourceMediaIds, ["media1"]);
+  assertEquals(mealsOf(streamActions[0])[1].sourceMediaIds, ["media2"]);
+  assertEquals(mealsOf(streamActions[0])[2].sourceMediaIds, ["media3"]);
+});
+
+Deno.test("interaction normalization inherits the continuation media allow-list", () => {
+  const fixture: JsonObject[] = [{
+    type: "show_confirm_card",
+    payload: {
+      meals: [
+        {
+          mealType: "breakfast",
+          items: [{ id: "item1", name: "first", calories: 1 }],
+          sourceMediaIds: ["attachment_1"],
+        },
+        {
+          mealType: "lunch",
+          items: [{ id: "item2", name: "second", calories: 2 }],
+          sourceMediaIds: ["attachment_2"],
+        },
+      ],
+    },
+  }];
+  const continuation = {
+    schemaVersion: 1,
+    mediaIds: ["mediaA", "mediaB"],
+    recognizedFoods: [{ name: "first", calories: 1 }],
+  };
+  const streamActions = structuredClone(fixture);
+  const fallbackActions = structuredClone(fixture);
+
+  normalizeActions(streamActions, "2026-07-10", "", null, {
+    inheritedContinuationContext: continuation,
+    mediaIds: [],
+  });
+  normalizeFallbackActions(fallbackActions, "2026-07-10", "", null, {
+    inheritedContinuationContext: continuation,
+    mediaIds: [],
+  });
+
+  streamActions[0].id = "confirm-fixed";
+  fallbackActions[0].id = "confirm-fixed";
+  assertEquals(streamActions, fallbackActions);
+  assertEquals(mealsOf(streamActions[0])[0].sourceMediaIds, ["mediaA"]);
+  assertEquals(mealsOf(streamActions[0])[1].sourceMediaIds, ["mediaB"]);
 });

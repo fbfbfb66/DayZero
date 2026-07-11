@@ -30,6 +30,8 @@ import com.example.domain.model.ai.assistant.DateMismatchGuardCardPayload
 import com.example.domain.model.ai.assistant.PayloadSummary
 import com.example.domain.model.ai.assistant.ShowConfirmCardPayload
 import com.example.ui.components.ai.FoodDraftConfirmCardTestTags
+import com.example.ui.components.PinnedPhotoStripTestTags
+import com.example.ui.components.PhotoViewerItem
 import com.example.domain.repository.AiDraftRepository
 import com.example.domain.repository.ConversationRepository
 import com.example.domain.usecase.CreateConversationWithFirstMessageUseCase
@@ -546,8 +548,94 @@ class AiRecordPhase3Test {
             sendUserMessageWithMediaUseCase = fakeSendUserMessageWithMediaUseCase,
             currentIdentityProvider = fakeCurrentIdentityProvider,
             networkAvailabilityProvider = com.example.domain.network.NetworkAvailabilityProvider { true },
+            updateFoodCardPhotoAssignmentsUseCase = com.example.domain.usecase.UpdateFoodCardPhotoAssignmentsUseCase(
+                object : com.example.domain.repository.FoodCardPhotoAssignmentRepository {
+                    override suspend fun updatePhotoAssignments(
+                        cardId: String,
+                        assignments: List<com.example.domain.repository.MealPhotoAssignment>
+                    ) = com.example.domain.repository.UpdateFoodCardPhotoAssignmentsResult.Unchanged
+                }
+            ),
             savedStateHandle = savedStateHandle
         )
+    }
+
+    @Test
+    fun productionConfirmCardShowsPerMealPhotoStripsAndClickUsesMealOnlyIndex() {
+        val clicked = mutableListOf<Pair<List<PhotoViewerItem>, Int>>()
+        val card = showConfirmCard().copy(
+            meals = listOf(
+                showConfirmCard().meals!!.single().copy(sourceMediaIds = listOf("a", "missing")),
+                showConfirmCard().meals!!.single().copy(mealType = "dinner", sourceMediaIds = listOf("b"))
+            )
+        )
+        val assets = listOf("a", "b").associateWith { id ->
+            com.example.domain.model.media.MediaAsset(
+                id, "owner", "conv", "user", 1, "master/$id", "thumb/$id", "image/jpeg",
+                10, 10, 10, "hash", com.example.domain.model.media.MediaSource.CAMERA,
+                com.example.domain.model.media.MediaLifecycleState.READY, null, 1, 1, null
+            )
+        }
+        composeRule.setContent {
+            MyApplicationTheme {
+                AssistantCardRenderer(card, NoOpActionHandler, assets) { items, index -> clicked += items to index }
+            }
+        }
+        composeRule.onAllNodesWithTag(FoodDraftConfirmCardTestTags.PhotoStrip, useUnmergedTree = true).assertCountEquals(2)
+        composeRule.onAllNodesWithTag(FoodDraftConfirmCardTestTags.NutritionCapsule).assertCountEquals(0)
+        composeRule.onAllNodesWithTag(FoodDraftConfirmCardTestTags.ConfirmButton).assertCountEquals(1)
+        composeRule.onAllNodesWithTag(FoodDraftConfirmCardTestTags.EditFoodButton).assertCountEquals(2)
+        composeRule.onNodeWithTag(PinnedPhotoStripTestTags.photo(1), useUnmergedTree = true).performClick()
+        composeRule.runOnIdle {
+            assertEquals(1, clicked.single().second)
+            assertEquals(listOf("a", "missing"), clicked.single().first.map { it.mediaId })
+            assertEquals(null, clicked.single().first[1].thumbnailRelativePath)
+        }
+    }
+
+    @Test
+    fun productionConfirmCardDoesNotRenderPhotoShellForNullOrEmpty() {
+        val base = showConfirmCard().meals!!.single()
+        val card = showConfirmCard().copy(meals = listOf(base.copy(sourceMediaIds = null), base.copy(sourceMediaIds = emptyList())))
+        composeRule.setContent { MyApplicationTheme { AssistantCardRenderer(card, NoOpActionHandler) } }
+        composeRule.onAllNodesWithTag(FoodDraftConfirmCardTestTags.PhotoStrip, useUnmergedTree = true).assertCountEquals(0)
+        composeRule.onAllNodesWithTag(FoodDraftConfirmCardTestTags.ConfirmButton).assertCountEquals(1)
+    }
+
+    // Phase 4C-F1: the reported device scenario — a single meal owning exactly one image — must
+    // render the PinnedPhotoStrip through the real AssistantCardRenderer + mediaById input.
+    @Test
+    fun singleMealConfirmCardRendersPinnedPhotoStripWithOneImageSemantics() {
+        val card = showConfirmCard().copy(
+            meals = listOf(showConfirmCard().meals!!.single().copy(sourceMediaIds = listOf("m1")))
+        )
+        val assets = mapOf(
+            "m1" to com.example.domain.model.media.MediaAsset(
+                "m1", "owner", "conv", "user", 1, "master/m1", "thumb/m1", "image/jpeg",
+                10, 10, 10, "hash", com.example.domain.model.media.MediaSource.CAMERA,
+                com.example.domain.model.media.MediaLifecycleState.READY, null, 1, 1, null
+            )
+        )
+        composeRule.setContent {
+            MyApplicationTheme { AssistantCardRenderer(card, NoOpActionHandler, assets) }
+        }
+        composeRule.onAllNodesWithTag(FoodDraftConfirmCardTestTags.PhotoStrip, useUnmergedTree = true).assertCountEquals(1)
+        composeRule.onNodeWithContentDescription("餐次照片，共 1 张", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag(PinnedPhotoStripTestTags.photo(0), useUnmergedTree = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun singleMealConfirmCardWithMissingAssetStillRendersStripPlaceholder() {
+        val card = showConfirmCard().copy(
+            meals = listOf(showConfirmCard().meals!!.single().copy(sourceMediaIds = listOf("m1")))
+        )
+        // Empty mediaById: the MediaAsset is not resolved yet, but the strip must still render a
+        // placeholder for the id (index preserved), never hiding the photo UI entirely.
+        composeRule.setContent {
+            MyApplicationTheme { AssistantCardRenderer(card, NoOpActionHandler, emptyMap()) }
+        }
+        composeRule.onAllNodesWithTag(FoodDraftConfirmCardTestTags.PhotoStrip, useUnmergedTree = true).assertCountEquals(1)
+        composeRule.onNodeWithContentDescription("餐次照片，共 1 张", useUnmergedTree = true).assertIsDisplayed()
     }
 
 }

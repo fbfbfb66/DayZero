@@ -274,6 +274,27 @@ export function checkAttachmentSizeLimits(
 }
 
 /**
+ * Stable, model-visible aliases for request attachments.
+ *
+ * The model must not see or invent Android media IDs. It may refer to images by
+ * `attachment_1`, `attachment_2`, ... in the same order as the image_url blocks.
+ * Edge normalization maps those aliases back to the validated media IDs.
+ */
+export function buildAttachmentIdentityPrompt(
+  attachments: VisionAttachment[],
+): string {
+  if (attachments.length === 0) return "";
+  const lines = attachments.map((_, index) =>
+    `- attachment_${index + 1}: image ${index + 1}`
+  );
+  return [
+    "ImageAttachmentReferences:",
+    ...lines,
+    "When assigning meal photos, use only these attachment_N references in sourceMediaIds; never use Base64, URLs, file paths, or invented IDs.",
+  ].join("\n");
+}
+
+/**
  * Build a Kimi multimodal content array: one text part followed by image parts.
  */
 export function buildKimiUserContent(
@@ -287,7 +308,11 @@ export function buildKimiUserContent(
     );
   }
 
-  const content: KimiContentPart[] = [{ type: "text", text }];
+  const identityPrompt = buildAttachmentIdentityPrompt(attachments);
+  const textWithIdentity = identityPrompt.length > 0
+    ? `${identityPrompt}\n\n${text}`
+    : text;
+  const content: KimiContentPart[] = [{ type: "text", text: textWithIdentity }];
 
   for (const attachment of attachments) {
     content.push({

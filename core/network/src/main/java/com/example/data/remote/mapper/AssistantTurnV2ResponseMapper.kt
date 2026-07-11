@@ -162,6 +162,7 @@ class AssistantTurnV2ResponseMapper {
                 mealType = meal.mealType,
                 mealLabel = meal.mealLabel,
                 subtotalCalories = meal.subtotalCalories,
+                sourceMediaIds = meal.sourceMediaIds,
                 items = meal.items.map { item ->
                     ConfirmCardItem(
                         name = item.name.required(),

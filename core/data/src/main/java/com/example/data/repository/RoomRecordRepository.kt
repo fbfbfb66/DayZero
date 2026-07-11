@@ -1,9 +1,11 @@
 package com.example.data.repository
 
 import android.util.Log
+import androidx.room.withTransaction
 import com.example.data.identity.StaticLocalIdentityProvider
 import com.example.data.local.dao.DailyRecordDao
 import com.example.data.local.dao.SyncQueueDao
+import com.example.data.local.database.DayZeroDatabase
 import com.example.data.local.entity.SyncQueueEntity
 import com.example.data.local.mapper.DailyRecordMapper
 import com.example.data.mock.createMockRecords
@@ -21,8 +23,9 @@ import kotlinx.coroutines.flow.onStart
 import java.time.LocalDate
 
 class RoomRecordRepository(
+    private val database: DayZeroDatabase,
     private val dao: DailyRecordDao,
-    private val syncQueueDao: SyncQueueDao? = null,
+    private val syncQueueDao: SyncQueueDao,
     private val identityProvider: CurrentIdentityProvider = StaticLocalIdentityProvider()
 ) : RecordRepository {
     private val mapper = DailyRecordMapper()
@@ -103,13 +106,15 @@ class RoomRecordRepository(
     }
 
     override suspend fun clearAllRecords() {
-        dao.deleteAllRecords()
-        // Purge queued business upserts so cleared records are not re-pushed to remote.
-        syncQueueDao?.deleteBusinessRecordTasks()
+        database.withTransaction {
+            dao.deleteAllRecords()
+            // Purge queued business tasks so cleared records are not re-pushed to remote.
+            syncQueueDao.deleteBusinessRecordTasks()
+        }
     }
 
     private suspend fun enqueueRecordUpsert(record: DailyRecord, identity: AppIdentity) {
-        val queueDao = syncQueueDao ?: return
+        val queueDao = syncQueueDao
         Log.d(DayZeroSyncConstants.LOG_PREFIX, "enqueue start dailyRecord=${record.id} ownerLocalId=${identity.localOwnerId}")
         try {
             val now = System.currentTimeMillis()
@@ -180,7 +185,7 @@ class RoomRecordRepository(
     }
 
     private suspend fun enqueueSoftDelete(recordId: String, identity: AppIdentity, deletedAt: Long = System.currentTimeMillis()) {
-        val queueDao = syncQueueDao ?: return
+        val queueDao = syncQueueDao
         Log.d(DayZeroSyncConstants.LOG_PREFIX, "enqueue start softDelete=$recordId ownerLocalId=${identity.localOwnerId}")
         try {
             val now = System.currentTimeMillis()

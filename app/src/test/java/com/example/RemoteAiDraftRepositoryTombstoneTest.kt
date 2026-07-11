@@ -16,9 +16,15 @@ import com.example.data.remote.dto.IntentClassifierRequestDto
 import com.example.data.repository.RemoteAiDraftRepository
 import com.example.domain.model.ai.AiChatMessage
 import com.example.domain.model.ai.ChatRole
+import com.example.domain.model.ai.assistant.AskMissingInfoCardPayload
+import com.example.domain.model.ai.assistant.AskMissingInfoOption
+import com.example.domain.model.ai.assistant.ConfirmCardItem
+import com.example.domain.model.ai.assistant.ConfirmCardMeal
+import com.example.domain.model.ai.assistant.ConfirmCardOption
 import com.example.domain.model.ai.assistant.ShowConfirmCardPayload
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import org.json.JSONArray
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -373,4 +379,93 @@ class RemoteAiDraftRepositoryTombstoneTest {
         val finalConversation = database.conversationDao().getConversationById("conv_1")
         assertEquals("Final active reply", finalConversation?.lastMessagePreview)
     }
+
+    @Test
+    fun finalUpdateMergesOnlyMatchingCardIdAndDoesNotAppendOldAskCard() = runBlocking {
+        val now = System.currentTimeMillis()
+        database.conversationDao().insertConversation(
+            ConversationEntity(
+                id = "conv_1",
+                conversationDate = "2026-07-09",
+                title = "Test Conversation",
+                lastMessagePreview = "old",
+                createdAt = now - 1000,
+                updatedAt = now - 1000,
+                lastActivityAt = now - 1000,
+                deletedAt = null
+            )
+        )
+        val mapper = com.example.data.local.mapper.AiChatMessageMapper()
+        val ask = AskMissingInfoCardPayload(
+            id = "ask_1",
+            title = "Meal?",
+            message = "Which meal?",
+            field = "mealType",
+            originalText = "food",
+            options = listOf(AskMissingInfoOption("lunch", "Lunch"))
+        )
+        val persistedConfirm = confirmCard().copy(title = "Persisted Title")
+        val persistedMessage = AiChatMessage(
+            id = "msg_1",
+            conversationId = "conv_1",
+            role = ChatRole.Assistant,
+            text = "",
+            createdAt = now - 500,
+            assistantCards = listOf(ask, persistedConfirm)
+        )
+        val persistedEntity = mapper.toEntity(persistedMessage).copy(
+            assistantCardsJson = """
+                [
+                  {"type":"ask_missing_info_card","id":"ask_1","title":"Meal?","message":"Which meal?","field":"mealType","originalText":"food","options":[{"id":"lunch","label":"Lunch"}]},
+                  {"type":"show_confirm_card","id":"confirm_1","unknownServerField":"keep-me","confirmType":"food_record","title":"Persisted Title","message":"m","items":[],"buttons":[{"id":"confirm","label":"Confirm"},{"id":"cancel","label":"Cancel"}],"meals":[{"mealType":"lunch","items":[{"name":"rice","calories":100,"calorieConfidence":"estimated"}]}]}
+                ]
+            """.trimIndent()
+        )
+        database.aiChatMessageDao().insertMessage(persistedEntity)
+
+        repository.updateChatMessage(
+            persistedMessage.copy(
+                text = "final",
+                assistantCards = listOf(confirmCard().copy(title = "Generated Title"))
+            )
+        )
+
+        val raw = database.aiChatMessageDao().getMessageById("msg_1")!!.assistantCardsJson
+        val cards = JSONArray(raw)
+        assertEquals(1, cards.length())
+        val onlyCard = cards.getJSONObject(0)
+        assertEquals("show_confirm_card", onlyCard.getString("type"))
+        assertEquals("confirm_1", onlyCard.getString("id"))
+        assertEquals("Generated Title", onlyCard.getString("title"))
+        assertEquals("keep-me", onlyCard.getString("unknownServerField"))
+    }
+
+    private fun confirmCard() = ShowConfirmCardPayload(
+        id = "confirm_1",
+        confirmType = "food_record",
+        title = "Generated Title",
+        message = "m",
+        originalText = null,
+        mealType = null,
+        items = emptyList(),
+        meals = listOf(
+            ConfirmCardMeal(
+                mealType = "lunch",
+                mealLabel = null,
+                subtotalCalories = null,
+                items = listOf(
+                    ConfirmCardItem(
+                        name = "rice",
+                        amountText = null,
+                        calories = 100,
+                        calorieConfidence = "estimated"
+                    )
+                )
+            )
+        ),
+        buttons = listOf(
+            ConfirmCardOption("confirm", "Confirm"),
+            ConfirmCardOption("cancel", "Cancel")
+        )
+    )
 }

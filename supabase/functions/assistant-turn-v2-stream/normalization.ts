@@ -35,6 +35,68 @@ type ContinuationOptions = {
   selectedMealType?: string | null;
 };
 
+export type PhotoAssignmentDebug = {
+  attachmentCount: number;
+  explicitPhotoHintCount: number;
+  rawActionCount: number;
+  rawConfirmCardCount: number;
+  rawMealCount: number;
+  rawModelPhotoReferenceCount: number;
+  normalizedModelPhotoCount: number;
+  deterministicPhotoAssignmentCount: number;
+  finalPhotoAssignmentCount: number;
+  unmatchedExplicitMealHintCount: number;
+  photoAssignmentPath:
+    | "EXPLICIT_TEXT"
+    | "MODEL_REFERENCE"
+    | "MIXED"
+    | "UNASSIGNED"
+    | "NO_CONFIRM_CARD";
+};
+
+function countPhotoReferences(meals: unknown): number {
+  if (!Array.isArray(meals)) return 0;
+  return meals.reduce((count, meal) =>
+    count +
+    (meal && typeof meal === "object" &&
+        Array.isArray((meal as MutableJsonObject).sourceMediaIds)
+      ? ((meal as MutableJsonObject).sourceMediaIds as unknown[]).length
+      : 0), 0);
+}
+
+function initialPhotoAssignmentDebug(
+  actions: MutableJsonObject[],
+  originalText: string,
+  mediaIds: string[],
+): PhotoAssignmentDebug {
+  const confirms = actions.filter((action) =>
+    normalizedType(action) === "show_confirm_card"
+  );
+  const rawMeals = confirms.flatMap((action) => {
+    const payload = action.payload && typeof action.payload === "object"
+      ? action.payload as MutableJsonObject
+      : {};
+    return Array.isArray(payload.meals) ? payload.meals : [];
+  });
+  return {
+    attachmentCount: mediaIds.length,
+    explicitPhotoHintCount:
+      parseExplicitPhotoMealHints(originalText, mediaIds.length).assignments
+        .size,
+    rawActionCount: actions.length,
+    rawConfirmCardCount: confirms.length,
+    rawMealCount: rawMeals.length,
+    rawModelPhotoReferenceCount: countPhotoReferences(rawMeals),
+    normalizedModelPhotoCount: 0,
+    deterministicPhotoAssignmentCount: 0,
+    finalPhotoAssignmentCount: 0,
+    unmatchedExplicitMealHintCount: 0,
+    photoAssignmentPath: confirms.length === 0
+      ? "NO_CONFIRM_CARD"
+      : "UNASSIGNED",
+  };
+}
+
 export function ensureInteractionContinuationAction(
   actions: MutableJsonObject[],
   actionType: string,
@@ -84,7 +146,17 @@ export function normalizeActions(
   originalText: string,
   todayRecord?: MutableJsonObject | null,
   continuationOptions: ContinuationOptions = {},
-) {
+): PhotoAssignmentDebug {
+  // interaction_result requests intentionally carry no image attachments. Their only legal
+  // media allow-list is the sanitized continuation created by the preceding vision turn.
+  // Reusing it here preserves model attachment_N / media-id assignments without guessing from
+  // the conversation or exposing any new client-side source.
+  const effectiveMediaIds = resolveContinuationMediaIds(continuationOptions);
+  const photoDebug = initialPhotoAssignmentDebug(
+    actions,
+    originalText,
+    effectiveMediaIds,
+  );
   for (const action of actions) {
     if (!action || typeof action !== "object") continue;
 
@@ -105,7 +177,7 @@ export function normalizeActions(
         payloadBeforeNormalization.continuationContext ??
         continuationOptions.inheritedContinuationContext,
       originalText,
-      continuationOptions.mediaIds ?? [],
+      effectiveMediaIds,
     );
 
     if (action.type === "ask_record_intent_card") {
@@ -217,6 +289,17 @@ export function normalizeActions(
 
       // Calculate totals and normalize items
       let totalCals = 0;
+      const assignmentResult = normalizeMealSourceMediaIds(
+        payload.meals as MutableJsonObject[],
+        effectiveMediaIds,
+        originalText,
+      );
+      photoDebug.normalizedModelPhotoCount +=
+        assignmentResult.normalizedModelPhotoCount;
+      photoDebug.deterministicPhotoAssignmentCount +=
+        assignmentResult.deterministicPhotoAssignmentCount;
+      photoDebug.unmatchedExplicitMealHintCount +=
+        assignmentResult.unmatchedExplicitMealHintCount;
       for (const meal of payload.meals as MutableJsonObject[]) {
         meal.mealLabel = meal.mealLabel ||
           getMealLabel(String(meal.mealType ?? ""));
@@ -242,6 +325,13 @@ export function normalizeActions(
           : subtotal;
         totalCals += meal.subtotalCalories as number;
       }
+      payload.meals = (payload.meals as MutableJsonObject[]).filter((meal) =>
+        Array.isArray(meal.items) && meal.items.length > 0
+      );
+      if ((payload.meals as MutableJsonObject[]).length === 0) {
+        action.__dropInvalidConfirmCard = true;
+        continue;
+      }
       payload.totalCalories = payload.totalCalories !== undefined
         ? payload.totalCalories
         : totalCals;
@@ -254,6 +344,296 @@ export function normalizeActions(
       }
     }
   }
+
+  sanitizeActions(actions, originalText);
+  const finalMeals = actions.filter((action) =>
+    normalizedType(action) === "show_confirm_card"
+  )
+    .flatMap((action) => {
+      const payload = action.payload && typeof action.payload === "object"
+        ? action.payload as MutableJsonObject
+        : {};
+      return Array.isArray(payload.meals) ? payload.meals : [];
+    });
+  photoDebug.finalPhotoAssignmentCount = countPhotoReferences(finalMeals);
+  photoDebug.photoAssignmentPath = photoDebug.rawConfirmCardCount === 0
+    ? "NO_CONFIRM_CARD"
+    : photoDebug.deterministicPhotoAssignmentCount > 0 &&
+        photoDebug.normalizedModelPhotoCount > 0
+    ? "MIXED"
+    : photoDebug.deterministicPhotoAssignmentCount > 0
+    ? "EXPLICIT_TEXT"
+    : photoDebug.normalizedModelPhotoCount > 0
+    ? "MODEL_REFERENCE"
+    : "UNASSIGNED";
+  return photoDebug;
+}
+
+function resolveContinuationMediaIds(options: ContinuationOptions): string[] {
+  const direct = options.mediaIds?.filter((id) => typeof id === "string" && id.trim()) ?? [];
+  if (direct.length > 0) return direct;
+  const inherited = options.inheritedContinuationContext;
+  if (!inherited || typeof inherited !== "object" || Array.isArray(inherited)) return [];
+  const raw = (inherited as MutableJsonObject).mediaIds;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((id): id is string =>
+    typeof id === "string" && /^[A-Za-z0-9._-]{1,160}$/.test(id)
+  );
+}
+
+export function sanitizeActions(
+  actions: MutableJsonObject[],
+  originalText = "",
+) {
+  const validActions = actions.filter((action) =>
+    action.__dropInvalidConfirmCard !== true
+  );
+  actions.splice(0, actions.length, ...validActions);
+  const hasConfirm = actions.some((action) =>
+    normalizedType(action) === "show_confirm_card"
+  );
+  const mealHints = detectMealHints(originalText);
+  const sanitized = hasConfirm
+    ? actions.filter((action) => !isPreAnswerAction(action))
+    : keepOneAskAction(
+      actions.filter((action) =>
+        !isMealTypeAsk(action) || mealHints.length === 0
+      ),
+    );
+
+  actions.splice(0, actions.length, ...sanitized);
+}
+
+export function detectMealHints(text: string): string[] {
+  const source = text.toLowerCase();
+  const result: string[] = [];
+  const specs: Array<[string, RegExp[]]> = [
+    ["breakfast", [/早餐|早饭|早點|早点|早上|上午|清晨|早晨|breakfast/i]],
+    ["lunch", [/午餐|午饭|中午|午间|lunch/i]],
+    ["dinner", [/晚餐|晚饭|晚上|晚间|傍晚|夜宵|dinner|supper/i]],
+    ["snack", [/加餐|零食|点心|下午茶|宵夜|snack/i]],
+  ];
+  for (const [mealType, patterns] of specs) {
+    if (patterns.some((pattern) => pattern.test(source))) {
+      result.push(mealType);
+    }
+  }
+  return result;
+}
+
+function keepOneAskAction(actions: MutableJsonObject[]): MutableJsonObject[] {
+  const preferredAsk =
+    actions.find((action) =>
+      normalizedType(action) === "ask_missing_info_card"
+    ) ??
+      actions.find((action) =>
+        normalizedType(action) === "ask_record_intent_card"
+      ) ??
+      actions.find((action) =>
+        normalizedType(action) === "debug_show_choice_card"
+      );
+  let keptAsk = false;
+  return actions.filter((action) => {
+    if (!isPreAnswerAction(action)) return true;
+    if (action === preferredAsk && !keptAsk) {
+      keptAsk = true;
+      return true;
+    }
+    return false;
+  });
+}
+
+function isPreAnswerAction(action: MutableJsonObject): boolean {
+  const type = normalizedType(action);
+  return type === "ask_missing_info_card" ||
+    type === "ask_record_intent_card" ||
+    type === "debug_show_choice_card";
+}
+
+function isMealTypeAsk(action: MutableJsonObject): boolean {
+  if (normalizedType(action) !== "ask_missing_info_card") return false;
+  const payload = action.payload && typeof action.payload === "object"
+    ? action.payload as MutableJsonObject
+    : {};
+  return (payload.field ?? action.field ?? "mealType") === "mealType";
+}
+
+function normalizedType(action: MutableJsonObject): string {
+  const type = action.type ?? action.t;
+  return typeof type === "string" ? type : "";
+}
+
+export function normalizeMealSourceMediaIds(
+  meals: MutableJsonObject[],
+  attachmentMediaIds: string[],
+  originalText = "",
+): {
+  normalizedModelPhotoCount: number;
+  deterministicPhotoAssignmentCount: number;
+  unmatchedExplicitMealHintCount: number;
+} {
+  const allowed = attachmentMediaIds
+    .map((id) => typeof id === "string" ? id.trim() : "")
+    .filter((id, index, all) => id.length > 0 && all.indexOf(id) === index);
+  const claimed = new Set<string>();
+  const hasExplicit = meals.some((meal) => Array.isArray(meal.sourceMediaIds));
+
+  for (const meal of meals) {
+    const requested = Array.isArray(meal.sourceMediaIds)
+      ? meal.sourceMediaIds
+      : null;
+    const normalized = requested == null
+      ? []
+      : normalizeRequestedMediaReferences(requested, allowed, claimed);
+    if (normalized.length > 0) {
+      meal.sourceMediaIds = normalized;
+      continue;
+    }
+
+    if (requested != null) {
+      meal.sourceMediaIds = [];
+    }
+  }
+
+  if (
+    !hasExplicit && meals.length === 1 && allowed.length >= 1 &&
+    allowed.length <= 6
+  ) {
+    meals[0].sourceMediaIds = [...allowed];
+  }
+  const normalizedModelPhotoCount = countPhotoReferences(meals);
+  const explicit = applyExplicitPhotoMealAssignments(
+    meals,
+    allowed,
+    originalText,
+  );
+  return {
+    normalizedModelPhotoCount,
+    deterministicPhotoAssignmentCount:
+      explicit.deterministicPhotoAssignmentCount,
+    unmatchedExplicitMealHintCount: explicit.unmatchedExplicitMealHintCount,
+  };
+}
+
+function normalizeRequestedMediaReferences(
+  rawReferences: unknown[],
+  allowed: string[],
+  claimed: Set<string>,
+): string[] {
+  const result: string[] = [];
+  const localSeen = new Set<string>();
+  for (const raw of rawReferences) {
+    const resolved = resolveAttachmentReference(raw, allowed);
+    if (!resolved || claimed.has(resolved) || localSeen.has(resolved)) continue;
+    claimed.add(resolved);
+    localSeen.add(resolved);
+    result.push(resolved);
+  }
+  return result;
+}
+
+function resolveAttachmentReference(
+  raw: unknown,
+  allowed: string[],
+): string | null {
+  if (typeof raw !== "string" && typeof raw !== "number") return null;
+  const text = String(raw).trim();
+  if (!text) return null;
+  if (allowed.includes(text)) return text;
+
+  const normalized = text.toLowerCase();
+  const aliasMatch = normalized.match(
+    /^(?:attachment|image|photo|img|pic|picture)[_-]?([1-9][0-9]*)$/,
+  );
+  const indexText = aliasMatch?.[1] ??
+    (/^[1-9][0-9]*$/.test(normalized) ? normalized : null);
+  if (!indexText) return null;
+  const index = Number(indexText);
+  if (!Number.isInteger(index) || index < 1 || index > allowed.length) {
+    return null;
+  }
+  return allowed[index - 1] ?? null;
+}
+
+export function detectExplicitMealAttachmentAssignments(
+  text: string,
+  allowedMediaIds: string[],
+): Map<string, string> {
+  const assignments = new Map<string, string>();
+  if (allowedMediaIds.length === 0 || text.trim().length === 0) {
+    return assignments;
+  }
+
+  const normalized = text.toLowerCase();
+  const mealPattern =
+    "(breakfast|lunch|dinner|supper|snack|早餐|早饭|早點|早点|早上|午餐|午饭|中午|晚餐|晚饭|晚上|加餐|零食|点心)";
+  const ordinalPattern =
+    "(?:第\\s*([一二三四五六1-6])\\s*(?:张|張|幅|个|個)?|(?:图|圖|照片|image|photo|pic|picture)\\s*([1-6]))";
+  const direct = new RegExp(
+    `${ordinalPattern}[^\\n，,。；;]{0,20}(?:是|为|為|对应|屬於|属于|=|:|：)?\\s*${mealPattern}`,
+    "gi",
+  );
+  for (const match of normalized.matchAll(direct)) {
+    const index = ordinalToIndex(match[1] ?? match[2]);
+    const meal = normalizeMealToken(match[3]);
+    if (
+      !index || !meal || index > allowedMediaIds.length || assignments.has(meal)
+    ) {
+      continue;
+    }
+    assignments.set(meal, allowedMediaIds[index - 1]);
+  }
+
+  if (assignments.size === 0) {
+    const hasSequentialSignal = /分别|分別|依次|一日三餐/.test(normalized);
+    const breakfastAt = findMealTokenIndex(normalized, "breakfast");
+    const lunchAt = findMealTokenIndex(normalized, "lunch");
+    const dinnerAt = findMealTokenIndex(normalized, "dinner");
+    if (
+      hasSequentialSignal && allowedMediaIds.length >= 3 &&
+      breakfastAt >= 0 && lunchAt > breakfastAt && dinnerAt > lunchAt
+    ) {
+      assignments.set("breakfast", allowedMediaIds[0]);
+      assignments.set("lunch", allowedMediaIds[1]);
+      assignments.set("dinner", allowedMediaIds[2]);
+    }
+  }
+
+  return assignments;
+}
+
+function findMealTokenIndex(text: string, mealType: string): number {
+  const patterns: Record<string, RegExp> = {
+    breakfast: /breakfast|早餐|早饭|早點|早点|早上/i,
+    lunch: /lunch|午餐|午饭|中午/i,
+    dinner: /dinner|supper|晚餐|晚饭|晚上/i,
+    snack: /snack|加餐|零食|点心/i,
+  };
+  const match = text.match(patterns[mealType]);
+  return match?.index ?? -1;
+}
+
+function ordinalToIndex(value: string | undefined): number | null {
+  if (!value) return null;
+  const table: Record<string, number> = {
+    "一": 1,
+    "二": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+  };
+  return table[value] ?? (Number(value) || null);
+}
+
+function normalizeMealToken(value: string | undefined): string | null {
+  if (!value) return null;
+  const token = value.toLowerCase();
+  if (/breakfast|早餐|早饭|早點|早点|早上/.test(token)) return "breakfast";
+  if (/lunch|午餐|午饭|中午/.test(token)) return "lunch";
+  if (/dinner|supper|晚餐|晚饭|晚上/.test(token)) return "dinner";
+  if (/snack|加餐|零食|点心/.test(token)) return "snack";
+  return null;
 }
 
 function normalizeContinuationContext(
@@ -360,3 +740,7 @@ function isMealType(value: unknown): value is string {
   return value === "breakfast" || value === "lunch" || value === "dinner" ||
     value === "snack";
 }
+import {
+  applyExplicitPhotoMealAssignments,
+  parseExplicitPhotoMealHints,
+} from "../_shared/explicit_photo_meal_assignment.ts";

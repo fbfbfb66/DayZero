@@ -212,7 +212,13 @@ class RoomFoodCardConfirmationRepository(
                 card.put(KEY_WEIGHT_KG, weightKg ?: JSONObject.NULL)
             }
             if (meals != null) {
-                card.put(KEY_MEALS, meals.toMealsJsonArray())
+                card.put(
+                    KEY_MEALS,
+                    mergeArraysPreservingUnknowns(
+                        generated = meals.toMealsJsonArray(),
+                        persisted = card.optJSONArray(KEY_MEALS)
+                    )
+                )
             }
             guard?.put(KEY_PENDING_ORIGINAL_CARD, card)
             if (guard == null) {
@@ -247,6 +253,33 @@ class RoomFoodCardConfirmationRepository(
     }
 }
 
+private fun mergeArraysPreservingUnknowns(generated: JSONArray, persisted: JSONArray?): JSONArray {
+    if (persisted == null) return generated
+    val result = JSONArray()
+    for (index in 0 until generated.length()) {
+        val next = generated.get(index)
+        val old = persisted.opt(index)
+        if (next is JSONObject && old is JSONObject) mergeObjectsPreservingUnknowns(next, old)
+        if (next is JSONArray && old is JSONArray) result.put(mergeArraysPreservingUnknowns(next, old)) else result.put(next)
+    }
+    return result
+}
+
+private fun mergeObjectsPreservingUnknowns(generated: JSONObject, persisted: JSONObject) {
+    persisted.keys().forEach { key ->
+        if (!generated.has(key)) {
+            generated.put(key, persisted.get(key))
+        } else {
+            val next = generated.get(key)
+            val old = persisted.get(key)
+            when {
+                next is JSONObject && old is JSONObject -> mergeObjectsPreservingUnknowns(next, old)
+                next is JSONArray && old is JSONArray -> generated.put(key, mergeArraysPreservingUnknowns(next, old))
+            }
+        }
+    }
+}
+
 interface ConfirmFoodCardFailureInjector {
     fun afterDailyRecordUpsert() = Unit
     fun afterCardJsonBuilt() = Unit
@@ -260,11 +293,13 @@ private fun List<ConfirmCardMeal>.toMealsJsonArray(): JSONArray {
 }
 
 private fun ConfirmCardMeal.toJson(): JSONObject {
-    return JSONObject()
+    val result = JSONObject()
         .put("mealType", mealType)
         .put("mealLabel", mealLabel ?: JSONObject.NULL)
         .put("subtotalCalories", subtotalCalories ?: JSONObject.NULL)
         .put("items", items.toItemsJsonArray())
+    sourceMediaIds?.let { result.put("sourceMediaIds", JSONArray(it)) }
+    return result
 }
 
 private fun List<ConfirmCardItem>.toItemsJsonArray(): JSONArray {

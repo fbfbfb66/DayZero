@@ -60,15 +60,28 @@ private fun PlaceholderIcon() {
     )
 }
 
-private fun getSafeThumbnailFile(context: Context, relativePath: String): File? {
-    if (relativePath.isBlank() || relativePath.contains("..")) return null
+internal enum class SafeMediaRoot(val relativeDirectory: String) {
+    MASTER("media/master"),
+    THUMBNAIL("media/thumbnail")
+}
+
+internal fun resolveSafeMediaFile(
+    filesDir: File,
+    relativePath: String?,
+    root: SafeMediaRoot
+): File? {
+    if (relativePath.isNullOrBlank()) return null
+    val normalized = relativePath.replace('\\', '/')
+    if (File(relativePath).isAbsolute) return null
+    if (normalized.substringBefore('/').contains(':')) return null
+    if (normalized.split('/').any { it == ".." }) return null
     return try {
-        val filesDir = context.filesDir.canonicalFile
-        val targetFile = File(filesDir, relativePath).canonicalFile
-        val thumbnailDir = File(filesDir, "media/thumbnail").canonicalFile
-        
-        if (targetFile.path.startsWith(thumbnailDir.path + File.separator) || targetFile.path == thumbnailDir.path) {
-            if (targetFile.exists() && targetFile.isFile) {
+        val canonicalFilesDir = filesDir.canonicalFile
+        val targetFile = File(canonicalFilesDir, relativePath).canonicalFile
+        val allowedRoot = File(canonicalFilesDir, root.relativeDirectory).canonicalFile
+
+        if (targetFile.path.startsWith(allowedRoot.path + File.separator)) {
+            if (targetFile.exists() && targetFile.isFile && targetFile.canRead()) {
                 targetFile
             } else {
                 null
@@ -80,3 +93,12 @@ private fun getSafeThumbnailFile(context: Context, relativePath: String): File? 
         null
     }
 }
+
+internal fun getSafeMasterMediaFile(context: Context, relativePath: String?): File? =
+    resolveSafeMediaFile(context.filesDir, relativePath, SafeMediaRoot.MASTER)
+
+internal fun getSafeThumbnailMediaFile(context: Context, relativePath: String?): File? =
+    resolveSafeMediaFile(context.filesDir, relativePath, SafeMediaRoot.THUMBNAIL)
+
+private fun getSafeThumbnailFile(context: Context, relativePath: String): File? =
+    getSafeThumbnailMediaFile(context, relativePath)

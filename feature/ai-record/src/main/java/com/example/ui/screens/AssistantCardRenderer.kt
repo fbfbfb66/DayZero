@@ -30,6 +30,9 @@ import com.example.ui.components.ai.AskMissingInfoCard
 import com.example.ui.components.ai.AskRecordIntentCard
 import com.example.ui.components.ai.DebugChoiceCard
 import com.example.ui.components.ai.FoodDraftConfirmCard
+import com.example.ui.components.PhotoViewerItem
+import com.example.ui.screens.photoeditor.PhotoAssignmentDraft
+import com.example.domain.model.media.MediaAsset
 import com.example.ui.theme.BrandGreen
 import com.example.ui.theme.CardBackground
 import com.example.ui.theme.TextPrimary
@@ -41,7 +44,11 @@ import java.util.Locale
 @Composable
 internal fun AssistantCardRenderer(
     card: AiChatCard,
-    actionHandler: AiRecordActionHandler
+    actionHandler: AiRecordActionHandler,
+    mediaById: Map<String, MediaAsset> = emptyMap(),
+    originMediaIds: List<String> = emptyList(),
+    onEditMealPhotos: ((cardId: String, mealIndex: Int) -> Unit)? = null,
+    onMealPhotoClick: (List<PhotoViewerItem>, Int) -> Unit = { _, _ -> }
 ) {
     when (card) {
         is DebugChoiceCardPayload -> {
@@ -101,7 +108,7 @@ internal fun AssistantCardRenderer(
         is ShowConfirmCardPayload -> {
             if (card.confirmType == "food_record") {
                 CardSpacer()
-                RenderShowConfirmCard(card = card, actionHandler = actionHandler)
+                RenderShowConfirmCard(card, actionHandler, mediaById, onMealPhotoClick, originMediaIds, onEditMealPhotos)
             } else if (!card.resolved) {
                 CardSpacer()
                 DebugChoiceCard(
@@ -126,7 +133,7 @@ internal fun AssistantCardRenderer(
 
         is DateMismatchGuardCardPayload -> {
             CardSpacer()
-            DateMismatchGuardCard(card = card, actionHandler = actionHandler)
+            DateMismatchGuardCard(card, actionHandler, mediaById, onMealPhotoClick, originMediaIds, onEditMealPhotos)
         }
 
         else -> Unit
@@ -136,8 +143,33 @@ internal fun AssistantCardRenderer(
 @Composable
 private fun RenderShowConfirmCard(
     card: ShowConfirmCardPayload,
-    actionHandler: AiRecordActionHandler
+    actionHandler: AiRecordActionHandler,
+    mediaById: Map<String, MediaAsset>,
+    onMealPhotoClick: (List<PhotoViewerItem>, Int) -> Unit,
+    originMediaIds: List<String> = emptyList(),
+    onEditMealPhotos: ((cardId: String, mealIndex: Int) -> Unit)? = null
 ) {
+    // The photo edit entry is legal only while the card is still pending and its
+    // origin image user message carries a legal 1..6 photo set. Terminal cards
+    // and text-only cards never show an entry that would do nothing.
+    val legalOriginPhotoCount =
+        if (
+            onEditMealPhotos != null &&
+            card.state == "pending" &&
+            !card.meals.isNullOrEmpty() &&
+            PhotoAssignmentDraft.isLegalOriginSet(originMediaIds)
+        ) {
+            originMediaIds.size
+        } else {
+            0
+        }
+    val editPhotos: ((Int) -> Unit)? =
+        if (legalOriginPhotoCount > 0) {
+            { mealIndex -> onEditMealPhotos?.invoke(card.id, mealIndex) ?: Unit }
+        } else {
+            null
+        }
+
     FoodDraftConfirmCard(
         card = card,
         onOptionSelected = { interactionId, optionId, optionLabel, payloadSummary ->
@@ -156,21 +188,46 @@ private fun RenderShowConfirmCard(
                 weightKg = weightKg,
                 meals = meals
             )
-        }
+        },
+        photoItemsForMeal = { meal -> meal.sourceMediaIds.toPhotoViewerItems(mediaById) },
+        onMealPhotoClick = onMealPhotoClick,
+        onEditPhotos = editPhotos,
+        editableOriginPhotoCount = legalOriginPhotoCount
     )
 }
 
 @Composable
 private fun DateMismatchGuardCard(
     card: DateMismatchGuardCardPayload,
-    actionHandler: AiRecordActionHandler
+    actionHandler: AiRecordActionHandler,
+    mediaById: Map<String, MediaAsset>,
+    onMealPhotoClick: (List<PhotoViewerItem>, Int) -> Unit,
+    originMediaIds: List<String> = emptyList(),
+    onEditMealPhotos: ((cardId: String, mealIndex: Int) -> Unit)? = null
 ) {
     when (card.state) {
-        "approved" -> RenderShowConfirmCard(card = card.pendingOriginalCard, actionHandler = actionHandler)
+        // Only an approved guard exposes the original card (and thus the photo
+        // edit entry); pending/cancelled guards never enter the editor.
+        "approved" -> RenderShowConfirmCard(
+            card.pendingOriginalCard, actionHandler, mediaById, onMealPhotoClick, originMediaIds, onEditMealPhotos
+        )
         "cancelled" -> DateMismatchTerminalCard("已取消，本次内容未记录")
         else -> DateMismatchPendingCard(card = card, actionHandler = actionHandler)
     }
 }
+
+internal fun List<String>?.toPhotoViewerItems(mediaById: Map<String, MediaAsset>): List<PhotoViewerItem> =
+    this?.mapIndexed { index, id ->
+        val asset = mediaById[id]
+        PhotoViewerItem(
+            mediaId = id,
+            masterRelativePath = asset?.masterRelativePath,
+            thumbnailRelativePath = asset?.thumbnailRelativePath,
+            width = asset?.width,
+            height = asset?.height,
+            accessibilityLabel = if (asset == null) "图片未找到 ${index + 1}，共 ${size} 张" else "图片 ${index + 1}，共 ${size} 张"
+        )
+    }.orEmpty()
 
 @Composable
 private fun DateMismatchPendingCard(

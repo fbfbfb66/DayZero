@@ -36,6 +36,10 @@ sealed class AiRecordConversationState {
     ) : AiRecordConversationState()
 
     data class Error(
-        val message: String
+        val message: String,
+        val conversationId: String? = null,
+        val userMessageId: String? = null,
+        val assistantMessageId: String? = null,
+        val retryable: Boolean = false
     ) : AiRecordConversationState()
 }

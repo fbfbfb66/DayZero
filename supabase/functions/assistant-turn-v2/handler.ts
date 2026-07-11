@@ -5,11 +5,18 @@ import {
 } from "./normalization.ts";
 import {
   buildVisionAwareUserMessage,
+  parseAndValidateAttachments,
   VISION_PROMPT_ADDENDUM,
   VisionValidationError,
 } from "../_shared/assistant_vision.ts";
+import {
+  FALLBACK_UPSTREAM_TOTAL_TIMEOUT_MS,
+  isAbortError,
+} from "../_shared/assistant_upstream_timeout.ts";
 
 const MOONSHOT_API_URL = "https://api.moonshot.cn/v1/chat/completions";
+
+type KimiResult = { choices?: Array<{ message?: { content?: unknown } }> };
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -62,7 +69,8 @@ export async function handler(req: Request): Promise<Response> {
     );
 
     const promptBuildStartedAt = performance.now();
-    const promptVersion = "compact_v5_vision_continuation";
+    const promptVersion =
+      "compact_v8_deterministic_multi_meal_photo_assignment";
     const promptCacheKey = normalizePromptCacheKey(body.promptCacheKey);
     const recentContext = buildRecentContext(body.recentMessages);
     const turnType = typeof body.turnType === "string"
@@ -81,7 +89,13 @@ export async function handler(req: Request): Promise<Response> {
     });
 
     let userMessage;
+    let validatedAttachments;
     try {
+      validatedAttachments = parseAndValidateAttachments(
+        body.attachments,
+        turnType,
+        userText,
+      );
       userMessage = buildVisionAwareUserMessage(
         body.attachments,
         turnType,
@@ -103,44 +117,72 @@ export async function handler(req: Request): Promise<Response> {
     }
     const promptBuiltAt = performance.now();
 
+    const totalDecodedAttachmentBytes = validatedAttachments.reduce(
+      (total, attachment) => total + attachment.decodedByteSize,
+      0,
+    );
     const kimiRequestStartedAt = performance.now();
-    const response = await fetch(MOONSHOT_API_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${moonshotApiKey}`,
-      },
-      body: JSON.stringify({
-        model: "kimi-k2.6",
-        messages: [
-          { role: "system", content: systemPrompt },
-          userMessage,
-        ],
-        response_format: { type: "json_object" },
-        prompt_cache_key: promptCacheKey,
-        max_tokens: 1500,
-        temperature: 0.6,
-        thinking: { type: "disabled" },
-      }),
-    });
-    const kimiResponseReceivedAt = performance.now();
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({
-        message: "Unknown error",
-      }));
-      return jsonResponse(
-        {
-          error: "Kimi API Request Failed",
-          status: response.status,
-          detail: errorData.error?.message || errorData.message,
+    const abortController = new AbortController();
+    const timeoutId = setTimeout(
+      () => abortController.abort(),
+      FALLBACK_UPSTREAM_TOTAL_TIMEOUT_MS,
+    );
+    let response: Response;
+    let kimiResult: KimiResult;
+    let kimiResponseReceivedAt: number;
+    try {
+      response = await fetch(MOONSHOT_API_URL, {
+        method: "POST",
+        signal: abortController.signal,
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${moonshotApiKey}`,
         },
-        502,
-      );
-    }
+        body: JSON.stringify({
+          model: "kimi-k2.6",
+          messages: [
+            { role: "system", content: systemPrompt },
+            userMessage,
+          ],
+          response_format: { type: "json_object" },
+          prompt_cache_key: promptCacheKey,
+          max_tokens: 1500,
+          temperature: 0.6,
+          thinking: { type: "disabled" },
+        }),
+      });
+      kimiResponseReceivedAt = performance.now();
 
-    const kimiJsonParseStartedAt = performance.now();
-    const kimiResult = await response.json();
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({
+          message: "Unknown error",
+        }));
+        return jsonResponse(
+          {
+            error: "Kimi API Request Failed",
+            status: response.status,
+            detail: errorData.error?.message || errorData.message,
+          },
+          502,
+        );
+      }
+
+      kimiResult = await response.json() as KimiResult;
+    } catch (error) {
+      if (isAbortError(error)) {
+        return jsonResponse(
+          {
+            error: "Upstream request timed out",
+            errorCode: "UPSTREAM_TOTAL_TIMEOUT",
+          },
+          504,
+        );
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+    const kimiJsonParseStartedAt = kimiResponseReceivedAt;
     const kimiJsonParsedAt = performance.now();
     const content = kimiResult?.choices?.[0]?.message?.content;
 
@@ -200,7 +242,7 @@ export async function handler(req: Request): Promise<Response> {
         continuationContext,
       );
     }
-    normalizeActions(
+    const photoAssignmentDebug = normalizeActions(
       actions,
       body.date ?? "",
       fallbackOriginalText,
@@ -237,6 +279,11 @@ export async function handler(req: Request): Promise<Response> {
         outputJsonChars: content.length,
         compactJsonUsed,
         promptCacheKeyUsed: Boolean(promptCacheKey),
+        totalDecodedAttachmentBytes,
+        upstreamHeadersMs: round(kimiResponseReceivedAt - kimiRequestStartedAt),
+        upstreamTotalMs: round(kimiJsonParsedAt - kimiRequestStartedAt),
+        timeoutStage: "NONE",
+        ...photoAssignmentDebug,
       },
     });
   } catch (error) {
@@ -304,6 +351,11 @@ VISION CONTINUATION CONTRACT (this overrides the earlier no-payload rule only fo
 - For TurnType interaction_result, ContinuationContext is authoritative food context from the prior card. Never request the image again.
 - If CardAction is ask_missing_info_card and Selected is breakfast/lunch/dinner/snack, return show_confirm_card using ContinuationContext and that meal type. Do not repeat the meal question and do not return an empty action list.
 - If CardAction is ask_record_intent_card and Selected is record, use ContinuationContext: return show_confirm_card when mealType is known, otherwise ask_missing_info_card while preserving the same continuation object.
+- Current image inputs include an ImageAttachmentReferences table in the user message. The table lists stable aliases attachment_1, attachment_2, ... in exactly the same order as the following image_url blocks.
+- For image-origin show_confirm_card meals, raw sourceMediaIds should contain only those attachment_N aliases (or the equivalent 1-based index) assigned to the matching meal. The server will convert them to real sourceMediaIds. Never output Base64, URLs, file paths, or invented IDs.
+- Each image may belong to at most one meal. Keep sourceMediaIds order stable. Do not duplicate an attachment across meals.
+- Multi-image meal text is authoritative when explicit: if the user says image/photo 1 is breakfast, image/photo 2 is lunch, image/photo 3 is dinner, or equivalently mentions 一日三餐/早餐/午餐/晚餐 with clear mapping, return one show_confirm_card with separate meals, assign attachment_1/2/3 to breakfast/lunch/dinner respectively, and do not ask which meal to record.
+- When multiple meals are present and you cannot safely map each photo to a meal, omit sourceMediaIds rather than guessing; the client will keep all origin photos available for manual assignment.
 ${VISION_PROMPT_ADDENDUM}`;
 }
 

@@ -272,8 +272,8 @@ class DayZeroConversationPhase2Test {
 
     @Test
     fun continuingConversationKeepsDateAndTitleButUpdatesPreviewAndActivity() = runTest(mainDispatcherRule.testDispatcher) {
-        val start = Instant.parse("2026-06-18T02:00:00Z").toEpochMilli()
-        val later = Instant.parse("2026-06-20T02:00:00Z").toEpochMilli()
+        val start = Instant.parse("2026-06-18T12:00:00Z").toEpochMilli()
+        val later = Instant.parse("2026-06-20T12:00:00Z").toEpochMilli()
         val conversationId = repository.createConversationWithFirstMessage("first title", start)!!
 
         repository.insertChatMessage(
@@ -445,6 +445,14 @@ class DayZeroConversationPhase2Test {
             sendUserMessageWithMediaUseCase = fakeSendMediaUseCase,
             currentIdentityProvider = fakeCurrentIdentityProvider,
             networkAvailabilityProvider = com.example.domain.network.NetworkAvailabilityProvider { true },
+            updateFoodCardPhotoAssignmentsUseCase = com.example.domain.usecase.UpdateFoodCardPhotoAssignmentsUseCase(
+                object : com.example.domain.repository.FoodCardPhotoAssignmentRepository {
+                    override suspend fun updatePhotoAssignments(
+                        cardId: String,
+                        assignments: List<com.example.domain.repository.MealPhotoAssignment>
+                    ) = com.example.domain.repository.UpdateFoodCardPhotoAssignmentsResult.Unchanged
+                }
+            ),
             savedStateHandle = SavedStateHandle()
         )
 

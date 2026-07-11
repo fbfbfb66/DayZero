@@ -22,6 +22,14 @@ import com.example.domain.network.NetworkAvailabilityProvider
 import com.example.domain.model.ai.SendUserMessageWithMediaResult
 import com.example.domain.repository.AiDraftRepository
 import com.example.domain.repository.ConversationRepository
+import com.example.domain.repository.UpdateFoodCardPhotoAssignmentsResult
+import com.example.domain.usecase.UpdateFoodCardPhotoAssignmentsUseCase
+import com.example.ui.screens.photoeditor.PhotoAssignmentDraft
+import com.example.ui.screens.photoeditor.PhotoAssignmentEditorUiState
+import com.example.ui.screens.photoeditor.findEditorCard
+import com.example.ui.screens.photoeditor.isCardPhotoEditable
+import com.example.ui.screens.photoeditor.mealDisplayLabel
+import com.example.ui.screens.photoeditor.resolveOriginMediaIds
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
@@ -70,6 +78,7 @@ data class AiConversationDetailState(
     val currentConversation: Conversation? = null,
     val messages: List<AiChatMessage> = emptyList(),
     val messagesWithMedia: List<MessageWithMedia> = emptyList(),
+    val mediaAssets: List<MediaAsset> = emptyList(),
     val isSending: Boolean = false,
     val isStreaming: Boolean = false,
     val isSubmitting: Boolean = false,
@@ -113,6 +122,7 @@ class AiRecordViewModel @Inject constructor(
     private val sendUserMessageWithMediaUseCase: SendUserMessageWithMediaUseCase,
     private val currentIdentityProvider: CurrentIdentityProvider,
     private val networkAvailabilityProvider: NetworkAvailabilityProvider,
+    private val updateFoodCardPhotoAssignmentsUseCase: UpdateFoodCardPhotoAssignmentsUseCase,
     private val savedStateHandle: SavedStateHandle
 ) : ViewModel() {
     private val selectedConversationId = MutableStateFlow<String?>(savedStateHandle[KEY_CONVERSATION_ID] as? String)
@@ -162,6 +172,9 @@ class AiRecordViewModel @Inject constructor(
 
     fun openConversation(conversationId: String) {
         savedStateHandle[KEY_CONVERSATION_ID] = conversationId
+        if (selectedConversationId.value != conversationId) {
+            _photoEditor.value = null
+        }
         selectedConversationId.value = conversationId
         detailTransient.value = DetailTransientState()
     }
@@ -492,6 +505,149 @@ class AiRecordViewModel @Inject constructor(
         }
     }
 
+    // region Photo assignment editor session
+
+    private val _photoEditor = MutableStateFlow<PhotoAssignmentEditorUiState?>(null)
+    val photoEditor: StateFlow<PhotoAssignmentEditorUiState?> = _photoEditor
+
+    /**
+     * Opens the photo assignment editor for one confirmation card. The session
+     * is a local snapshot: no Room write happens until [savePhotoAssignments].
+     * Refuses to open for terminal/guard-pending cards or cards without a legal
+     * origin photo set.
+     */
+    fun openPhotoAssignmentEditor(cardId: String, initialMealIndex: Int = 0) {
+        val conversationId = selectedConversationId.value ?: return
+        val messages = uiState.value.detail.messages
+        val lookup = findEditorCard(messages, cardId) ?: return
+        if (!isCardPhotoEditable(lookup)) return
+        val meals = lookup.card.meals.orEmpty()
+        if (meals.isEmpty()) return
+        val originIds = resolveOriginMediaIds(messages, lookup.assistantMessageId)
+        if (!PhotoAssignmentDraft.isLegalOriginSet(originIds)) return
+
+        val draft = PhotoAssignmentDraft.fromMeals(cardId, meals, originIds)
+        _photoEditor.value = PhotoAssignmentEditorUiState(
+            conversationId = conversationId,
+            cardId = cardId,
+            mealLabels = meals.map(::mealDisplayLabel),
+            selectedMealIndex = initialMealIndex.coerceIn(0, meals.size - 1),
+            initialDraft = draft,
+            draft = draft
+        )
+    }
+
+    fun photoEditorSelectMeal(mealIndex: Int) {
+        _photoEditor.update { session ->
+            session?.copy(selectedMealIndex = mealIndex.coerceIn(0, (session.mealLabels.size - 1).coerceAtLeast(0)))
+        }
+    }
+
+    /** Assigns a photo to the currently selected meal (moving it out of any other meal). */
+    fun photoEditorAssignToSelectedMeal(mediaId: String) {
+        _photoEditor.update { session ->
+            session?.copy(draft = session.draft.assignToMeal(mediaId, session.selectedMealIndex))
+        }
+    }
+
+    fun photoEditorRemove(mediaId: String) {
+        _photoEditor.update { session -> session?.copy(draft = session.draft.removeFromMeal(mediaId)) }
+    }
+
+    fun photoEditorMove(mediaId: String, targetMealIndex: Int) {
+        _photoEditor.update { session ->
+            session?.copy(draft = session.draft.assignToMeal(mediaId, targetMealIndex))
+        }
+    }
+
+    /** Back/cancel: exits directly when clean, otherwise raises the discard confirmation. */
+    fun requestClosePhotoEditor() {
+        val session = _photoEditor.value ?: return
+        if (session.isSaving) return
+        if (session.isDirty && !session.cardNoLongerEditable) {
+            _photoEditor.value = session.copy(showDiscardDialog = true)
+        } else {
+            _photoEditor.value = null
+        }
+    }
+
+    fun dismissPhotoEditorDiscardDialog() {
+        _photoEditor.update { it?.copy(showDiscardDialog = false) }
+    }
+
+    /** Discards the session; the real card is left completely untouched. */
+    fun discardPhotoEditor() {
+        _photoEditor.value = null
+    }
+
+    /**
+     * Saves the whole card's meal assignments once through the existing
+     * UpdateFoodCardPhotoAssignmentsUseCase. Debounced by [PhotoAssignmentEditorUiState.isSaving];
+     * on failure the edit state is kept and a retryable error is surfaced; when
+     * the card reached a terminal state the save fails safely and only exit remains.
+     */
+    fun savePhotoAssignments() {
+        val session = _photoEditor.value ?: return
+        if (session.isSaving) return
+
+        // Re-validate against the live Room-backed card before writing so a stale
+        // editor session can never overwrite a card that was confirmed/cancelled
+        // or synced away while editing.
+        val lookup = findEditorCard(uiState.value.detail.messages, session.cardId)
+        if (lookup == null || !isCardPhotoEditable(lookup)) {
+            _photoEditor.update {
+                it?.copy(saveError = "这条记录已进入最终状态，照片无法再调整", cardNoLongerEditable = true)
+            }
+            return
+        }
+        if (!session.draft.isValid()) {
+            _photoEditor.update { it?.copy(saveError = "照片分配无效，请调整后重试") }
+            return
+        }
+
+        _photoEditor.update { it?.copy(isSaving = true, saveError = null) }
+        viewModelScope.launch {
+            try {
+                val result = updateFoodCardPhotoAssignmentsUseCase(
+                    cardId = session.cardId,
+                    assignments = session.draft.toMealPhotoAssignments()
+                )
+                when (result) {
+                    UpdateFoodCardPhotoAssignmentsResult.Updated,
+                    UpdateFoodCardPhotoAssignmentsResult.Unchanged -> {
+                        _photoEditor.value = null
+                    }
+
+                    UpdateFoodCardPhotoAssignmentsResult.NotEditable,
+                    UpdateFoodCardPhotoAssignmentsResult.CardNotFound -> {
+                        _photoEditor.update {
+                            it?.copy(
+                                isSaving = false,
+                                saveError = "这条记录已进入最终状态，照片无法再调整",
+                                cardNoLongerEditable = true
+                            )
+                        }
+                    }
+
+                    UpdateFoodCardPhotoAssignmentsResult.InvalidAssignments -> {
+                        _photoEditor.update {
+                            it?.copy(isSaving = false, saveError = "照片分配无效，请调整后重试")
+                        }
+                    }
+                }
+            } catch (c: CancellationException) {
+                _photoEditor.update { it?.copy(isSaving = false) }
+                throw c
+            } catch (e: Exception) {
+                _photoEditor.update {
+                    it?.copy(isSaving = false, saveError = "保存失败，请重试")
+                }
+            }
+        }
+    }
+
+    // endregion
+
     private fun removeSubmittedDraftIds(conversationId: String, submittedIds: List<String>) {
         val currentList = savedStateHandle.get<List<String>>("draft_ids_$conversationId") ?: emptyList()
         savedStateHandle["draft_ids_$conversationId"] = currentList - submittedIds.toSet()
@@ -534,6 +690,7 @@ class AiRecordViewModel @Inject constructor(
                             currentConversation = conversation,
                             messages = messages,
                             messagesWithMedia = messagesWithMedia,
+                            mediaAssets = conversationMedia,
                             draftState = draft
                         )
                     }

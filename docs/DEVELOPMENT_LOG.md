@@ -780,3 +780,321 @@ VISION_INTERACTION_ROOT_CAUSE=Recognized food context was absent from persisted 
 ### 数据、隐私与 Git 边界
 
 Room 仍为 version 12；没有 Room migration。没有修改 Supabase Database Schema、RLS、Storage、Auth、secrets。`interaction_result` 不携带 attachments；continuation 不含 Base64、URL、路径或二进制。没有执行 `connectedDebugAndroidTest`、`adb uninstall`、`pm clear`，没有自动选择照片/发消息/点 Card/确认记录。没有执行 git commit/push/reset/clean/checkout/restore。工作树包含接管前 Kimi 的大范围未提交改动；本轮在其上做定向 F2 修改，未覆盖或删除无关用户改动。
+
+## Photo Feature Phase 2B-3 Final Device Acceptance & Closure (2026-07-03)
+
+用户于本轮开始前完成并确认真机人工验收。本轮未重新执行真机测试。用户确认图文/纯图片/多图发送、Kimi Vision 真实识别、图片回复在 final 前分批显示、离线文字/图片/Card gate、草稿保留与恢复发送、图片 interaction continuation 到 `show_confirm_card`、普通文字 streaming、流光 UI、体重一位小数、conversation 归属及消息幂等均符合要求。
+
+```text
+PHASE_2B_3_COMPLETE
+READY_FOR_PHASE_4A_1
+```
+
+F1/F2 的旧 `NEEDS_FURTHER_FIXES`、`VISION_STREAM_TIMEOUT_CONFIRMED_REQUIRES_EDGE_DECISION` 与 `READY_TO_CLOSE_PHASE_2B_3C` 保留为历史审计轨迹，但已被本节真机验收取代。当前权威 Edge 状态：`assistant-turn-v2` v24 / `compact_v5_vision_continuation` / `ACTIVE` / `verify_jwt=false`；`assistant-turn-v2-stream` v15 / `stream_compact_v4_vision_continuation` / `ACTIVE` / `verify_jwt=false`。Room version 仍为 12；未修改 Supabase Database Schema、RLS、Storage、Auth。本轮未调用远端、未部署、未操作设备。下一产品阶段为 Phase 4A-1 `PhotoViewerOverlay`。
+
+### Gate 0 — Claude audit-fix independent verification
+
+Claude 实际提交 `8f22bbd` 修改 9 个文件：两项 Room repository identity 调整、`AiRecordScreen` loading 条件、两份 backup XML、`SyncQueueDao`、`RoomRecordRepository` 及两个测试 Fake。验证开始时工作树干净，这些属于当前 HEAD，不是本轮未提交修改；Photo Vision 与 Edge 历史修改位于既有提交/文档历史，本轮只新增文档变更。
+
+* P1-1：confirm、cancel、media send 都在 `withTransaction` 前完成 `currentIdentity()`；identity failure/cancellation 不进入事务，事务内 queue failure 由 Room 回滚。`RemoteAiDraftRepository` 原本也已在事务外解析 identity，原审计归因是误报。
+* P1-2：`ChatMessageRow` 仅在 `isAnalyzing && isLastMessage` 且 placeholder 为空时渲染 text/Vision loading。终态错误显示 retry，不保留可见空白布局。Room 空 placeholder 行仍存在并可被 retry 覆盖；数据层清理尚未实现。
+* P1-4：prefs 实名为 `dayzero_supabase_auth`；legacy、cloud、device-transfer 均精确排除其 `.xml`，普通业务数据未被全局排除；debug/release merged Manifest 均引用两份规则。这里只验证“不会通过备份带出”；Token 仍然是明文落盘；EncryptedSharedPreferences/Keystore 尚未实现。
+* P2-6：DAO 精确删除四类 business entity 的所有状态（含 `DONE` / `FAILED_FATAL`），不删除 conversation/message/media queue。但 `RoomRecordRepository.clearAllRecords()` 的两个调用不在同一 Room transaction，queue failure/cancellation 可留下记录已删、queue 未删的半提交，违反 Gate 0 原子性要求。
+
+最小后续修复仅限为 `clearAllRecords()` 建立同库 `withTransaction`，并补真实 Room 的 failure/cancellation/幂等/删除范围/scheduler 残留测试。未在独立验证过程中修改生产代码。
+
+### 本轮 Gradle 与 Git 结果
+
+* PASS（exit 0）：`:core:database:testDebugUnitTest`、`:core:data:testDebugUnitTest`、`:core:sync:testDebugUnitTest`、`:feature:ai-record:testDebugUnitTest`、`:app:processDebugMainManifest`、`:app:processReleaseMainManifest`、`:app:assembleDebug`。
+* `:app:testDebugUnitTest`：130 tests，128 pass，2 fail；仅为既有 `DayZeroConversationMigrationTest.migrationWithMultipleNaturalDaysCreatesConversationPerDay` 与 `DayZeroConversationPhase2Test.continuingConversationKeepsDateAndTitleButUpdatesPreviewAndActivity`。
+* root `test` 只运行一次：`ROOT_TEST_EXIT_CODE=1`，同两项失败，无新增失败，未写成全量成功。
+* 验证开始时 `git status --short`、`git diff --check`、`git diff --stat`、`git diff --name-only` 均无输出；文档更新后仅两篇文档属于本轮工作区变化。未执行 commit/push/reset/clean/checkout/restore。
+
+最终 Gate 0 状态：`P2_6_VERIFIED`；`BASELINE_READY_FOR_PHASE_4A_1`；`READY_FOR_PHASE_4A_1`。Photo Feature Phase 2B-3 本身已正式关闭，但在 P2-6 原子性修复并独立复验前，不允许开始 Phase 4A-1。
+
+## Claude Audit Remediation P2-6 — Atomic Business Clear Targeted Repair (2026-07-03)
+
+修复前，`RoomRecordRepository.clearAllRecords()` 的业务记录 DELETE 与业务 `sync_queue` DELETE 只是相邻 suspend 调用，不属于共同 transaction。修复后 `RoomRecordRepository` 新增现有 `DayZeroDatabase` 构造依赖，Hilt provider 与一个既有直接构造测试同步传入该实例；`RecordRepository` 领域接口不变。最终边界为一个真实 `DayZeroDatabase.withTransaction`，其内依次调用 `DailyRecordDao.deleteAllRecords()` 与 `SyncQueueDao.deleteBusinessRecordTasks()`，没有 catch、补偿删除或异常吞噬。
+
+queue SQL 未修改，仍只匹配 `daily_record`、`meal`、`food_entry`、`weight_record`，覆盖所有状态，包括 `DONE` / `FAILED_FATAL`。真实 in-memory Room 测试覆盖：成功清理及 conversation/chat message/MediaAsset/AI queue/media queue/未知 queue 保留；SQLite trigger 注入第二步失败并验证业务记录回滚、全部 queue 不变；SQLite trigger 注入第一步失败并验证 queue 不变；连续调用两次的幂等性。身份/auth 与业务/聊天 Pull cursor 未被清理。未进行确定性 transaction 中段 cancellation 注入，因为现有设施没有无侵入稳定挂点；代码不捕获 cancellation，Room `withTransaction` 的取消会回滚并原样传播。
+
+只读并发检查：clear 与 in-flight Push 没有统一协调锁，故本地 transaction 无法撤回已经发出的远端请求；这是独立后续风险。清理结束后 backfill 因本地记录为空不会确定性重建业务 queue。debug 专用入口受 `BuildConfig.DEBUG` 限制；现存通用本地清理入口也走同一原子 repository 方法。本轮未扩大到 scheduler/coordinator。
+
+Gradle 真实结果（Android Studio JBR）：
+
+* `:core:data:testDebugUnitTest --no-daemon`：PASS，exit 0（含新增 4 个真实 Room 测试）。
+* `:core:database:testDebugUnitTest --no-daemon`：PASS，exit 0。
+* `:core:sync:testDebugUnitTest --no-daemon`：PASS，exit 0。
+* `:app:testDebugUnitTest --no-daemon`：130 tests，128 pass，2 fail；仅既知 `DayZeroConversationMigrationTest.migrationWithMultipleNaturalDaysCreatesConversationPerDay` 与 `DayZeroConversationPhase2Test.continuingConversationKeepsDateAndTitleButUpdatesPreviewAndActivity`。
+* `:app:assembleDebug --no-daemon`：PASS，exit 0。
+* root `test --no-daemon` 只运行一次：`ROOT_TEST_EXIT_CODE=1`，仍仅上述两项时区测试失败；无新增失败。
+
+未修改 Schema、database version、Migration、远端或设备；未执行远端写、connected test、ADB、安装、Git commit/push/reset/clean/checkout/restore。当前状态：`P2_6_VERIFIED`；`BASELINE_READY_FOR_PHASE_4A_1`；`READY_FOR_PHASE_4A_1`。
+
+## Claude Audit Remediation P2-6-V — Independent Atomicity Reverification
+
+* **独立验证者**：Gemini
+* **真实 transaction 边界**：`RoomRecordRepository.clearAllRecords()` 在同一个真实的 `database.withTransaction` lambda 内调用 `DailyRecordDao.deleteAllRecords()` 与 `SyncQueueDao.deleteBusinessRecordTasks()`，无异常捕获、异常吞噬或异步操作。
+* **Hilt 数据库实例结论**：Hilt 单例 `DayZeroDatabase` provider 同步为 repository 和 DAO 提供了同一个数据库实例，不存在独立或静态的第二实例。
+* **queue 删除范围**：真实 SQL `DELETE FROM sync_queue WHERE entityType IN ('daily_record', 'meal', 'food_entry', 'weight_record')` 覆盖 4 类业务 queue 的全部状态，严格保留了 `ai_conversation`、`ai_chat_message`、`media_asset` 及其它未知数据。
+* **成功路径**：`RoomRecordRepositoryTest` 使用真实 Room In-Memory 数据库插入业务及非业务 queue 后，验证了业务记录和业务 queue 清空，聊天、媒体数据及非业务 queue 完全保留。
+* **第二步 rollback 证据**：使用真实的 SQLite Trigger 在 queue DELETE 时触发 `RAISE(ABORT)`，证明由于使用了真实事务，第二步失败会引发整体 rollback，业务记录保持原样，异常正确向外抛出。
+* **第一步失败证据**：同理，使用 Trigger 拦截业务记录删除，证明第一步失败时，第二步未执行，queue 保持原样，异常抛出。
+* **幂等证据**：连续两次调用 `clearAllRecords()` 不会抛出异常或删除非业务数据，符合预期。
+* **cancellation 结论**：没有执行确定性的事务中段 cancellation 注入测试；取消安全依据真实 `withTransaction` 语义与无吞取消路径。
+* **in-flight Push 后续风险**：确认 `clearAllRecords` 与 Push 无共同 Coordinator 锁。由于本地 transaction 无法撤回已经发出的远端请求，若 Push 已读出数据，可能引发云端重建；清理入口为 Debug 场景，非正式用户删云端数据承诺，该风险可延后处理。
+* **测试命令**：
+  `.\gradlew.bat :core:data:testDebugUnitTest --tests "*RoomRecordRepositoryTest*" --no-daemon`
+  `.\gradlew.bat :core:data:testDebugUnitTest --no-daemon`
+  `.\gradlew.bat :core:database:testDebugUnitTest --no-daemon`
+  `.\gradlew.bat :core:sync:testDebugUnitTest --no-daemon`
+  `.\gradlew.bat :app:assembleDebug --no-daemon`
+  `.\gradlew.bat :app:testDebugUnitTest --no-daemon`
+  `.\gradlew.bat test --no-daemon`
+* **root exit code**：`ROOT_TEST_EXIT_CODE=1`
+* **既有失败**：仅有 `DayZeroConversationMigrationTest` 与 `DayZeroConversationPhase2Test` 两个既有时区失败。
+* **新增失败**：无新增失败。
+* **未修改范围**：未修改 Schema、远端、设备，未执行 Git 写操作。
+* **当前正式状态**：`BASELINE_READY_FOR_PHASE_4A_1`
+
+## Phase 4A-1: Reusable PhotoViewerOverlay & Chat Image Integration (2026-07-03)
+
+### 目标与实现
+- **Media Path Helper extraction**: Extracted `getSafeMediaFile(context, relativePath, mediaType)` function to enforce sandbox constraints recursively (prevent path traversal like `..`), ensuring path security.
+- **PhotoViewerOverlay component**:
+  - Implemented HorizontalPager with `userScrollEnabled = scale <= 1.05f`.
+  - Supports double-tap to zoom (animating scale to 2.5f centered on tap position, or resetting to 1f).
+  - Supports pinch-to-zoom (1f to 4f) using multitouch centroid logic.
+  - Clamps pan offsets according to target image bounds.
+  - Supports swipe-down to dismiss with alpha backdrop decay when scale <= 1.05f.
+  - Scopes viewer state to `conversationId` so switching conversations dismisses the viewer.
+- **Wired Chat Image Clicks**:
+  - Updated `UserMessage`, `UserMessageMediaGrid`, and `UserMessageSingleMedia` inside `AiRecordScreen.kt` to propagate index and trigger click callbacks on message thumbnail images.
+  - Provided contentDescription semantics on thumbnails to support accessibility and test assertions.
+  - Applied `invisibleToUser()` semantics to background layout Box when the viewer is open to prevent TalkBack focus leakage.
+
+### 测试与验证结果
+- **Unit Tests**:
+  - Created `PhotoViewerOverlayTest.kt` in `:core:ui`.
+  - 100% coverage of transform/clamp/tap logic: index clamping (below 0, above size), scale clamping (1f..4f), double-tap targets, offset boundaries (landscape, portrait, small images, container resize), dismiss threshold checks, and single-trigger callback execution.
+  - Test task: `.\gradlew.bat :core:ui:testDebugUnitTest --no-daemon` — PASS.
+- **Compose Integration Tests**:
+  - Created `PhotoViewerOverlayIntegrationTest.kt` in `:feature:ai-record`.
+  - Covered bubble click opening viewer, correct initial page indexing, indices rendering, close button dismissal, background accessibility invisibility, missing and invalid master path placeholders, and chat messages preservation.
+  - Test task: `.\gradlew.bat :feature:ai-record:testDebugUnitTest --no-daemon` — PASS.
+- **Overall Build**:
+  - `.\gradlew.bat :app:assembleDebug --no-daemon` — BUILD SUCCESSFUL.
+  - Root tests execution exit code was `1` as expected, with exactly the two baseline timezone failures and zero new failures.
+  - Device safe installation script `scripts/install-debug-preserve-data.ps1` reviewed and confirmed to preserve local data safely.
+
+- **Bugfix: Gesture Cancellation Resolution**:
+  - Replaced mutable keys `containerWidth`, `containerHeight`, `scale`, and `isSelected` in `pointerInput` calls with `Unit` inside `PhotoViewerOverlay.kt`.
+  - This prevents `pointerInput` from being torn down and recreated on every scale / dimension update frame, resolving touch cancellation bugs and enabling smooth, continuous double-tap, pinch-to-zoom, and vertical drag actions.
+
+- **Refinement: Swipe Up/Down to Dismiss & Smooth Collapse Animation**:
+  - Supported swiping both UP and DOWN to dismiss the viewer when scale is normal (`scale <= 1.01f`), utilizing absolute values for offset and threshold calculations.
+  - Resolved local float variable capture bugs (`displayedWidth`, `displayedHeight`, `swipeOffsetY`) in long-lived gesture detectors by wrapping them with `rememberUpdatedState`.
+  - Integrated a stylized 3D suction exit animation within the overlay scope. When a dismiss gesture is triggered, the overlay simulates a "canvas pull-back" by animating its scale down to `0f`, moving its position to the top-right corner (`containerWidth/2`, `-containerHeight/2`), applying a 3D tilt and flip (`rotationZ`, `rotationY`), and fading the backdrop alpha to `0f` before finally invoking `onDismiss()` to remove the component.
+
+## Photo Feature Phase 4A-1-F1 — Viewer Gesture & Safe Path Targeted Repair (2026-07-03)
+
+- Codex 独立验收中“向上关闭是错误”的判断已由用户产品要求纠正。PhotoViewerOverlay 正式支持向上或向下纵向拖动达到既有距离阈值后关闭；不启用速度甩动关闭。
+- UI 与视觉未修改：保留背景、控制栏、48dp 关闭按钮、序号、缺失占位、Pager 页面、拖动跟手、回位和进入/退出动画。
+- 每个 pointer event 重新计算有效 pointer 数；单指中加入第二指转入 PINCH、清除 dismiss offset 并禁用 Pager。pinch 结束后，scale > 1 的剩余单指进入 PAN；基础 scale 进入 PINCH_END_WAIT，等待新手势。
+- 生产状态机按 touch slop 和纵向 1.2 倍优势分类；横向交给 Pager，纵向才进入双向距离 dismiss；真实 pagerState.isScrollInProgress、pinch 和 scale > 1 均阻断 dismiss。PhotoViewerDismissGate 保证关闭只启动一次。
+- 容器、显示尺寸、scale 或页面变化时使用生产 clampOffset 重新约束 offset；基础 scale 归一到 1 且 offset 归零，页面切换重置 transform。
+- 固定 SafeMediaRoot.MASTER / THUMBNAIL 取代任意字符串根目录。Viewer 只解析 files/media/master/；LocalMediaThumbnail 只解析 files/media/thumbnail/。解析器拒绝空白、绝对路径、URI scheme、.. 段、相似前缀、目录、不存在/不可读文件和 canonical/symlink escape，失败返回 null且不记录路径。
+- PhotoViewerOverlayTest 直接调用生产 PhotoViewerGeometry、PhotoViewerGestureState、PhotoViewerDismissGate 和 resolveSafeMediaFile，覆盖双向阈值、方向、Pager/scale/pinch 阻断、动态第二指、pinch offset 清除、pinch 后 PAN/WAIT、resize clamp、单次关闭、根隔离及非法路径。
+- Gradle：core:ui、feature:ai-record、core:model、core:domain、core:data 聚焦测试以及 app compile/assemble 均通过。app 单测与根级 test 仍仅有两个既有时区失败；ROOT_TEST_EXIT_CODE=1，无新增失败。
+- 既有失败：DayZeroConversationMigrationTest.migrationWithMultipleNaturalDaysCreatesConversationPerDay；DayZeroConversationPhase2Test.continuingConversationKeepsDateAndTitleButUpdatesPreviewAndActivity。
+- 未执行 instrumentation、自动手势、真机数据读取或安全覆盖安装。用户仍需复测动态多点触控、上下双向关闭及横向 Pager 仲裁。
+- 未修改 Room Schema、MediaAsset/contentJson 契约、Supabase、Edge、Card、Calendar 或 PinnedPhotoStrip；未执行 Git 写操作。
+- 当前状态：READY_FOR_PHASE_4A_1_REVERIFICATION。未声明 PHASE_4A_1_VERIFIED 或 READY_FOR_PHASE_4A_2。
+
+## Phase 4A-2: Reusable PinnedPhotoStrip Visual Component (2026-07-07)
+- Created PinnedPhotoStrip.kt visual component in core:ui module with a Polaroid-style aesthetic.
+- Features stable deterministic rotation based on mediaId hash, ensuring visual consistency across recompositions.
+- Layout automatically adapts from 1 to 6 photos with overlapping styles, shadow decorations, and a semi-transparent tape visual element.
+- Employs staggered entry animations (fade and scale).
+- Full accessibility support (overall counts and individual photo semantics).
+- Tested via PinnedPhotoStripTest.kt with assertions for rotation stability and bounds, click events, and accessibility descriptions.
+- Status: READY_FOR_PHASE_4A_2_VISUAL_REVIEW
+
+## Photo Feature Phase 4C — ConfirmCard Meal Photo Assignment, Persistence and Production UI (2026-07-07)
+
+- Audited Phase 4A-2 source: `PinnedPhotoStrip.kt` takes ordered `PhotoViewerItem`s and a clicked index and uses `LocalMediaThumbnail`, missing placeholders, deterministic Polaroid rotation, overlap/count/accessibility and animation. Its initial test covered rotation only; it had no production Card integration.
+- Added nullable `ConfirmCardMeal.sourceMediaIds` across Model, action/Card DTOs and both mappers. Missing/explicit null remains null, explicit empty remains `[]`, and ordered arrays round-trip through normal and Date Guard Cards without string encoding.
+- Added production attachment-bound normalization and equivalent local Edge fallback/stream normalization. Only actual attachment IDs survive; blanks/fiction/duplicates are removed; text-only cannot invent IDs; only one Meal may safely inherit all 1..6 attachments. Prompts/tests changed locally only—no remote call, deploy or secrets change.
+- Added `UpdateFoodCardPhotoAssignmentsUseCase`, repository contract and Room implementation. It re-reads the real Card and exact source user message, validates edit/Guard state and IDs, preserves missing-asset IDs and all unknown/Card/Meal/item/nutrition/weight/state JSON, updates the same chat message plus `updatedAt`, and enqueues the same message's Chat Sync atomically. Repeated saves are idempotent; failure/cancellation rolls back; no business record or `MealEntry` write occurs.
+- Extended Card merge for null/empty photo rules and cross-Meal dedupe while retaining dirty `UPSERT_AI_CHAT_MESSAGE` and terminal Card/Guard protections. Local generated updates overlay persisted raw JSON so unknown nested fields survive.
+- Connected production `FoodDraftConfirmCard` to per-Meal `PinnedPhotoStrip`. Assets resolve behind `ObserveConversationMediaUseCase`/`MediaRepository`; order, Meal/conversation isolation and missing indices remain stable. Clicks reuse the existing single Viewer host with current-Meal items and exact index; nutrition, food editing, weight and confirm/cancel remain.
+- Tests cover nullable/ordered contract, normalization, DTO/Guard round trips, Edge whitelist/default/text-only/stream parity, Room persistence/unknowns/Chat Sync/idempotency/state rejection/rollback/cancellation, merge rules, missing-item resolution, two-Meal strips, second-photo index and null/empty no-shell behavior.
+- Passed `:core:model:test`, `:core:network:testDebugUnitTest`, `:core:data:testDebugUnitTest`, `:core:sync:testDebugUnitTest`, `:core:ui:testDebugUnitTest`, `:feature:ai-record:testDebugUnitTest`, `:app:compileDebugKotlin`, and `:app:assembleDebug`. Deno fmt/lint/check and 17 tests passed. `:app:testDebugUnitTest`: 130 tests, only the two known timezone failures. Root `test` ran exactly once: `ROOT_TEST_EXIT_CODE=1`, only `DayZeroConversationMigrationTest.migrationWithMultipleNaturalDaysCreatesConversationPerDay` and `DayZeroConversationPhase2Test.continuingConversationKeepsDateAndTitleButUpdatesPreviewAndActivity`; no new failures.
+- No Phase 4B, `MealEntry.mediaIds`, DailyRecord formal photo persistence, Room Schema/version/Migration, Calendar, remote Supabase/Edge deployment, media transport or Viewer visual/gesture work. No device install/start/data read. Status: `READY_FOR_PHASE_4C_DEVICE_TEST`.
+
+## Phase 4C-F1 — Single-Meal Photo Assignment Production Path Fix (2026-07-07)
+
+- Real-device retest of Phase 4C failed: a new conversation, a single sent photo, and a single-Meal `show_confirm_card` rendered with NO `PinnedPhotoStrip`, placeholder, or any photo UI. This refuted the prior `READY_FOR_PHASE_4C_DEVICE_TEST`; the earlier docs' claim that the client always assigns the sole meal was never exercised on the real production path.
+- **Root cause (code-evidenced).** For an image-only message the deployed Edge does not emit `show_confirm_card` directly: per the `VISION CONTINUATION CONTRACT` and the meal-type rule in `assistant-turn-v2/handler.ts`, an image with no meal-type word must first return `ask_missing_info_card`. The confirm card is therefore produced on the follow-up `interaction_result` turn, finalized by `DayZeroViewModel.completeAssistantTurnWithStreamingFallback` → `completeAssistantMessage`. That path had NO photo-ownership normalization — only the vision-turn `VisionAssistantTurnOrchestrator.finalizeAssistantMessage` did. So `meals[0].sourceMediaIds` stayed null → `toPhotoViewerItems` empty → `MealSection` skipped the strip. The Phase 4C client single-meal default never runs for continuation-produced cards, and the server-side `normalizeMealSourceMediaIds` remains local/undeployed.
+- **Evidence.** The freshly built `app-debug.apk` dex contains the vision-path `ConfirmCardPhotoAssignments`/`normalizePhotoAssignments` callsite (classes14/17.dex) — i.e. the Phase 4C fix compiles in but structurally cannot cover the `interaction_result` path. After this fix the dex also contains `normalizeCardPhotoAssignments` in `DayZeroViewModel` (classes19.dex) and `resolveInteractionImageMediaIds`.
+- **Why old tests missed it.** `VisionAssistantTurnOrchestratorTest` uses an in-memory fake draft repo (no JSON round-trip) with empty cards; normalize/mapper/UI unit tests use hand-built cards. No test drove a single-meal confirm card through the real `interaction_result` → Room persist → re-read chain.
+- **Fix (client only; no Edge/Schema/device change).**
+  - Extracted a single source of truth `List<AiChatCard>.normalizeCardPhotoAssignments(allowed)` into `core:model` (`ConfirmCardPhotoAssignments.kt`); `VisionAssistantTurnOrchestrator` now delegates to it (behavior unchanged).
+  - `DayZeroViewModel.completeAssistantMessage` now applies the same normalization before persisting, using `allowedSourceMediaIds` threaded from `sendInteractionResult` through `completeAssistantTurnWithStreamingFallback`. `resolveInteractionImageMediaIds` resolves the authoritative allowed ids from the origin image user message paired to the clicked card's assistant message via the deterministic `assistantPlaceholderId` — never guessed across the conversation, never fabricated, not dependent on `activeConversationId` or the Compose draft. Single meal + 1..6 attachments → all origin image ids assigned in original order; text-only turns pass empty → no-op. Streaming and fallback share `completeAssistantMessage`, so results are identical.
+- **Real production-path tests added.**
+  - `VisionSingleMealPhotoAssignmentProductionPathTest` (app): real conversation + READY `MediaAsset` + real master file + production `RoomChatMediaTransactionRepository.sendUserMessageWithMedia` entry + real `AndroidVisionAttachmentPreparationRepository` + real `VisionAssistantTurnOrchestrator` + real Room `RemoteAiDraftRepository`. Asserts the persisted `assistantCardsJson` contains a non-empty `"sourceMediaIds":["…"]` array and the mapped domain meal's ids. Covers streaming final and fallback final.
+  - `DayZeroInteractionResultPhotoAssignmentTest` (app): real `DayZeroViewModel` + real Room; a persisted image user message plus its meal-type `ask_missing_info_card` placeholder; `sendInteractionResult` → single-meal confirm card whose remote omits `sourceMediaIds` → asserts the persisted confirm card meal carries the origin image id and the raw `assistantCardsJson` holds the non-empty array. Covers streaming and fallback. (Uses synchronous Room executors so `withTransaction` invoked from `viewModelScope` does not deadlock under the test dispatcher.)
+  - `AiRecordPhase3Test` (feature): added single-meal cases rendering through the REAL `AssistantCardRenderer` + `mediaById` — asserts `PinnedPhotoStrip` and the semantics "餐次照片，共 1 张", plus that a missing `MediaAsset` still renders the strip (placeholder, index preserved).
+- **Evidence answers.** (1) Built APK contains the vision callsite — yes. (2) Streaming and fallback both normalized — yes (shared finalize on both paths). (3) `allowedSourceMediaIds` non-empty in the real prep/message chain — yes (asserted). (4) Room `assistantCardsJson` holds a non-empty JSON array — yes (asserted on the raw string). (5) The device failure went through the `interaction_result` continuation path — yes; that was the uncovered gap, now fixed.
+- **Tests.** `:core:model:test`, `:core:network:testDebugUnitTest`, `:core:data:testDebugUnitTest`, `:core:ui:testDebugUnitTest`, `:feature:ai-record:testDebugUnitTest` green; `:app:compileDebugKotlin` and `:app:assembleDebug` green; `:app:testDebugUnitTest` = 134 tests, only the two known timezone failures; root `test` ran once, `ROOT_TEST_EXIT_CODE=1` with only `DayZeroConversationMigrationTest.migrationWithMultipleNaturalDaysCreatesConversationPerDay` and `DayZeroConversationPhase2Test.continuingConversationKeepsDateAndTitleButUpdatesPreviewAndActivity`; no new failures.
+- No Edge deploy, no Room Schema change, no `PhotoViewerOverlay` gesture/visual change, no remote or on-device data mutation, no Git writes. Status: `READY_FOR_PHASE_4C_DEVICE_RETEST`.
+
+## Photo Feature Phase 4C — Device Retest Result (2026-07-09)
+
+用户已完成真实设备人工复测，全部通过：新对话发送图片 → Vision / interaction_result 餐次续轮 → 单 Meal `show_confirm_card` → `PinnedPhotoStrip` 真实显示 → 点击图片进入现有 `PhotoViewerOverlay`。剩余问题仅为视觉质量差（旧 Strip 呈"技术 Demo"观感），不涉及功能。
+
+正式状态：`PHASE_4C_DEVICE_RETEST_PASSED`；`READY_FOR_PHASE_4B`。注意：这只表示 4C 分配/持久化/展示链路通过，不代表整个图片功能完成。
+
+## Photo Feature Phase 4B-1 — PinnedPhotoStrip Visual Redesign + Fan Photo Assignment Editor Core (2026-07-09)
+
+### 旧 PinnedPhotoStrip 视觉问题（本轮重构依据）
+
+说明：任务约定的真机截图文件未随任务出现在工作区（桌面仅有 Requirement.txt）。本轮丑点分析以旧实现源代码（该实现完全决定渲染结果）+ 需求中用户列举的真机观察项为依据，未凭空臆测，也未声称真机视觉已通过。
+
+1. 拍立得外框过厚（80dp 照片配 6dp 边 + 16dp 底），道具感强；2. 纸胶带为半透明黑色（`0x33000000`），廉价、脏；3. 旋转角最大 ±3.9°（单图也 ±1.9°），东倒西歪；4. `-16dp` 行叠加 + 各自旋转导致多图拥挤凌乱；5. 右下角黑色 40% 透明"共 N 张"胶囊压在照片上，社交媒体感、抢餐次标题；6. 弹簧 + stagger 入场动画在 LazyColumn 回滚时反复重播；7. 阴影偏重且与卡片 0 elevation 语言不符；8. 与餐次标题/食物列表缺少同一栅格；9. 无深色适配。
+
+### 重构后组件结构
+
+- `core:ui/PinnedPhotoStrip.kt`：安静手帐风。照片为主体：84dp 照片、3dp 薄暖白 mat（深色 `0xFF3E3C38`）+ 9dp 底、2-3dp 圆角；旋转收敛为单图 0°、多图 ≤±1.6°（`PinnedPhotoStripLogic.calculateStableRotation`，mediaId 决定、端部阻尼）；温和 0/3dp 阶梯错位替代激进叠加；只保留一种装饰——极弱暖色纸胶带（`tapeRotation` 稳定 ±2–6°），无图钉、不叠加；阴影 2dp 低透明；入场动画删除（重组不重播）；数量与编辑入口合并为一条尾随弱文字"整理照片 · N 张"（TextTertiary 11sp），无编辑入口时仅弱化"N 张"；空列表不渲染任何外壳；缺失图片沿用 `LocalMediaThumbnail` 暖米色柔和占位并保位。新增公开 `JournalPhotoTile`（strip 与编辑器共用同一视觉单元）。Preview：1/2/4/6/缺失/窄屏(280dp)/大字体(1.6x)/深色。
+- 编辑入口合法性（`AssistantCardRenderer`）：仅当 `card.state == "pending"`、`meals` 非空、源图片集合法（origin user message 的 1..6 个去重非空 id，经 `assistantPlaceholderId` 严格配对解析，见 `PhotoEditorCardResolver.resolveOriginMediaIds`）才提供入口；confirmed/cancelled 无入口；Date Guard 仅 approved 状态透出原始卡的入口，pending/cancelled Guard 完全不进入；text-only 卡无入口。全部照片未分配时卡片级显示单条弱文字"整理照片"（不渲染空照片壳）。
+- 陈旧草稿防护：`FoodDraftConfirmCard` 的 `draftMeals`/`weightKg` 改为按整卡内容 remember（原为 `card.id`），修复"照片编辑保存后，后续食物编辑用过期 Compose 草稿覆盖最新 `sourceMediaIds`"的隐患（需求 §11"不允许用过期 Compose Card 覆盖最新 Room Card"）。
+
+### Phase 4B-1 扇形照片分配编辑器
+
+- 宿主方案：与 `PhotoViewerOverlay` 同模式的沉浸式全屏 Overlay，宿主在 `AiConversationScreen`，会话状态放在 `AiRecordViewModel`（旋转/重组/Viewer 开合均不丢状态；未实现完整进程死亡恢复——进程死亡后编辑器不重开、真实 Card 完好，此为明示边界）。未新增 Navigation 路由、未用实验性 API。
+- 数据来源（严格）：当前确认卡（Room 实时流）+ 该卡 assistant message 经 `assistantPlaceholderId` 配对的原始图片 user message 的 `sourceMediaIds` + `ObserveConversationMediaUseCase`/`MediaRepository` 的 `MediaAsset` + 当前 `ConfirmCardMeal.sourceMediaIds`。不跨 conversation、不猜图、不用 Compose 草稿、不虚构 mediaId。
+- 页面结构：顶部 取消/标题"整理餐次照片"/保存（保存中转圈+防抖禁用）；餐次切换 pill 行（真实 card meals、当前高亮 BrandGreen、可横向滚动、显示各餐已分配数）；中央扇形牌堆（未分配照片 1..6，中心卡旋转 0、最大、最上层，`FanDeckMath` 纯函数：每 slot ±7° 封顶 ±16°、scale 衰减 ≥0.72、水平位移 0.56 卡宽、垂直下沉 ≤30dp、alpha ≥0.42；横向拖动 + 松手就近吸附 + 轻触觉 `TextHandleMove`；点击侧卡居中、点击中心卡分配到当前餐次并 `LongPress` 触觉；缺失图片保位可分配）；未分配数弱文字提示；全部分配后中央显示克制完成态（纯文字，无插画/庆祝动画）；底部当前餐次照片墙（`JournalPhotoTile` 紧凑视觉、顺序即分配顺序、点击打开现有 Viewer、"移除"回未分配、"移至"下拉跨餐次移动，均带按钮语义与触觉）。
+- 编辑状态模型：`PhotoAssignmentDraft`（不可变快照：originMediaIds/assignments，assign/remove/move 纯函数，不变量=每图至多一餐、保序、允许未分配、id 必须来自 origin）。编辑期间零 Room/Chat Sync 写入，不碰真实 Card/DailyRecord/MealEntry。
+- 取消/返回：无修改直接退出；有修改弹出现有风格"放弃修改？"确认；放弃后真实 Card 完全不变。
+- 保存：先对整卡校验 + 用 Room 实时消息重验卡仍可编辑（终态卡安全失败、不写入、只留退出），一次性调用现有 `UpdateFoodCardPhotoAssignmentsUseCase`（未重写 JSON、未直访 DAO）；`isSaving` 防抖重复点击；成功（Updated/Unchanged 幂等）退出编辑器、确认卡经 Room Flow 立即刷新；失败保留编辑状态并显示可重试错误条；`CancellationException` 原样传播；不产生第二张卡、不写正式饮食记录。
+- Viewer 复用：编辑器与确认卡都复用 `AiConversationScreen` 唯一 `PhotoViewerOverlay` 宿主；Viewer 手势/缩放/上下双向拖动关闭零修改；initialIndex 精确；Viewer 开合不丢编辑状态、不重排、不自动保存。
+- 无障碍：strip/编辑器全链路 contentDescription（每图归属、当前餐次 Tab+selected、未分配数、移除/移至/保存/取消按钮语义、缺失图片、1..6 数量），编辑器打开时底层会话对 TalkBack `invisibleToUser`，Viewer 打开时编辑器同样隐藏。
+- Preview：编辑器 单餐1图/单餐6图/多餐未分配/多餐全分配/保存中/保存失败/大字体/窄屏/深色，全部不依赖真实 Room/网络/文件。
+
+### 契约与持久化
+
+`ConfirmCardMeal.sourceMediaIds` 数据契约无任何变化；持久化唯一入口仍是 Phase 4C 的 `UpdateFoodCardPhotoAssignmentsUseCase` → `RoomFoodCardPhotoAssignmentRepository`（raw JSON 就地更新、未知字段保留、同事务写 `UPSERT_AI_CHAT_MESSAGE` Chat Sync、幂等、回滚）。新增 app 级生产路径测试 `AiRecordPhotoEditorSavePersistenceTest`：编辑器保存经真实 UseCase + 真实 Room 断言 raw `assistantCardsJson` 更新、未知字段保留、sync queue +1、幂等重存不加队、`daily_records` 零写入。
+
+### 测试与验证
+
+- 新增/更新：`PinnedPhotoStripTest`（旋转 0/≤1.6/端部阻尼/阶梯/胶带角稳定）、`PinnedPhotoStripUiTest`（空列表无壳、1..6 布局稳定保序、点击 index、缺失保位、数量与入口语义、重组不重播动画、AssistantCardRenderer 入口合法性：pending 有/终态无/text-only 无/approved Guard 有/pending Guard 无/全未分配卡片级弱入口）、`PhotoAssignmentDraftTest`（初始/未分配/分配/移除/跨餐移动/保序/去重/合法性/全餐覆盖）、`FanDeckMathTest`（中心平置/克制旋转/吸附取整+甩动+边界/拖动换算）、`PhotoEditorCardResolverTest`（直卡/Guard 查找、编辑合法性矩阵、origin 严格配对）、`PhotoAssignmentEditorSessionTest`（快照构建、终态/Guard 拒开、本地零写入、取消不保存、保存一次+防抖、失败保留可重试、保存前重验终态安全失败、NotEditable 终态、切换会话关编辑器）、`PhotoAssignmentEditorScreenTest`（chips/牌堆点击分配/完成态/墙移除移动/保存取消/放弃弹窗/错误条重试与退出/缺失资产不崩溃/墙点击开 Viewer 且 index 准确）、`PhotoEditorViewerReuseTest`（编辑器复用唯一 Viewer、关闭后编辑状态保持零动作）、`AiRecordPhotoEditorSavePersistenceTest`（上）。既有营养胶囊/食物编辑/体重/确认取消测试全部保持通过。
+- Gradle：`:core:model:test`、`:core:ui:testDebugUnitTest`、`:core:data:testDebugUnitTest`、`:feature:ai-record:testDebugUnitTest`（98 tests）、`:app:compileDebugKotlin`、`:app:assembleDebug` 全绿；`:app:testDebugUnitTest` 135 tests 仅两个既有时区失败。根 `test` 仅运行一次：`ROOT_TEST_EXIT_CODE=1`，失败仅 `DayZeroConversationMigrationTest.migrationWithMultipleNaturalDaysCreatesConversationPerDay` 与 `DayZeroConversationPhase2Test.continuingConversationKeepsDateAndTitleButUpdatesPreviewAndActivity`，无新增失败。
+- 未实现/未执行：`MealEntry.mediaIds`、DailyRecord 正式照片持久化、Calendar 照片、Supabase Storage/上传下载/云恢复、Room Schema/Migration、Edge Function、AI Prompt、多设备媒体同步、图片删除 GC 策略、Phase 5/6、全项目 UI 重构、编辑器内新增相册/相机图（保留未来入口设计空间，未显示无效按钮）。未执行任何远端操作、connectedDebugAndroidTest、adb 写操作、真实用户数据读取或 Git 写操作。
+- 当前状态：`READY_FOR_PHASE_4B_1_DEVICE_TEST`（真机视觉与手势需用户人工验收；未声明 PHASE_4B_COMPLETE / READY_FOR_PHASE_5）。
+## Phase 4B-1-F1 - Multi-Image Fallback, Conflicting Cards, Missing Photos (2026-07-09)
+
+- Starting state: `PHASE_4B_1_DEVICE_TEST_FAILED`. User reproduced on real device with one 3-photo image message and explicit breakfast/lunch/dinner text. Streaming failed into fallback. Final visible failures: confirm card had no photos, no photo-edit entry, AI still asked which meal, and an ask card appeared after the confirm card.
+- Actual root causes: same final action/card arrays could contain confirm+ask because no array-level sanitizer existed; persisted stale asks could be appended by `mergeGeneratedCardsWithPersistedUnknowns`; editor visibility depended too much on assigned Meal photo arrays rather than the origin user message source photo pool. No code evidence showed UI sorting or automatic interaction triggering after confirm.
+- Android changes: added `sanitizeFinalAssistantCards()`; applied it in Vision and interaction/fallback finalization before Room writes; changed Remote draft card merge to merge unknown fields only for matching ids and not append old absent cards; added safe short-id/card-type diagnostics. The deterministic placeholder remains the only final assistant message for the image turn.
+- Photo editor changes: pending confirm and approved guard now expose `整理照片 · N 张` when the paired origin image user message has 1..6 legal source ids, even if every Meal has null/empty `sourceMediaIds`. Editor initial assignment uses Meal arrays; unassigned uses origin ids; missing `MediaAsset`/files remain placeholders.
+- Edge local-source changes: both fallback and streaming normalizers sanitize confirm/ask conflicts; prompt versions changed locally to `compact_v6_multi_meal_card_sanitizer` and `stream_compact_v5_multi_meal_card_sanitizer`; meal-hint parser supports breakfast/lunch/dinner/snack Chinese and English equivalents for ask prevention only.
+- Tests: real Room three-photo stream-delta-then-fallback path with no source ids; same with legal breakfast/lunch/dinner source ids; conflict action sanitizer; stale persisted ask merge regression; real renderer `整理照片 · 3 张`; Deno normalizer conflicts and stream/fallback parity.
+- Verification: passed `:core:model:test`, `:core:network:testDebugUnitTest`, `:core:data:testDebugUnitTest`, `:core:sync:testDebugUnitTest`, `:core:ui:testDebugUnitTest`, `:feature:ai-record:testDebugUnitTest`, `:app:compileDebugKotlin`, `:app:assembleDebug`. `:app:testDebugUnitTest` had 138 tests with only the allowed existing failures `DayZeroConversationMigrationTest.migrationWithMultipleNaturalDaysCreatesConversationPerDay` and `DayZeroConversationPhase2Test.continuingConversationKeepsDateAndTitleButUpdatesPreviewAndActivity`. Root `test` ran once: `ROOT_TEST_EXIT_CODE=1`, same two failures only, no new failures.
+- Deno: targeted modified Edge `fmt --check`, `lint`, `check`, and `test` passed; root `deno check` and `deno test` passed. Root `deno fmt --check` is blocked by existing non-Edge `.idea` / `.vs` / historical markdown formatting; root `deno lint` is blocked by pre-existing `classify-user-intent` lint. These are not new F1 failures.
+- Deployment checklist: functions `assistant-turn-v2`, `assistant-turn-v2-stream`; recorded remote versions fallback v24 and streaming v15; read-only verify and back up before deploy; deploy fallback -> smoke -> streaming -> smoke; roll back on HTTP/protocol/promptVersion/smoke failure or confirm+ask reappearance. Device retest: new conversation, send 3 photos with explicit breakfast/lunch/dinner text, force/observe stream fallback, verify one confirm card, no ask, `整理照片 · 3 张`, editor opens with correct unassigned/assigned photos.
+- Boundaries: no Supabase MCP writes, no remote deploy, no schema/RLS/storage/auth/secrets change, no Room schema/version/migration, no connected instrumentation, no device data operation, no Git writes, no Phase 5 / Calendar / MealEntry.mediaIds / cloud media sync.
+- Current final state: `READY_FOR_CONTROLLED_EDGE_DEPLOY`.
+
+## Phase 4B-1-F1-D - Controlled Edge Deployment Attempt (2026-07-09)
+
+- Final status: `EDGE_DEPLOYMENT_BLOCKED`.
+- Completed preflight: read project docs, checked git status/diff, confirmed the local Edge source is still the F1 tested version, and reran targeted Edge `deno fmt --check`, `deno lint`, `deno check`, `deno test` successfully.
+- Remote read-only baseline via Supabase connector: `assistant-turn-v2` v24 ACTIVE verify_jwt=false SHA `0dfb403217d38d263e8ad92723609f62e4be8f356e94214144ff435a51e04df2`; `assistant-turn-v2-stream` v15 ACTIVE verify_jwt=false SHA `d1dfc8a9e21d75d863b4245a8059368564406d6b639269741cf772f0b5619525`.
+- Backup directory outside repo: `%TEMP%\DayZero-Phase4B-1-F1-D-EdgeBackup-20260709-140743`; recursive SHA `eb80ad9a7eb3e6d4ba6dcea7eee735fc2d761b6dda5f6991f57c0af86e77acd9`; includes remote metadata and baseline source snapshot/manifest.
+- Blocker: this environment has no Supabase CLI, no npm/npx, and no accessible Supabase access token. The Supabase connector deploy operation requires inline file contents rather than uploading a local directory, which is not a safe controlled-deploy/rollback path for the full multi-file functions. Deployment was therefore stopped before any remote write.
+- No deployment, rollback, schema/RLS/storage/auth/secrets change, Room change, Android change, APK install, device action, or Git write was performed.
+
+## Phase 4B-1-F2-D2 - MCP-Native Edge Deployment Result (2026-07-09)
+
+- Result: `EDGE_DEPLOYMENT_ROLLED_BACK`.
+- Used only Supabase MCP for Edge source transport: remote get snapshots -> in-memory diff application -> fallback deploy -> list/get readback -> in-memory snapshot rollback -> list/get readback. No terminal source output/copying, CLI, npm/npx, token, or Base64 source transport.
+- Backup: fallback v24 SHA `0dfb403217d38d263e8ad92723609f62e4be8f356e94214144ff435a51e04df2`; streaming v15 SHA `d1dfc8a9e21d75d863b4245a8059368564406d6b639269741cf772f0b5619525`; both ACTIVE and `verify_jwt=false`.
+- Candidate gates: complete 4-file sets, entrypoint/import closure, UTF-8 round-trip, no U+FFFD/NUL/truncation, prompt exclusivity, and 87 Deno tests. Fallback target `compact_v7_multi_meal_photo_identity`, 50,863 bytes, SHA `cc72bbf012614dccb2323b8ef5ce5c294e40b6ba914ec4dcf724225a8f6e9d83`; stream target `stream_compact_v6_multi_meal_photo_identity`, 54,524 bytes, SHA `b1e62ecf0c8dc09e743961cc4b8bfcb19ca8588388e19397c4735fb23eb3c8dc`.
+- Fallback v25 readback exactly matched candidate filenames, UTF-8 lengths, SHA-256, ACTIVE/`verify_jwt=false`, prompt and bundle SHA `3158dfd49a25c701de4dcafe2711aafe6ca188db0775da1a528be7b5b58f9c4d`.
+- Smoke: text-only and valid synthetic-JPEG single-image paths passed. All 3 explicit 3-image requests failed the required one-confirm/no-ask/correct breakfast-lunch-dinner sourceMediaIds contract; the final attempt was HTTP 200 but zero confirm cards. Streaming therefore was not deployed.
+- Rollback: fallback v26 deployed directly from the in-memory v24 snapshot. Readback confirmed ACTIVE, `verify_jwt=false`, exact v24 source, `compact_v5_vision_continuation` restored, v7 absent, and no U+FFFD/NUL. No device-retest readiness is declared.
+
+## Phase 4B-1-F3 - Deterministic Explicit Multi-Meal Photo Assignment (2026-07-09)
+
+- Result: `READY_FOR_MULTI_MEAL_PHOTO_DEVICE_RETEST`.
+- F2-D2 smoke classification: attempt 1 had no retained safe response structure because its aggregation script stopped on a null meal array (H, incomplete artifact); attempt 2 had no HTTP response artifact (H, synthetic-image/request failure); attempt 3 was HTTP 200 with zero actions/confirms/meals/photo references/assignments and no ask types (A, `MODEL_DID_NOT_RETURN_CONFIRM_CARD`). These are not evidence that ID conversion failed. The redesigned smoke payload uses real DTO omission rules, valid generated JPEGs, ordered attachments, and explicit food text, without nulls or promptCacheKey.
+- Implemented shared deterministic explicit-photo parser and post-confirm assignment. It supports Chinese/Arabic ordered image syntax, Chinese count-matched respectively/in-order lists, and English ordinal photos; conflicts, ambiguity, range errors, vague text and count mismatch stay unassigned. User mapping overrides model references, while legal model references remain only where user text did not map an image. It never fabricates confirm cards, Meals, foods, calories, or nutrition.
+- Added safe debugTiming counters/path; no sensitive text, media IDs, images, URLs or Base64. Fallback and streaming share the production assignment path. Deno fmt/lint/check and 94 relevant tests passed.
+- MCP get -> in-memory diff -> deploy -> list/get readback: fallback v27 ACTIVE `verify_jwt=false`, `compact_v8_deterministic_multi_meal_photo_assignment`, bundle SHA `2d636f83b1c1bd3e08b9a7bda5fa9fab0d6d9d321309ba9657c85ccbca25a51e`; streaming v16 ACTIVE `verify_jwt=false`, `stream_compact_v7_deterministic_multi_meal_photo_assignment`, bundle SHA `f3e1d322a4eadcc3821d8abab8d77f67b7ec80b135e83e7af27f385e08dd76ab`. Both remote 5-file readbacks exactly matched candidate content.
+- Remote fallback and SSE smoke tests passed text-only, single image, and explicit three-meal mapping. Both returned one confirm/no ask with three correct whitelisted assignments and safe counters explicit=3, deterministic=3, final=3; streaming emitted status -> reply_delta* -> final -> debug_timing -> done with one final and no error. No rollback. No Schema/Room/Auth/Storage/Secrets/Android/Git/device changes.
+
+## AI Vision Derivative Payload Reduction (2026-07-10)
+
+- 将 AI 视觉派生 JPEG 的首档由 1280px / q80 下调为 1024px / q74，并将处理器接受阈值从 640KB 收紧至 384KB；五级编码阶梯同步调整为 1024/q74、1024/q66、896/q64、832/q60、768/q56。
+- 动机：降低高峰期多图流式请求的 JSON/Base64 载荷，减少上游首包超时与 6 图 fallback 撞 50 秒上限的风险。模型网关与 Edge 的 640KB 单图、4MiB 总载荷硬上限均保持不变。
+- 回滚：仅需将 `DerivativeSpec` 中上述常量和编码阶梯改回原值；无协议、schema 或 Edge 变更。
+
+## Vision Runtime Forensic Audit + Dynamic Upstream Timeout Deployment (2026-07-10)
+
+真实设备上「AI 回复异常缓慢、多图几乎总走 fallback、频繁协议错误、回复不是流式而是直接蹦出」的法医式根因调查与修复落地。最终判定：`FABLE_MIXED_ROOT_CAUSE_PROVEN`。
+
+### 第一根因（已证明）
+`assistant-turn-v2-stream` 的 15 秒 AbortController 只包住「fetch 建连 + 请求体上传 + Kimi 视觉预填充直到 response headers」，body 读取不在其内（用可控 fake upstream 双实验证实：headers 到达即 `clearTimeout`，之后 signal 永不触发）。真实多图请求（3 图 ≈2.1MB JSON）到 headers 实测 13s～>15s，几乎必然在第 15 秒被 abort。Edge 把 abort 转成 SSE `error` 事件，Android 包装成 `ProtocolException`（即用户看到的「协议错误」），随后走无超时的 fallback 再耗 20–35s。这解释了「合成 64×64 小图烟雾测试通过、真实设备失败」的差异，也解释了「回复直接蹦出」——流式必挂→静默走 fallback→fallback 一次性写入，没有打字机效果。
+
+排除项（均高置信度）：Prompt（TTFT 与语言/prompt 长度无关，中英实测一致）、Android SSE parser（逐样本分析 + 线上真协议验证均健壮，unknown debugTiming 字段被 Moshi 静默忽略）、stream/fallback 编排（顺序执行、单次 finalize、守卫齐全，无竞态/双写）。
+
+### Codex 修复（本地代码，已核实完整）
+- 新增共享模块 `supabase/functions/_shared/assistant_upstream_timeout.ts`：`selectStreamHeaderTimeoutMs` = clamp(25s, 15s + 10s/MiB, 50s)，纯文本仍 15s；`FALLBACK_UPSTREAM_TOTAL_TIMEOUT_MS` = 50s。
+- stream handler 用动态 header 超时包裹 fetch，abort 时发 `{code:"UPSTREAM_HEADER_TIMEOUT", retryable:true}` SSE error；fallback handler 补 50s 总超时，abort 返回 504 `UPSTREAM_TOTAL_TIMEOUT`。debugTiming 新增 `selectedStreamHeaderTimeoutMs / upstreamHeadersMs / upstreamTotalMs / totalDecodedAttachmentBytes / timeoutStage`。
+- normalization 顺带封堵一处潜伏 bug：空 items 的 meal 被过滤、item 为空的 confirm card 被丢弃，避免服务端放行→客户端 mapper 确定性协议错误。
+- Android：`VisionAssistantTurnOrchestrator.FallbackReason` 新增 `UPSTREAM_HEADER_TIMEOUT` 识别（按 message 匹配，修正了「超时被误报成 PROTOCOL_ERROR」的诊断遮蔽）；`StreamErrorEventDto` 增加 `code/retryable` 字段。
+- 遗漏的唯一一步：Codex 环境无部署能力，两个 Edge Function 从未推上远端（远端仍是旧 v16/v27，15s 硬超时），这正是真机症状未消失的直接原因。
+
+### 部署（本会话经用户明确授权，用 Supabase MCP `deploy_edge_function`）
+- `assistant-turn-v2-stream` v16 → **v17**（prompt 版本不变，仍 `stream_compact_v7_deterministic_multi_meal_photo_assignment`；仅动态超时逻辑）。
+- `assistant-turn-v2` v27 → **v28**（prompt 版本不变，仍 `compact_v8_deterministic_multi_meal_photo_assignment`；补 50s 总超时）。
+- 两者 `ACTIVE`、`verify_jwt=false`。部署前已核对：v16/v27 部署内容与当时工作区逐字节一致。
+
+### 关键实测发现（认知修正，供后续参考）
+线上验证暴露：**当前主导瓶颈不是「上传字节数」，而是 Moonshot 的视觉 prefill（处理图片像素的时间）**。铁证——流式模式下 Moonshot「看完图才吐 response headers」，tiny3（3×64px）`upstreamHeadersMs≈3.3s` 与 `kimiTimeToFirstTokenMs≈3.3s` 几乎相等。因此审计里量的「到 headers 时间」主要是 Moonshot 处理像素的时间。推论：降 JPEG 质量（压字节）帮不到 prefill，只有**降分辨率（降像素）**有效。派生图 1280→1024（像素 -36%）方向正确、正常时段有效（当日早间同类载荷 13–17s 出结果），但**扛不过 Moonshot 视觉严重拥塞窗口**——晚间高峰期实测连单张 500KB/1280px 真图都 25s 内出不来 headers。此为上游算力/时段性因素，非客户端可根治。
+
+### 决策与后续
+派生图缩小改动保留（无副作用、可回滚、正常时段有正向收益）。真机复测建议避开 Moonshot 高峰（国内晚间 19:00–23:00）。若非高峰仍频繁 fallback，候选杠杆按序：① 进一步降像素到 768px；② 抬高单图 header 超时下限（25s→40–50s）；③ Storage+URL 传图重构（省客户端上传，但救不了 prefill）。绝对不该改：Android parser、`AssistantTurnV2ResponseMapper` 严格校验、stream/fallback 编排结构、派生图之外的传输硬上限。
+
+本轮验证：`:core:data:testDebugUnitTest` PASS、`:app:assembleDebug` PASS；Deno 95 测试 PASS。未改 Schema/RLS/Storage/Auth/Room；未操作用户设备；未做 Git 写操作。
+
+## Phase 4B-1-R — 照片分配编辑器「现实审计」：完整实现 vs 未构建 APK (2026-07-10)
+
+### 用户现象与文档声称
+用户反馈「照片的编辑模式还没有」——真机上看不到可进入的照片分配编辑器（无法查看未分配照片、分配/移动/移除、保存归属）。而文档 `DEVELOPMENT_LOG.md` / `PROJECT_CONTEXT_FOR_CHATGPT.md` 早已声称 Phase 4B-1 完成、状态 `READY_FOR_PHASE_4B_1_DEVICE_TEST`，列出 `PhotoAssignmentDraft`、`FanDeckMath`、`PhotoEditorCardResolver`、`UpdateFoodCardPhotoAssignmentsUseCase`、`PhotoAssignmentEditorScreen` 等均已实现。二者矛盾，本轮以真实源码 + 调用链 + 构建产物为准做只读审计。
+
+### 真实第一断点（关键结论）
+**源码层没有断点。** 完整调用链在工作区真实存在且正确接通：
+- 入口渲染：`FoodDraftConfirmCard.kt:292`（卡片级「整理照片 · N 张」）+ 每餐 `PinnedPhotoStrip`；可见性判定 `AssistantCardRenderer.kt:155-171`（`state=="pending"` && 有 meal && `PhotoAssignmentDraft.isLegalOriginSet(originMediaIds)` 1..6 去重）。
+- 来源图片解析：`PhotoEditorCardResolver.resolveOriginMediaIds` —— 严格用确定性 `assistantPlaceholderId(userMsgId)==assistantMsgId` 配对到原始图片 user message，读其 `sourceMediaIds`（由 `AiChatMessageMapper` 从 `contentJson.media.sourceMediaIds` 还原）；不猜测、不扫全会话。
+- Overlay 宿主：`AiRecordScreen.kt:602-620`（沉浸式全屏，复用既有 `PhotoViewerOverlay`，viewer 打开时编辑器 `invisibleToUser()`）。
+- ViewModel 状态与保存：`AiRecordViewModel.openPhotoAssignmentEditor / savePhotoAssignments`（保存前对 Room 实时卡片重新校验，恰好调用一次 UseCase，防双击、CancellationException 正确传播）。
+- 持久化：`RoomFoodCardPhotoAssignmentRepository`（单事务原地改 `meals[i].sourceMediaIds`、保留未知 JSON 字段与 nutrition/weight、`updateMessageContentIfActive` 防已删/已终态、恰好一次 `enqueueMessageUpsert`、支持 `date_mismatch_guard_card.pendingOriginalCard`）。
+- DI：`DayZeroHiltModule.kt:326/337` 提供 Repository 与 UseCase。
+
+**第一断点在「交付」层，而非代码层**：整套功能是**未提交的工作区改动**——`git log` 对 `feature/.../photoeditor/` 为空，`photoeditor/` 目录、`UpdateFoodCardPhotoAssignmentsUseCase.kt`、`RoomFoodCardPhotoAssignmentRepository.kt` 均为 `??` 未跟踪；接线文件（`AppNavigation`/`AiRecordScreen`/`AiRecordViewModel`/`AssistantCardRenderer`/`FoodDraftConfirmCard`/`DayZeroHiltModule`）为已修改未提交。用户安装的 APK 早于这批改动，故运行时看不到编辑器。归类：**编辑器完整存在，但未被编译进已安装 APK（既非缺失实现、非断线、非可见性条件错误）。**
+
+### 本轮处置
+- **不新建第二套编辑器**（Section 7 规则）：实现已完整且正确，仅做审计 + 验证 + 交付一个新构建。
+- **未改任何源码**：无需修复，现有实现满足入口矩阵、来源解析、草稿不变量、保存/取消、Date Guard、陈旧 Compose 草稿防护（`FoodDraftConfirmCard` 用 `remember(card)` 而非 `remember(card.id)`，照片保存后继续编辑食物/体重不会覆盖新的 `sourceMediaIds`）、Viewer 复用。
+- **构建新 APK**：`app/build/outputs/apk/debug/app-debug.apk`（用户需自行安装后真机复测；本环境禁止 adb 安装/Git 提交）。
+
+### 测试与构建结果（JAVA_HOME=Android Studio JBR，--no-daemon）
+- `:core:model:test` PASS、`:core:domain:test` PASS、`:core:data:testDebugUnitTest` PASS、`:core:ui:testDebugUnitTest` PASS、`:feature:ai-record:testDebugUnitTest` PASS（含 PhotoAssignmentDraft/FanDeckMath/PhotoEditorCardResolver/PhotoAssignmentEditorSession/PhotoAssignmentEditorScreen/PhotoEditorViewerReuse 全套）、`:app:assembleDebug` PASS。
+- `:app:testDebugUnitTest`：138 测试，**仅 2 个既有基线失败**（`DayZeroConversationMigrationTest.migrationWithMultipleNaturalDaysCreatesConversationPerDay`、`DayZeroConversationPhase2Test.continuingConversationKeepsDateAndTitleButUpdatesPreviewAndActivity`，时区相关，Requirement §13 白名单）；**无新增失败**。
+
+### 未触及边界（合规声明）
+未修改 assistant-turn-v2 / -stream、AI Prompt、Kimi/Vision timeout、派生图压缩、Supabase Edge/Schema/RLS/Storage/Auth/Secrets、Room version/Migration、`MealEntry.mediaIds`、DailyRecord 正式照片持久化、Calendar 照片、云端媒体同步。未做 Git 提交/推送、未 adb 卸载、未 `pm clear`、未 `connectedDebugAndroidTest`、未进行真机视觉验收。
+
+### 结论
+`READY_FOR_PHOTO_EDITOR_DEVICE_RETEST` —— 需用户安装本轮 `app-debug.apk` 后在真机复测「pending Confirm Card → 整理照片 · N 张 → 全屏编辑器 → 改分配 → 保存 → Room 卡片更新 → 再次打开仍是新分配」。**未声明** PHASE_4B_COMPLETE / DEVICE_TEST_PASSED。

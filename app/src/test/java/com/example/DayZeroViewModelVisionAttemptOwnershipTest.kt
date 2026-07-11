@@ -10,6 +10,7 @@ import com.example.domain.model.ai.assistant.AiAssistantRequest
 import com.example.domain.model.ai.assistant.AiAssistantTurn
 import com.example.domain.model.ai.assistant.AiIntent
 import com.example.domain.model.ai.assistant.VisionAssistantTurnResult
+import com.example.domain.model.ai.assistant.assistantPlaceholderId
 import com.example.domain.repository.AiAssistantRepository
 import com.example.domain.repository.ConfirmFoodCardResult
 import com.example.domain.repository.ConversationRepository
@@ -79,7 +80,11 @@ class DayZeroViewModelVisionAttemptOwnershipTest {
         advanceUntilIdle()
 
         assertFalse(viewModel.uiState.value.isAnalyzing)
-        assertTrue(viewModel.uiState.value.conversationState is AiRecordConversationState.Error)
+        val failure = viewModel.uiState.value.conversationState as AiRecordConversationState.Error
+        assertEquals("conv-1", failure.conversationId)
+        assertEquals("user-1", failure.userMessageId)
+        assertEquals(assistantPlaceholderId("user-1"), failure.assistantMessageId)
+        assertTrue(failure.retryable)
         assertEquals(
             listOf("true" to true, "false" to false),
             fakeOrchestrator.callbackEvents

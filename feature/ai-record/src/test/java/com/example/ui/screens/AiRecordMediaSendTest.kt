@@ -497,6 +497,14 @@ class AiRecordMediaSendTest {
             sendUserMessageWithMediaUseCase = SendUserMessageWithMediaUseCase(transactionRepository),
             currentIdentityProvider = currentIdentityProvider,
             networkAvailabilityProvider = networkAvailabilityProvider,
+            updateFoodCardPhotoAssignmentsUseCase = com.example.domain.usecase.UpdateFoodCardPhotoAssignmentsUseCase(
+                object : com.example.domain.repository.FoodCardPhotoAssignmentRepository {
+                    override suspend fun updatePhotoAssignments(
+                        cardId: String,
+                        assignments: List<com.example.domain.repository.MealPhotoAssignment>
+                    ) = com.example.domain.repository.UpdateFoodCardPhotoAssignmentsResult.Unchanged
+                }
+            ),
             savedStateHandle = savedStateHandle
         )
     }

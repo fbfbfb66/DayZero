@@ -35,5 +35,7 @@ dependencies {
   implementation(libs.androidx.compose.ui.tooling.preview)
   implementation(libs.androidx.core.ktx)
   implementation(libs.coil.compose)
+  implementation(libs.androidx.activity.compose)
+  implementation("androidx.compose.foundation:foundation")
   testImplementation(libs.junit)
 }

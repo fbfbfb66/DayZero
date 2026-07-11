@@ -73,9 +73,9 @@ class DayZeroConversationMigrationTest {
     fun migrationWithMultipleNaturalDaysCreatesConversationPerDay() {
         createVersion9Database(
             listOf(
-                legacyMessage("d1-m1", "User", "第一天", timestamp("2026-06-17T01:00:00Z")),
-                legacyMessage("d2-m1", "User", "第二天", timestamp("2026-06-18T01:00:00Z")),
-                legacyMessage("d2-m2", "Assistant", "收到", timestamp("2026-06-18T01:00:01Z"))
+                legacyMessage("d1-m1", "User", "第一天", timestamp("2026-06-17T12:00:00Z")),
+                legacyMessage("d2-m1", "User", "第二天", timestamp("2026-06-18T12:00:00Z")),
+                legacyMessage("d2-m2", "Assistant", "收到", timestamp("2026-06-18T12:00:01Z"))
             )
         )
 
