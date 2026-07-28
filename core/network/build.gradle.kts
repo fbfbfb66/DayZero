@@ -33,7 +33,7 @@ fun readSecretValue(name: String): String {
 fun quoted(value: String): String = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
 android {
-  namespace = "com.example.core.network"
+  namespace = "com.goings.dayzero.core.network"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {

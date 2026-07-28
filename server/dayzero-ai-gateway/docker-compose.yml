@@ -1,0 +1,49 @@
+services:
+  dayzero-ai-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Replace with your own ACR mirror if needed, e.g. registry.cn-hangzhou.aliyuncs.com/dayzero/deno:2.9.0
+        DENO_IMAGE: denoland/deno:2.9.0
+    container_name: dayzero-ai-gateway
+    restart: unless-stopped
+    # SECURITY: 8080 is intentionally NOT published to the host/public network.
+    # The gateway is reachable only over the internal `dayzero-net` bridge, so the sole public
+    # entrypoint is the TLS-terminating Nginx reverse proxy (run it as a container on the same
+    # network; upstream = http://dayzero-ai-gateway:8080). `expose` opens the port to linked
+    # containers only, never to 0.0.0.0.
+    #
+    # If Nginx runs on the host instead of in Compose, do NOT switch to `ports: - "8080:8080"`
+    # (that binds 0.0.0.0). Use a loopback-only publish: `ports: - "127.0.0.1:8080:8080"`.
+    expose:
+      - "8080"
+    networks:
+      - dayzero-net
+    environment:
+      - APP_ENV=${APP_ENV:-development}
+      - PORT=8080
+      - KIMI_API_URL=${KIMI_API_URL}
+      - KIMI_API_KEY=${KIMI_API_KEY}
+      - KIMI_MODEL=${KIMI_MODEL}
+      - KIMI_MAX_TOKENS=${KIMI_MAX_TOKENS:-1500}
+      - KIMI_TEMPERATURE=${KIMI_TEMPERATURE:-0.6}
+      - SUPABASE_JWKS_URL=${SUPABASE_JWKS_URL}
+      - SUPABASE_ISSUER=${SUPABASE_ISSUER}
+      - SUPABASE_AUDIENCE=${SUPABASE_AUDIENCE:-authenticated}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}
+      - REQUEST_BODY_LIMIT_MB=${REQUEST_BODY_LIMIT_MB:-10}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - ENABLE_AUTH=${ENABLE_AUTH:-true}
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "deno", "run", "--allow-net", "--allow-env", "src/healthcheck.ts"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+networks:
+  dayzero-net:
+    driver: bridge

@@ -3,7 +3,7 @@ plugins {
 }
 
 android {
-  namespace = "com.example.core.data"
+  namespace = "com.goings.dayzero.core.data"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {

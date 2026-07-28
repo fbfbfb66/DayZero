@@ -1,0 +1,183 @@
+package com.goings.dayzero.data.repository
+
+import com.goings.dayzero.domain.model.MealType
+import com.goings.dayzero.domain.model.ai.AiChatMessage
+import com.goings.dayzero.domain.model.ai.AiDraftRequest
+import com.goings.dayzero.domain.model.ai.CheckinDraft
+import com.goings.dayzero.domain.model.ai.DraftFood
+import com.goings.dayzero.domain.model.ai.DraftMeal
+import com.goings.dayzero.domain.model.ai.assistant.DateMismatchGuardCardPayload
+import com.goings.dayzero.domain.repository.AiDraftRepository
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
+
+class FakeAiDraftRepository : AiDraftRepository {
+    private val _messages = MutableStateFlow<List<AiChatMessage>>(emptyList())
+    private val _conversations = mutableSetOf<String>()
+
+    override suspend fun generateDraft(request: AiDraftRequest): CheckinDraft {
+        delay(1500)
+
+        val text = request.text
+        val foods = mutableListOf<DraftFood>()
+
+        if (text.contains("包子")) {
+            foods.add(DraftFood(name = "肉包子", quantity = "2个", estimatedCalories = 374, confidence = "medium"))
+        }
+        if (text.contains("香蕉")) {
+            foods.add(DraftFood(name = "香蕉", quantity = "1根", estimatedCalories = 105, confidence = "high"))
+        }
+        if (text.contains("苹果")) {
+            foods.add(DraftFood(name = "苹果", quantity = "1个", estimatedCalories = 95, confidence = "high"))
+        }
+        if (text.contains("肠粉")) {
+            foods.add(DraftFood(name = "猪肉肠粉", quantity = "1碗", estimatedCalories = 450, confidence = "medium"))
+        }
+        if (text.contains("炸鸡")) {
+            foods.add(DraftFood(name = "炸鸡", quantity = "1份", estimatedCalories = 520, confidence = "medium"))
+        }
+        if (text.contains("米粉")) {
+            foods.add(DraftFood(name = "炒米粉", quantity = "1份", estimatedCalories = 550, confidence = "medium"))
+        }
+        if (text.contains("鸡腿")) {
+            foods.add(DraftFood(name = "鸡腿饭", quantity = "1份", estimatedCalories = 650, confidence = "medium"))
+        }
+
+        if (text == "trigger_empty_draft") {
+            return CheckinDraft(
+                date = request.date,
+                meals = emptyList(),
+                totalCalories = 0,
+                weightKg = request.weightKg,
+                aiSummary = "",
+                sourceText = text
+            )
+        }
+
+        if (foods.isEmpty()) {
+            foods.add(DraftFood(name = "未识别食物", quantity = "1份", estimatedCalories = 500, confidence = "low"))
+        }
+
+        val mealType = when {
+            text.contains("早") -> MealType.Breakfast
+            text.contains("午") || text.contains("中") -> MealType.Lunch
+            text.contains("晚") -> MealType.Dinner
+            else -> MealType.Snack
+        }
+        
+        val draftMeal = DraftMeal(
+            mealType = mealType,
+            displayName = mealType.displayName,
+            foods = foods,
+            mealCalories = foods.sumOf { it.estimatedCalories }
+        )
+
+        return CheckinDraft(
+            date = request.date,
+            meals = listOf(draftMeal),
+            totalCalories = draftMeal.mealCalories,
+            weightKg = request.weightKg,
+            aiSummary = "这是根据你的描述生成的本地演示估算，你可以修改后再确认。",
+            sourceText = text
+        )
+    }
+
+    private val streamingStates = MutableStateFlow<Map<String, StreamingState>>(emptyMap())
+
+    data class StreamingState(
+        val conversationId: String,
+        val messageId: String,
+        val text: String,
+        val isStreaming: Boolean
+    )
+
+    override fun updateStreamingState(conversationId: String, messageId: String, text: String, isStreaming: Boolean) {
+        streamingStates.value = streamingStates.value + (conversationId to StreamingState(conversationId, messageId, text, isStreaming))
+    }
+
+    override fun clearStreamingState(conversationId: String) {
+        streamingStates.value = streamingStates.value - conversationId
+    }
+
+    override fun observeChatMessages(): Flow<List<AiChatMessage>> {
+        return kotlinx.coroutines.flow.combine(_messages, streamingStates) { msgs, states ->
+            msgs.map { msg ->
+                val state = states[msg.conversationId]
+                if (state != null && msg.id == state.messageId) {
+                    msg.copy(text = state.text)
+                } else {
+                    msg
+                }
+            }
+        }
+    }
+
+    override fun observeChatMessages(conversationId: String): Flow<List<AiChatMessage>> {
+        return kotlinx.coroutines.flow.combine(_messages, streamingStates) { msgs, states ->
+            val state = states[conversationId]
+            msgs.filter { it.conversationId == conversationId }.map { msg ->
+                if (state != null && msg.id == state.messageId) {
+                    msg.copy(text = state.text)
+                } else {
+                    msg
+                }
+            }
+        }
+    }
+
+    override suspend fun createConversationWithFirstMessage(text: String, now: Long): String? {
+        val trimmed = text.trim()
+        if (trimmed.isBlank()) return null
+        val conversationId = java.util.UUID.randomUUID().toString()
+        _conversations += conversationId
+        _messages.update {
+            it + AiChatMessage(
+                conversationId = conversationId,
+                role = com.goings.dayzero.domain.model.ai.ChatRole.User,
+                text = trimmed,
+                createdAt = now
+            )
+        }
+        return conversationId
+    }
+
+    override suspend fun getRecentChatMessages(conversationId: String, limit: Int): List<AiChatMessage> {
+        return _messages.value.filter { it.conversationId == conversationId }.takeLast(limit)
+    }
+
+    override suspend fun findMessageByAssistantCardId(cardId: String): AiChatMessage? {
+        return _messages.value.find { message ->
+            message.assistantCards.any { card ->
+                card.id == cardId ||
+                    (card is DateMismatchGuardCardPayload && card.pendingOriginalCard.id == cardId)
+            }
+        }
+    }
+
+    override suspend fun getChatMessageById(messageId: String): AiChatMessage? {
+        return _messages.value.find { it.id == messageId }
+    }
+
+    override suspend fun insertChatMessage(message: AiChatMessage) {
+        _messages.update { it + message }
+    }
+
+    override suspend fun insertChatMessage(conversationId: String, message: AiChatMessage) {
+        _conversations += conversationId
+        _messages.update { it + message.copy(conversationId = conversationId) }
+    }
+
+    override suspend fun updateChatMessage(message: AiChatMessage) {
+        _messages.update { current ->
+            current.map { if (it.id == message.id) message else it }
+        }
+    }
+
+    override suspend fun clearChatMessages() {
+        _messages.update { emptyList() }
+    }
+}

@@ -1,0 +1,296 @@
+package com.goings.dayzero
+
+import androidx.test.core.app.ApplicationProvider
+import com.goings.dayzero.data.repository.FakeAiDraftRepository
+import com.goings.dayzero.data.telemetry.AiLatencyTraceLogger
+import com.goings.dayzero.domain.model.DailyRecord
+import com.goings.dayzero.domain.model.MealType
+import com.goings.dayzero.domain.model.RecordStatus
+import com.goings.dayzero.domain.model.ai.AiRecordConversationState
+import com.goings.dayzero.domain.model.ai.ChatRole
+import com.goings.dayzero.domain.model.ai.Conversation
+import com.goings.dayzero.domain.model.ai.assistant.AiAssistantRequest
+import com.goings.dayzero.domain.model.ai.assistant.AiAssistantTurn
+import com.goings.dayzero.domain.model.ai.assistant.AiIntent
+import com.goings.dayzero.domain.repository.AiAssistantRepository
+import com.goings.dayzero.domain.repository.ConversationRepository
+import com.goings.dayzero.domain.repository.RecordRepository
+import com.goings.dayzero.domain.time.CurrentDateProvider
+import com.goings.dayzero.domain.usecase.ClearLocalDataUseCase
+import com.goings.dayzero.domain.usecase.ConfirmFoodRecordUseCase
+import com.goings.dayzero.domain.usecase.CreateConversationWithFirstMessageUseCase
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestDispatcher
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Rule
+import org.junit.Test
+import org.junit.rules.TestWatcher
+import org.junit.runner.Description
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import java.time.LocalDate
+
+@OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
+class DayZeroLocalIntentFlowTest {
+    @get:Rule
+    val mainDispatcherRule = MainDispatcherRule()
+
+    private lateinit var recordRepository: InMemoryRecordRepository
+    private lateinit var aiDraftRepository: FakeAiDraftRepository
+
+    @Before
+    fun setUp() {
+        recordRepository = InMemoryRecordRepository()
+        aiDraftRepository = FakeAiDraftRepository()
+    }
+
+    @Test
+    fun foodInputOnlyReturnsChatReply() = runTest(mainDispatcherRule.testDispatcher) {
+        val viewModel = createViewModel("Pure chat reply for a food message.")
+        sendAndAssertPureChat(viewModel, "Food input: pork rice noodle roll")
+    }
+
+    @Test
+    fun weightInputOnlyReturnsChatReply() = runTest(mainDispatcherRule.testDispatcher) {
+        val viewModel = createViewModel("Pure chat reply for a weight message.")
+        sendAndAssertPureChat(viewModel, "Weight input: 94kg today")
+    }
+
+    @Test
+    fun summaryInputOnlyReturnsChatReply() = runTest(mainDispatcherRule.testDispatcher) {
+        val viewModel = createViewModel("Pure chat reply for a summary question.")
+        sendAndAssertPureChat(viewModel, "How did I eat today?")
+    }
+
+    @Test
+    fun cravingInputOnlyReturnsChatReply() = runTest(mainDispatcherRule.testDispatcher) {
+        val viewModel = createViewModel("Pure chat reply for a craving message.")
+        sendAndAssertPureChat(viewModel, "I cannot stop craving fried chicken")
+    }
+
+    @Test
+    fun assistantTurnFailureShowsErrorWithoutFallback() = runTest(mainDispatcherRule.testDispatcher) {
+        val conversationRepository = InMemoryConversationRepository()
+        val viewModel = DayZeroViewModel(
+            recordRepository = recordRepository,
+            aiDraftRepository = aiDraftRepository,
+            aiAssistantRepository = object : AiAssistantRepository {
+                override suspend fun sendMessage(request: AiAssistantRequest): AiAssistantTurn {
+                    error("network down")
+                }
+            },
+            latencyLogger = createLatencyLogger(),
+            clearLocalDataUseCase = ClearLocalDataUseCase(recordRepository, aiDraftRepository),
+            confirmFoodCardUseCase = testConfirmFoodCardUseCase(aiDraftRepository, conversationRepository, recordRepository),
+            createConversationWithFirstMessageUseCase = CreateConversationWithFirstMessageUseCase(aiDraftRepository),
+            conversationRepository = conversationRepository,
+            currentDateProvider = FixedCurrentDateProvider(LocalDate.of(2026, 6, 20)),
+            syncScheduler = object : com.goings.dayzero.data.sync.SyncScheduler {
+                override fun requestSync(reason: com.goings.dayzero.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
+                override fun requestBackfill(reason: com.goings.dayzero.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
+                override fun requestSyncAndBackfill(reason: com.goings.dayzero.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
+                override fun requestPull(reason: com.goings.dayzero.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
+                override fun requestInitialRestore(reason: com.goings.dayzero.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
+                override fun requestSyncAndPull(reason: com.goings.dayzero.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
+            },
+            visionAssistantTurnOrchestrator = com.goings.dayzero.assistant.fakeVisionAssistantTurnOrchestrator(
+                ApplicationProvider.getApplicationContext()
+            ),
+            networkAvailabilityProvider = com.goings.dayzero.domain.network.NetworkAvailabilityProvider { true }
+        )
+
+        viewModel.sendAiMessage("Weight input: 94kg today")
+        advanceUntilIdle()
+
+        val messages = viewModel.uiState.value.chatMessages
+        assertEquals(2, messages.size)
+        assertEquals(ChatRole.User, messages[0].role)
+        assertEquals(ChatRole.Assistant, messages[1].role)
+        assertTrue(messages[1].text.isBlank())
+        assertTrue(messages[1].assistantCards.isEmpty())
+        assertTrue(recordRepository.records.value.isEmpty())
+        assertEquals(false, viewModel.uiState.value.isAnalyzing)
+        assertTrue(viewModel.uiState.value.conversationState is AiRecordConversationState.Error)
+    }
+
+    private fun createViewModel(assistantReply: String): DayZeroViewModel {
+        val conversationRepository = InMemoryConversationRepository()
+        return DayZeroViewModel(
+            recordRepository = recordRepository,
+            aiDraftRepository = aiDraftRepository,
+            aiAssistantRepository = object : AiAssistantRepository {
+                override suspend fun sendMessage(request: AiAssistantRequest): AiAssistantTurn {
+                    return AiAssistantTurn(
+                        id = "turn-1",
+                        intent = AiIntent.GeneralChat,
+                        replyText = assistantReply,
+                        cards = emptyList(),
+                        suggestedReplies = emptyList()
+                    )
+                }
+            },
+            latencyLogger = createLatencyLogger(),
+            clearLocalDataUseCase = ClearLocalDataUseCase(recordRepository, aiDraftRepository),
+            confirmFoodCardUseCase = testConfirmFoodCardUseCase(aiDraftRepository, conversationRepository, recordRepository),
+            createConversationWithFirstMessageUseCase = CreateConversationWithFirstMessageUseCase(aiDraftRepository),
+            conversationRepository = conversationRepository,
+            currentDateProvider = FixedCurrentDateProvider(LocalDate.of(2026, 6, 20)),
+            syncScheduler = object : com.goings.dayzero.data.sync.SyncScheduler {
+                override fun requestSync(reason: com.goings.dayzero.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
+                override fun requestBackfill(reason: com.goings.dayzero.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
+                override fun requestSyncAndBackfill(reason: com.goings.dayzero.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
+                override fun requestPull(reason: com.goings.dayzero.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
+                override fun requestInitialRestore(reason: com.goings.dayzero.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
+                override fun requestSyncAndPull(reason: com.goings.dayzero.data.sync.SyncTriggerReason): kotlinx.coroutines.Job? = null
+            },
+            visionAssistantTurnOrchestrator = com.goings.dayzero.assistant.fakeVisionAssistantTurnOrchestrator(
+                ApplicationProvider.getApplicationContext()
+            ),
+            networkAvailabilityProvider = com.goings.dayzero.domain.network.NetworkAvailabilityProvider { true }
+        )
+    }
+
+    private fun createLatencyLogger(): AiLatencyTraceLogger {
+        return AiLatencyTraceLogger(ApplicationProvider.getApplicationContext())
+    }
+
+    private suspend fun TestScope.sendAndAssertPureChat(viewModel: DayZeroViewModel, text: String) {
+        viewModel.sendAiMessage(text)
+        advanceUntilIdle()
+
+        val messages = viewModel.uiState.value.chatMessages
+        assertEquals(2, messages.size)
+        assertEquals(ChatRole.User, messages[0].role)
+        assertEquals(text, messages[0].text)
+        assertEquals(ChatRole.Assistant, messages[1].role)
+        assertTrue(messages[1].text.isNotBlank())
+        assertTrue(messages[1].assistantCards.isEmpty())
+        assertTrue(messages[1].suggestedReplies.isEmpty())
+        assertTrue(recordRepository.records.value.isEmpty())
+        assertEquals(AiRecordConversationState.Idle, viewModel.uiState.value.conversationState)
+        assertEquals(false, viewModel.uiState.value.isAnalyzing)
+    }
+}
+
+@OptIn(ExperimentalCoroutinesApi::class)
+class MainDispatcherRule(
+    val testDispatcher: TestDispatcher = StandardTestDispatcher()
+) : TestWatcher() {
+    override fun starting(description: Description) {
+        Dispatchers.setMain(testDispatcher)
+    }
+
+    override fun finished(description: Description) {
+        Dispatchers.resetMain()
+    }
+}
+
+private class InMemoryRecordRepository : RecordRepository {
+    private val _records = MutableStateFlow<List<DailyRecord>>(emptyList())
+    val records = _records.asStateFlow()
+
+    override fun observeRecords(): Flow<List<DailyRecord>> = records
+
+    override suspend fun upsertRecord(record: DailyRecord) {
+        _records.update { current ->
+            val index = current.indexOfFirst { it.id == record.id }
+            if (index >= 0) {
+                current.toMutableList().apply { set(index, record) }
+            } else {
+                current + record
+            }
+        }
+    }
+
+    override suspend fun deleteRecordById(recordId: String) {
+        _records.update { records -> records.filterNot { it.id == recordId } }
+    }
+
+    override suspend fun getRecordById(recordId: String): DailyRecord? {
+        return records.value.find { it.id == recordId }
+    }
+
+    override suspend fun getRecordByDateAndStatus(date: LocalDate, status: RecordStatus): DailyRecord? {
+        return records.value.find { it.date == date && it.status == status }
+    }
+
+    override suspend fun updateRecordStatus(recordId: String, status: RecordStatus, weightKg: Float?) {
+        _records.update { current ->
+            current.map { record ->
+                if (record.id == recordId) {
+                    record.copy(status = status, weightKg = weightKg ?: record.weightKg)
+                } else {
+                    record
+                }
+            }
+        }
+    }
+
+    override suspend fun deleteFoodFromRecord(recordId: String, mealType: MealType, foodId: String) {
+        _records.update { current ->
+            current.map { record ->
+                if (record.id == recordId) {
+                    record.copy(
+                        meals = record.meals.map { meal ->
+                            if (meal.mealType == mealType) {
+                                meal.copy(foods = meal.foods.filterNot { it.id == foodId })
+                            } else {
+                                meal
+                            }
+                        }
+                    )
+                } else {
+                    record
+                }
+            }
+        }
+    }
+
+    override suspend fun clearAllRecords() {
+        _records.value = emptyList()
+    }
+}
+
+private class InMemoryConversationRepository : ConversationRepository {
+    private val conversations = MutableStateFlow<List<Conversation>>(emptyList())
+
+    override suspend fun insertConversation(conversation: Conversation) {
+        conversations.update { current -> current.filterNot { it.id == conversation.id } + conversation }
+    }
+
+    override suspend fun getConversationById(id: String): Conversation? {
+        return conversations.value.find { it.id == id }
+    }
+
+    override fun observeConversations(): Flow<List<Conversation>> = conversations.asStateFlow()
+
+    override fun observeConversationsByLastActivity(): Flow<List<Conversation>> = conversations.asStateFlow()
+
+    override suspend fun updateConversationSummary(
+        id: String,
+        title: String,
+        lastMessagePreview: String,
+        lastActivityAt: Long,
+        updatedAt: Long
+    ) = Unit
+
+    override suspend fun softDeleteConversation(id: String, deletedAt: Long) = Unit
+}
+
+private class FixedCurrentDateProvider(private val date: LocalDate) : CurrentDateProvider {
+    override fun currentDate(): LocalDate = date
+}

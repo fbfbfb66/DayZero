@@ -1,0 +1,36 @@
+# DayZero AI Gateway deployment manifest template.
+# Fill in the concrete values for a single deployment and save a dated copy.
+# This file contains NO secrets.
+
+manifest_version: "1.0"
+
+image:
+  repository: crpi-475iv1vc2zvscamw.cn-beijing.personal.cr.aliyuncs.com/dayzero/dayzero-ai-gateway
+  tag: "__GATEWAY_IMAGE_TAG__"
+  digest: "__GATEWAY_IMAGE_DIGEST__"
+
+nginx_image:
+  repository: crpi-475iv1vc2zvscamw.cn-beijing.personal.cr.aliyuncs.com/dayzero/nginx
+  tag: "__NGINX_IMAGE_TAG__"
+  digest: "__NGINX_IMAGE_DIGEST__"
+
+rollback_image:
+  repository: crpi-475iv1vc2zvscamw.cn-beijing.personal.cr.aliyuncs.com/dayzero/dayzero-ai-gateway
+  tag: "v1"
+  digest: "sha256:e0518d64a305be3f63bdcbf69a22953c20a74d06372ff883ac51463ba7324935"
+
+source:
+  vcs_revision: "__VCS_REF__"
+  source_bundle_sha: "__SOURCE_BUNDLE_SHA__"
+  build_date: "__BUILD_DATE__"
+
+baseline_versions:
+  supabase_stream_fallback: "baseline_from_phase_g2"
+  prompt_version: "__PROMPT_VERSION__"
+
+deployment:
+  date: "__DEPLOYMENT_DATE__"
+  operator: "__OPERATOR__"
+  domain: "__DAYZERO_DOMAIN__"
+  smoke_test_result: "__SMOKE_TEST_RESULT__"
+  notes: "__NOTES__"

@@ -1,0 +1,213 @@
+package com.goings.dayzero
+
+import com.goings.dayzero.data.remote.api.AiDraftApiService
+import com.goings.dayzero.data.remote.dto.AiDraftRequestDto
+import com.goings.dayzero.data.remote.dto.AiDraftResponseDto
+import com.goings.dayzero.data.remote.dto.AiSummaryRequestDto
+import com.goings.dayzero.data.remote.dto.AiSummaryResponseDto
+import com.goings.dayzero.data.remote.dto.IntentClassificationResultDto
+import com.goings.dayzero.data.remote.dto.IntentClassifierRequestDto
+import com.goings.dayzero.data.remote.dto.assistant.AiAssistantRequestDto
+import com.goings.dayzero.data.remote.dto.assistant.AssistantActionDto
+import com.goings.dayzero.data.remote.dto.assistant.AssistantActionPayloadDto
+import com.goings.dayzero.data.remote.dto.assistant.AssistantActionOptionDto
+import com.goings.dayzero.data.remote.dto.assistant.AssistantTurnV2ResponseDto
+import com.goings.dayzero.data.repository.RemoteAiAssistantRepository
+import com.goings.dayzero.domain.model.ai.assistant.AiAssistantRequest
+import com.goings.dayzero.domain.model.ai.assistant.ProtocolException
+import com.goings.dayzero.domain.model.ai.assistant.DebugChoiceCardPayload
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import retrofit2.Response
+import java.time.LocalDate
+
+@OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
+class DayZeroProtocolValidationTest {
+
+    private fun createRepository(
+        onSend: suspend (AiAssistantRequestDto) -> Response<AssistantTurnV2ResponseDto>
+    ): RemoteAiAssistantRepository {
+        val fakeService = object : AiDraftApiService {
+            override suspend fun generateDraft(request: AiDraftRequestDto): AiDraftResponseDto = TODO()
+            override suspend fun generateDailySummary(request: AiSummaryRequestDto): AiSummaryResponseDto = TODO()
+            override suspend fun classifyUserIntent(request: IntentClassifierRequestDto): IntentClassificationResultDto = TODO()
+            
+            override suspend fun sendAssistantTurnV2WithResponse(
+                request: AiAssistantRequestDto
+            ): Response<AssistantTurnV2ResponseDto> {
+                return onSend(request)
+            }
+        }
+        return RemoteAiAssistantRepository(fakeService)
+    }
+
+    @Test
+    fun testValidResponseSuccess() = runTest {
+        val repository = createRepository {
+            Response.success(
+                AssistantTurnV2ResponseDto(
+                    reply = "Hello there",
+                    actions = emptyList()
+                )
+            )
+        }
+
+        val request = AiAssistantRequest(
+            date = LocalDate.now(),
+            userText = "Hi",
+            todayRecord = null,
+            pendingDraft = null,
+            recentMessages = emptyList()
+        )
+
+        val turn = repository.sendMessage(request)
+        assertEquals("Hello there", turn.replyText)
+    }
+
+    @Test
+    fun testEmptyReplyThrowsProtocolException() = runTest {
+        val repository = createRepository {
+            Response.success(
+                AssistantTurnV2ResponseDto(
+                    reply = "  ",
+                    actions = emptyList()
+                )
+            )
+        }
+
+        val request = AiAssistantRequest(
+            date = LocalDate.now(),
+            userText = "Hi",
+            todayRecord = null,
+            pendingDraft = null,
+            recentMessages = emptyList()
+        )
+
+        assertProtocolException { repository.sendMessage(request) }
+    }
+
+    @Test
+    fun testNullReplyThrowsProtocolException() = runTest {
+        val repository = createRepository {
+            Response.success(
+                AssistantTurnV2ResponseDto(
+                    reply = null,
+                    actions = emptyList()
+                )
+            )
+        }
+
+        val request = AiAssistantRequest(
+            date = LocalDate.now(),
+            userText = "Hi",
+            todayRecord = null,
+            pendingDraft = null,
+            recentMessages = emptyList()
+        )
+
+        assertProtocolException { repository.sendMessage(request) }
+    }
+
+    @Test
+    fun testMissingActionsThrowsProtocolException() = runTest {
+        val repository = createRepository {
+            Response.success(
+                AssistantTurnV2ResponseDto(
+                    reply = "Valid reply",
+                    actions = null
+                )
+            )
+        }
+
+        val request = AiAssistantRequest(
+            date = LocalDate.now(),
+            userText = "Hi",
+            todayRecord = null,
+            pendingDraft = null,
+            recentMessages = emptyList()
+        )
+
+        assertProtocolException { repository.sendMessage(request) }
+    }
+
+    @Test
+    fun testInvalidActionThrowsProtocolException() = runTest {
+        val repository = createRepository {
+            Response.success(
+                AssistantTurnV2ResponseDto(
+                    reply = "Valid reply",
+                    actions = listOf(AssistantActionDto(type = "some_action"))
+                )
+            )
+        }
+
+        val request = AiAssistantRequest(
+            date = LocalDate.now(),
+            userText = "Hi",
+            todayRecord = null,
+            pendingDraft = null,
+            recentMessages = emptyList()
+        )
+
+        assertProtocolException { repository.sendMessage(request) }
+    }
+
+    @Test
+    fun testDebugShowChoiceCardActionSuccess() = runTest {
+        val repository = createRepository {
+            Response.success(
+                AssistantTurnV2ResponseDto(
+                    reply = "Valid reply",
+                    actions = listOf(
+                        AssistantActionDto(
+                            type = "debug_show_choice_card",
+                            interactionId = "debug_123",
+                            payload = AssistantActionPayloadDto(
+                                title = "Test Title",
+                                message = "Test Message",
+                                options = listOf(
+                                    AssistantActionOptionDto(id = "opt_a", label = "Option A")
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+        }
+
+        val request = AiAssistantRequest(
+            date = LocalDate.now(),
+            userText = "Hi",
+            todayRecord = null,
+            pendingDraft = null,
+            recentMessages = emptyList()
+        )
+
+        val turn = repository.sendMessage(request)
+        assertEquals("Valid reply", turn.replyText)
+        assertEquals(1, turn.cards.size)
+        val card = turn.cards[0] as DebugChoiceCardPayload
+        assertEquals("debug_123", card.id)
+        assertEquals("Test Title", card.title)
+        assertEquals("Test Message", card.message)
+        assertEquals(1, card.options.size)
+        assertEquals("opt_a", card.options[0].id)
+        assertEquals("Option A", card.options[0].label)
+    }
+
+    private suspend fun assertProtocolException(block: suspend () -> Unit) {
+        try {
+            block()
+            fail("Expected ProtocolException")
+        } catch (e: ProtocolException) {
+            assertTrue(e.message?.isNotBlank() == true)
+        }
+    }
+}

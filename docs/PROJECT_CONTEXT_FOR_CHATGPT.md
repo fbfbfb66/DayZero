@@ -4,7 +4,9 @@
 
 - **Major Architecture Refactor Complete (Multi-module + Hilt)**. The project has been split from a single large `:app` module into a maintainable layered module graph: `:app`, `:core:model`, `:core:domain`, `:core:database`, `:core:network`, `:core:data`, `:core:sync`, `:core:ui`, `:feature:ai-record`, `:feature:calendar`, and `:feature:trends`.
 - **Hilt Dependency Injection Enabled**. `DayZeroApplication` is annotated with `@HiltAndroidApp`, `MainActivity` is an `@AndroidEntryPoint`, and `DayZeroViewModel` is now an `@HiltViewModel`. Manual dependency construction in the old `DayZeroViewModel.Factory` has been removed and replaced with constructor injection plus `DayZeroHiltModule`.
-- **Photo Assignment Editor — implemented but was UNBUILT (Phase 4B-1-R reality audit, 2026-07-10)**. User reported "编辑模式还没有" (no photo-edit mode on device). Read-only audit found the *entire* editor is present and correctly wired in source — entry `FoodDraftConfirmCard.kt:292` ("整理照片 · N 张") gated by `AssistantCardRenderer.kt:155-171`; origin resolution via deterministic `assistantPlaceholderId` pairing in `PhotoEditorCardResolver`; full-screen overlay host `AiRecordScreen.kt:602-620` reusing `PhotoViewerOverlay`; ViewModel session + save in `AiRecordViewModel`; atomic persistence in `RoomFoodCardPhotoAssignmentRepository` (preserves unknown JSON/nutrition/weight, supports `date_mismatch_guard_card.pendingOriginalCard`, exactly-once sync enqueue); DI at `DayZeroHiltModule.kt:326/337`. **The first broken link was delivery, not code**: the whole feature was uncommitted working-tree changes (`photoeditor/` dir + UseCase + Repo untracked; wiring files modified-uncommitted; empty git history) never compiled into the installed APK. Fix = a fresh `app-debug.apk` build (no source change; the second-editor rule forbids re-implementing). Verified: all photo-editor module tests + `:app:assembleDebug` PASS; `:app:testDebugUnitTest` = only the 2 whitelisted timezone-baseline failures, no new failures. Status: `READY_FOR_PHOTO_EDITOR_DEVICE_RETEST` (user must install the fresh APK and retest on device; PHASE_4B_COMPLETE / DEVICE_TEST_PASSED NOT declared). No Edge/Prompt/Schema/Room-version/MealEntry/Calendar/cloud-sync change; no Git write, no device install.
+- **Android Application Identity Migrated to `com.goings.dayzero` (2026-07-12)**. The project package name and all module namespaces were unified from the legacy `com.example` / `com.aistudio.dayzero.djwqop` identities to `com.goings.dayzero`. Source directories, `package`/`import` declarations, Gradle `namespace`/`applicationId`, and the debug-install PowerShell script were updated. No business logic, database schema, Supabase config, or AI Gateway behavior was changed. A fresh `:app:assembleDebug` build succeeded; `:app:testDebugUnitTest` and core/feature tests passed except for 3 pre-existing UI rendering failures in `PinnedPhotoStripUiTest` tied to prior working-tree changes in `AssistantCardRenderer.kt`.
+- **Release APK Generated for Alibaba Cloud App Filing (2026-07-12)**. A formal release APK was built by Android Studio at `app/release/app-release.apk` (≈16 MB) using a release signing certificate (`C=CN, ST=Yunnan, L=Kunming, O=DayZero, OU=DayZero, CN=Goings`). The APK is signed with APK Signature Scheme v2, package name `com.goings.dayzero`, certificate MD5 `d7:4c:5d:f4:0e:d7:92:07:81:fa:dd:67:fc:a4:8a:24`, and RSA public key (Base64 SubjectPublicKeyInfo) `MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAt2h423skD7pggEsRwekf+8i9YnM/9zdbFU6eYrLtmZ0gqoeQAPmKiMDvadj1bYifow6jApderEHoU8a7rFJBKfWRYK1hOSkvudLn/h1Q3QVHtacMWa1NxCy0BbYfGFzdYj4JijR5GNsX/5l9PIpMf8or0krsR2E2ZKEoP3daU4F1uX803EWksILjrSsji+GKwyHcwc3VWMDzZ5LRnesf68TMsaVMvHVBzJJ85YCXh14P/tZE7Km6s4BMXvPmwGBpC4eJhjUTAwAJ/uaaF8tsH18mBKIw3lpc4VG1YtiouUbDWWIwVX+gL0wOAuqiCgi2+l1ymGlf20Ivrb0iWXycmQIDAQAB`. No keystore password or private key was logged.
+- **Photo Assignment Editor — implemented and committed (Phase 4B-1-R reality audit closed, 2026-07-10; code committed 2026-07-11)**. User reported "编辑模式还没有" (no photo-edit mode on device). Read-only audit found the *entire* editor is present and correctly wired in source — entry `FoodDraftConfirmCard.kt:292` ("整理照片 · N 张") gated by `AssistantCardRenderer.kt:155-171`; origin resolution via deterministic `assistantPlaceholderId` pairing in `PhotoEditorCardResolver`; full-screen overlay host `AiRecordScreen.kt:602-620` reusing `PhotoViewerOverlay`; ViewModel session + save in `AiRecordViewModel`; atomic persistence in `RoomFoodCardPhotoAssignmentRepository` (preserves unknown JSON/nutrition/weight, supports `date_mismatch_guard_card.pendingOriginalCard`, exactly-once sync enqueue); DI at `DayZeroHiltModule.kt:326/337`. **The first broken link was delivery, not code**: the whole feature had been uncommitted working-tree changes (`photoeditor/` dir + UseCase + Repo untracked; wiring files modified-uncommitted; empty git history) that were never compiled into the installed APK. The fix was a fresh `app-debug.apk` build with no source re-implementation. On 2026-07-11 all of the photo-editor source, wiring, persistence, Edge Function helpers, and tests were committed in `2bd958e Add and update feature implementations`, resolving the working-tree/delivery gap. Verified: all photo-editor module tests + `:app:assembleDebug` PASS; `:app:testDebugUnitTest` = only the 2 whitelisted timezone-baseline failures, no new failures. Status: `READY_FOR_PHOTO_EDITOR_DEVICE_RETEST` (user must install a freshly built APK and retest on device before declaring `PHASE_4B_COMPLETE`; `DEVICE_TEST_PASSED` is NOT declared). No Edge/Prompt/Schema/Room-version/MealEntry/Calendar/cloud-sync change beyond what is already committed.
 - **Module Ownership Boundaries**:
   - `:app` owns application startup, activity, navigation, and Hilt wiring.
   - `:core:model` owns pure Kotlin domain/UI state models.
@@ -17,7 +19,7 @@
   - `:feature:*` modules own screen-level Compose UI for AI Record, Calendar, and Trends.
 - **ViewModel Scope Reduced**. `DayZeroViewModel` remains the shared app state holder for now, but dependencies are injected and clear/confirm flows have started moving into domain use cases. `ClearLocalDataUseCase` handles local cleanup policy and `ConfirmFoodRecordUseCase` handles `show_confirm_card(food_record)` persistence.
 - **AI Record UI Decoupled**. AI Record screens no longer receive `DayZeroViewModel` directly. They use `AiRecordViewModel` for conversation history/detail state and an `AiRecordActionHandler` bridge for existing send/card/confirm actions. AI business card dispatch stays in `AssistantCardRenderer`, so new card types should be added there instead of expanding the main screen body.
-- **Current Build Baseline (2026-07-03)**: `:app:assembleDebug` and the targeted core/feature unit-test tasks pass. `:app:testDebugUnitTest` and root `test` exit non-zero only because of the two documented timezone-fragile tests; this is not recorded as an all-green root suite.
+- **Current Build Baseline (2026-07-11)**: `:app:assembleDebug` and the targeted core/feature unit-test tasks pass. `:app:testDebugUnitTest` and root `test` exit non-zero only because of the two documented timezone-fragile tests; this is not recorded as an all-green root suite. The baseline was re-verified after committing the photo-editor implementation in `2bd958e`.
 - **Local-First Sync Architecture (Phase 5) implemented**. Established local-first sync foundation for daily records, meals, food entries, and weight records using Room as the local source of truth.
 - **Identity Layer & Fixed Development Auth**: Added `CurrentIdentityProvider` and `CompositeIdentityProvider`. The current Hilt production path wires `SupabaseFixedPasswordIdentityProvider` with `FixedDevelopmentAccountCredentialsProvider`, exposes it as `SupabaseAuthSessionProvider`, and rejects anonymous or unexpected-user stored sessions. `SupabaseAnonymousIdentityProvider` remains in source/history but is not the current Hilt-provided remote identity path.
 - **Supabase Remote Sync Gateway**: Added `SupabaseRemoteSyncGateway` which maps queued `SyncPayload` items and pushes them to Supabase via REST/PostgREST. Gracefully falls back to `NoopRemoteSyncGateway` if Supabase config is missing.
@@ -64,6 +66,8 @@
 - **Phase 2B-3C1-F1: Android Vision Orchestration Targeted Fixes complete**. Addressed independent-verification findings in `:app` Vision orchestration: `VisionAssistantTurnOrchestrator` is now a required non-null dependency of `DayZeroViewModel`; streaming fallback eligibility covers `IOException`, `ProtocolException`, `JsonDataException`, and transient `HttpException` (408/429/5xx); `DayZeroViewModel` uses per-attempt ownership (`activeVisionAttemptId`) so only the owning attempt can set or clear `isAnalyzing`; cleanup failures are logged and cannot mask the original exception or `CancellationException`. Tests expanded with a fallback exception matrix and `DayZeroViewModelVisionAttemptOwnershipTest`. Edge Function source was left untouched (baseline SHA-256 verified). UI image send remains intercepted until end-to-end verification.
 - **Phase 2B-3C2A: Real Image Send + Vision Turn Wiring complete**. Removed the temporary image-send UI interception in `AiRecordScreen`. The detail screen now routes messages with attachments through `SendUserMessageWithMediaUseCase`; on local commit success it emits `MediaMessageCommitted`, which `AppNavigation` consumes to start `VisionAssistantTurnOrchestrator` for the persisted user message. Attachment drafts are cleaned only after a successful local commit, and a minimal `VisionRetryCard` is shown when the vision turn reaches a terminal error. Added `AiRecordMediaSendTest` covering text/image split, commit success/failure, double-click protection, conflict handling, and draft isolation. Verified by `:app:assembleDebug`, safe install on Pixel_10_Pro AVD, and app launch without crash.
 - **Historical Phase 2B-3C2B-F1 report — superseded by the F2 real-device correction below; it is not a current completion claim**. Diagnosed the Vision picture stream "no streaming" symptom as the Edge Function's hard 15 s Kimi fetch timeout; added safe, data-free diagnostic logging to `VisionAssistantTurnOrchestrator` so TTFT, delta count, fallback reason, and duration can be verified on-device without logging Base64, paths, or payloads. Gated new AI message sends (text and media) on `NetworkAvailabilityProvider` so users cannot submit messages while offline. Fixed weight float precision by centralizing `formatWeightKg`/`normalizeWeightKg` in `:core:model` and applying them in `FoodDraftConfirmCard` input, display, and the `AssistantTurnV2ResponseMapper` boundary. Replaced the generic typing indicator for vision assistant placeholders with a dedicated `VisionImageRecognizingIndicator` (shimmer beam, reduced-motion static fallback, accessibility). Updated `AiRecordPhase2ATest`, `AiRecordMediaSendTest`, `DayZeroConversationPhase2Test`, and added `WeightFormatterTest`, `VisionPlaceholderDetectorTest`, `DayZeroViewModelNetworkGateTest`, and `VisionAssistantTurnOrchestratorTest`. Historical status was `VISION_STREAM_TIMEOUT_CONFIRMED_REQUIRES_EDGE_DECISION`; F2 disproved that timeout claim.
+
+- **AI Gateway Phase G2 / G2-F1 — Local production hardening complete and security-accepted for controlled deployment (2026-07-12)**. Strengthened JWT/JWKS verification in `server/dayzero-ai-gateway`: ES256-only, required `kid`/`exp`/`sub`/`iss`/`aud`, single JWKS refresh on unknown `kid`, production fail-fast when `ENABLE_AUTH=false`, fixed `AuthErrorCode` enums, and irreversible SHA-256 user-id digest for logs. Logger now uses an explicit allow-list and drops objects/arrays/exceptions so that `sub`, `userText`, `recentMessages`, `todayRecord`, `interactionResult`, `prompt`, Base64, data URLs, `Authorization`, `detail`, `message`, `cause`, `stack`, and `imagePath` cannot leak. Added `APP_ENV`, `SUPABASE_JWKS_URL`, `SUPABASE_ISSUER`, `SUPABASE_AUDIENCE` configuration with legacy `SUPABASE_URL`/`SUPABASE_JWT_AUDIENCE` compatibility. Created production templates: `Dockerfile` with OCI revision/source-hash labels, `docker-compose.production.yml`, `nginx.production.conf.template` (HTTPS 443, HTTP→HTTPS redirect, `/ready`, `/api/ai/assistant-turn-v2[-stream]`, legacy paths, full SSE buffering controls, `X-Accel-Buffering no`, `proxy_next_upstream off`), `deployment.manifest.template.yml`, and `docs/DEPLOYMENT_AND_ROLLBACK_20260712.md`. The initial independent security audit (`docs/PHASE_G2_SECURITY_ACCEPTANCE_20260712.md`) was `NOT_ACCEPTABLE_FOR_DEPLOYMENT` due to incomplete log redaction, raw error/Kimi-body leakage, readiness/healthcheck misconfiguration, JWKS timeout/concurrency gaps, and missing ACME/rollback runbook. A G2-F1 fix round (`docs/PHASE_G2_F1_COMPLETION_REPORT_20260712.md`) addressed every Critical/High finding: whitelist logging, safe upstream error enums, readiness using canonical config, `/ready`-based healthcheck, JWKS 4s timeout + single-flight + 5s cooldown, `.dockerignore`, digest-only Compose image references, and executable v1 rollback. Independent reverification (`docs/PHASE_G2_F1_SECURITY_REVERIFICATION_20260712.md`) concluded `ACCEPTABLE_FOR_CONTROLLED_DEPLOYMENT`. G2-F1 is **not deployed** to ECS; real domain, DNS, and production HTTPS certificates are still pending.
 
 ## Current Phase Features (Phase 4D-1 Complete)
 
@@ -234,7 +238,7 @@ Note: Several legacy interfaces/classes still exist in migrated modules for comp
 To support multiple chat histories, the database schema, domain layer, and view models have been updated to isolate chat sessions.
 
 ### 1. Data Models & Database Entities
-- **[Conversation](file:///D:/Goings/APPProjects/DayZero/core/model/src/main/java/com/example/domain/model/ai/Conversation.kt)** (in `:core:model`):
+- **[Conversation](file:///D:/Goings/APPProjects/DayZero/core/model/src/main/java/com/goings/dayzero/domain/model/ai/Conversation.kt)** (in `:core:model`):
   Pure domain model representing a chat session.
   ```kotlin
   data class Conversation(
@@ -248,13 +252,13 @@ To support multiple chat histories, the database schema, domain layer, and view 
       val deletedAt: Long? = null
   )
   ```
-- **[ConversationEntity](file:///D:/Goings/APPProjects/DayZero/core/database/src/main/java/com/example/data/local/entity/ConversationEntity.kt)** (in `:core:database`):
+- **[ConversationEntity](file:///D:/Goings/APPProjects/DayZero/core/database/src/main/java/com/goings/dayzero/data/local/entity/ConversationEntity.kt)** (in `:core:database`):
   Room entity mapped to the `conversations` table. Has indices on `conversationDate` and `lastActivityAt`.
-- **[AiChatMessageEntity](file:///D:/Goings/APPProjects/DayZero/core/database/src/main/java/com/example/data/local/entity/AiChatMessageEntity.kt)** (in `:core:database`):
+- **[AiChatMessageEntity](file:///D:/Goings/APPProjects/DayZero/core/database/src/main/java/com/goings/dayzero/data/local/entity/AiChatMessageEntity.kt)** (in `:core:database`):
   Modified to add `conversationId: String` which has a foreign key constraint referencing `conversations(id)` with `ON DELETE CASCADE`. Indexes are added for `conversationId` and `(conversationId, createdAt)`.
 
 ### 2. Room Migration (9 -> 10)
-Implemented in **[DayZeroDatabase](file:///D:/Goings/APPProjects/DayZero/core/database/src/main/java/com/example/data/local/database/DayZeroDatabase.kt)**, the migration safely ports existing single-stream chat records into grouped conversations:
+Implemented in **[DayZeroDatabase](file:///D:/Goings/APPProjects/DayZero/core/database/src/main/java/com/goings/dayzero/data/local/database/DayZeroDatabase.kt)**, the migration safely ports existing single-stream chat records into grouped conversations:
 - **Group by Date**: Queries all existing `ai_chat_messages` and groups them by natural date using the device's system default timezone (`ZoneId.systemDefault()`).
 - **Stable UUID Generation**: For each date group, a stable conversation UUID is generated deterministically via:
   `UUID.nameUUIDFromBytes("dayzero-legacy-ai-chat-${'$'}date".toByteArray(StandardCharsets.UTF_8)).toString()`
@@ -265,38 +269,38 @@ Implemented in **[DayZeroDatabase](file:///D:/Goings/APPProjects/DayZero/core/da
 - **Orphan Prevention**: After inserting conversations and creating the new `ai_chat_messages` table with the foreign key constraint, the migration checks that no messages are left with a null/orphaned `conversationId`.
 
 ### 3. DAO & Repository Layer API
-- **[ConversationDao](file:///D:/Goings/APPProjects/DayZero/core/database/src/main/java/com/example/data/local/dao/ConversationDao.kt)**:
+- **[ConversationDao](file:///D:/Goings/APPProjects/DayZero/core/database/src/main/java/com/goings/dayzero/data/local/dao/ConversationDao.kt)**:
   Exposes queries to insert, fetch by ID, observe all active conversations sorted by `lastActivityAt DESC, createdAt DESC`, update summary titles/previews, and soft delete.
-- **[ConversationRepository](file:///D:/Goings/APPProjects/DayZero/core/domain/src/main/java/com/example/domain/repository/ConversationRepository.kt)** & **[RoomConversationRepository](file:///D:/Goings/APPProjects/DayZero/core/data/src/main/java/com/example/data/repository/RoomConversationRepository.kt)**:
+- **[ConversationRepository](file:///D:/Goings/APPProjects/DayZero/core/domain/src/main/java/com/goings/dayzero/domain/repository/ConversationRepository.kt)** & **[RoomConversationRepository](file:///D:/Goings/APPProjects/DayZero/core/data/src/main/java/com/goings/dayzero/data/repository/RoomConversationRepository.kt)**:
   Domain repository interface and Room-backed implementation for managing conversations.
-- **[AiDraftRepository](file:///D:/Goings/APPProjects/DayZero/core/domain/src/main/java/com/example/domain/repository/AiDraftRepository.kt)**:
+- **[AiDraftRepository](file:///D:/Goings/APPProjects/DayZero/core/domain/src/main/java/com/goings/dayzero/domain/repository/AiDraftRepository.kt)**:
   Expanded to support conversation-scoped operations:
   - `fun observeChatMessages(conversationId: String): Flow<List<AiChatMessage>>`: Observes messages belonging to a specific conversation.
   - `suspend fun createConversationWithFirstMessage(text: String, now: Long): String?`: Atomically inserts a new conversation and its first user message in a single database transaction.
   - `suspend fun getRecentChatMessages(conversationId: String, limit: Int): List<AiChatMessage>`: Fetches the recent messages for conversation context extraction.
   - `suspend fun findMessageByAssistantCardId(cardId: String): AiChatMessage?`: Looks up the chat message containing the card ID to route interactions correctly.
   - `suspend fun insertChatMessage(conversationId: String, message: AiChatMessage)`: Inserts a message in the designated conversation and updates its preview summary.
-- **[RemoteAiDraftRepository](file:///D:/Goings/APPProjects/DayZero/core/data/src/main/java/com/example/data/repository/RemoteAiDraftRepository.kt)**:
+- **[RemoteAiDraftRepository](file:///D:/Goings/APPProjects/DayZero/core/data/src/main/java/com/goings/dayzero/data/repository/RemoteAiDraftRepository.kt)**:
   Now accepts the full `database` instance to support safe, multi-table transactions (`database.withTransaction {}`). Both `createConversationWithFirstMessage` and `clearChatMessages` are executed transactionally.
 
 ### 4. Use Cases & ViewModels
-- **[CreateConversationWithFirstMessageUseCase](file:///D:/Goings/APPProjects/DayZero/core/domain/src/main/java/com/example/domain/usecase/CreateConversationWithFirstMessageUseCase.kt)** (in `:core:domain`):
+- **[CreateConversationWithFirstMessageUseCase](file:///D:/Goings/APPProjects/DayZero/core/domain/src/main/java/com/goings/dayzero/domain/usecase/CreateConversationWithFirstMessageUseCase.kt)** (in `:core:domain`):
   Validates user input text and delegates new conversation creation to the repository layer.
-- **[AiRecordViewModel](file:///D:/Goings/APPProjects/DayZero/feature/ai-record/src/main/java/com/example/ui/screens/AiRecordViewModel.kt)** (in `:feature:ai-record`):
+- **[AiRecordViewModel](file:///D:/Goings/APPProjects/DayZero/feature/ai-record/src/main/java/com/goings/dayzero/ui/screens/AiRecordViewModel.kt)** (in `:feature:ai-record`):
   Exposes reactive state objects:
   - `AiConversationHistoryState`: Holds active conversations list, sorted by `lastActivityAt DESC`.
   - `AiConversationDetailState`: Holds current conversation details and message list.
   - State restoration: Uses `SavedStateHandle` to preserve and restore `conversationId` across process death.
   - Creation events: Exposes `events: SharedFlow<AiRecordConversationEvent>` to signal successful conversation initiation to the UI layer.
-- **[DayZeroViewModel](file:///D:/Goings/APPProjects/DayZero/app/src/main/java/com/example/DayZeroViewModel.kt)**:
+- **[DayZeroViewModel](file:///D:/Goings/APPProjects/DayZero/app/src/main/java/com/goings/dayzero/DayZeroViewModel.kt)**:
   - Tracks `activeConversationId` in `AppState` and includes it in all outgoing client messages.
   - Pinning for Asynchronous Streams: During network call initiation, the target conversation ID is captured to ensure streaming/fallback updates write back to the original placeholder even if the user switches active conversations mid-stream.
   - Interaction Routing: Option clicks and confirm/cancel actions retrieve the original conversation ID via `findMessageByAssistantCardId(interactionId)` to guarantee that database records are updated in the correct conversation thread.
 
 ### 5. Testing & Verification
-- **[DayZeroConversationMigrationTest](file:///D:/Goings/APPProjects/DayZero/app/src/test/java/com/example/DayZeroConversationMigrationTest.kt)** (Phase 1):
+- **[DayZeroConversationMigrationTest](file:///D:/Goings/APPProjects/DayZero/app/src/test/java/com/goings/dayzero/DayZeroConversationMigrationTest.kt)** (Phase 1):
   Verifies Room database migration 9->10, Natural Day grouping, UUID stability, and legacy detail preservation.
-- **[DayZeroConversationPhase2Test](file:///D:/Goings/APPProjects/DayZero/app/src/test/java/com/example/DayZeroConversationPhase2Test.kt)** (Phase 2):
+- **[DayZeroConversationPhase2Test](file:///D:/Goings/APPProjects/DayZero/app/src/test/java/com/goings/dayzero/DayZeroConversationPhase2Test.kt)** (Phase 2):
   Verifies:
   - Transactional atomicity of new conversation creation.
   - Isolation of contextual recent messages by `conversationId`.
@@ -367,7 +371,7 @@ During debug builds, Gradle merges the manifests from all dependent modules. The
     <category android:name="android.intent.category.LAUNCHER" />
 </intent-filter>
 ```
-This configuration caused `ComponentActivity` to register as a launcher activity inside the final debug APK. As a result, the Android OS created two launcher icons on the system home screen for the single application package (`com.aistudio.dayzero.djwqop`).
+This configuration caused `ComponentActivity` to register as a launcher activity inside the final debug APK. As a result, the Android OS created two launcher icons on the system home screen for the single application package (`com.goings.dayzero`).
 
 ### Fix
 - The `<intent-filter>` block has been removed from `androidx.activity.ComponentActivity` in `feature/ai-record/src/debug/AndroidManifest.xml`.
@@ -375,7 +379,7 @@ This configuration caused `ComponentActivity` to register as a launcher activity
 - Running the ordinary run configuration now only creates a single launcher icon for the app.
 - To clean up any stale launcher state, run:
   ```powershell
-  adb uninstall com.aistudio.dayzero.djwqop
+  adb uninstall com.goings.dayzero
   ```
   And then reinstall the app normally.
 
@@ -392,7 +396,7 @@ This configuration caused `ComponentActivity` to register as a launcher activity
   - Stream display is now fully functional and stable.
 
 ### Startup Crash Fix (ClassCastException) - 2026-06-21
-- **Problem**: App crashed immediately on startup during Hilt initialization with `java.lang.ClassCastException: com.example.data.sync.SupabaseRemotePullGateway cannot be cast to com.example.data.sync.ChatRemotePullGateway`.
+- **Problem**: App crashed immediately on startup during Hilt initialization with `java.lang.ClassCastException: com.goings.dayzero.data.sync.SupabaseRemotePullGateway cannot be cast to com.goings.dayzero.data.sync.ChatRemotePullGateway`.
 - **Root Cause**: `DayZeroHiltModule.kt` did not provide `ChatRemotePullGateway` or `SupabaseChatRemotePullGateway`. In `provideChatConversationPullCoordinator` and `provideChatMessagePullCoordinator`, the dependency was declared as `remotePullGateway: RemotePullGateway` and cast as `remotePullGateway as ChatRemotePullGateway`. At runtime, Hilt injected the provided `SupabaseRemotePullGateway` (which only implements `RemotePullGateway`, not `ChatRemotePullGateway`), resulting in a ClassCastException.
 - **Resolution**:
   - Added a `@Provides` method for `ChatRemotePullGateway` returning a `SupabaseChatRemotePullGateway` instance in `DayZeroHiltModule.kt`.
@@ -424,10 +428,10 @@ This configuration caused `ComponentActivity` to register as a launcher activity
 - **Incorrect/Unproven**: Gemini's suggestion to retain a fallback to `System.currentTimeMillis()` on parser failure was the core mechanism of the bug, masking parsing issues and causing database immutable field conflicts.
 
 ### File Modifications
-- **[SupabaseChatRemotePullGateway.kt](file:///D:/Goings/APPProjects/DayZero/core/sync/src/main/java/com/example/data/sync/SupabaseChatRemotePullGateway.kt)**: Made `parseRemoteTime` internal and updated it to parse using `OffsetDateTime` first, falling back to `Instant.parse`, and throwing the exception upon failure.
-- **[SupabaseRemotePullGateway.kt](file:///D:/Goings/APPProjects/DayZero/core/sync/src/main/java/com/example/data/sync/SupabaseRemotePullGateway.kt)**: Implemented the same robust parser.
-- **[SupabaseChatRemotePullGatewayTest.kt](file:///D:/Goings/APPProjects/DayZero/core/sync/src/test/java/com/example/data/sync/SupabaseChatRemotePullGatewayTest.kt)**: Added datetime parsing tests covering UTC `Z`, offsets (`+00:00`, `+08:00`, `-05:00`), varying sub-second precision (including microsecond formats), invalid formats, and blank inputs. Verified that failures do not fallback to system execution time.
-- **[SyncHealthReporterChatPullTest.kt](file:///D:/Goings/APPProjects/DayZero/core/sync/src/test/java/com/example/data/sync/SyncHealthReporterChatPullTest.kt)**: Added a test verifying that subsequent successful pulls clear the fatal failure count and restore health status, and fixed the missing `assertNull` import compilation error.
+- **[SupabaseChatRemotePullGateway.kt](file:///D:/Goings/APPProjects/DayZero/core/sync/src/main/java/com/goings/dayzero/data/sync/SupabaseChatRemotePullGateway.kt)**: Made `parseRemoteTime` internal and updated it to parse using `OffsetDateTime` first, falling back to `Instant.parse`, and throwing the exception upon failure.
+- **[SupabaseRemotePullGateway.kt](file:///D:/Goings/APPProjects/DayZero/core/sync/src/main/java/com/goings/dayzero/data/sync/SupabaseRemotePullGateway.kt)**: Implemented the same robust parser.
+- **[SupabaseChatRemotePullGatewayTest.kt](file:///D:/Goings/APPProjects/DayZero/core/sync/src/test/java/com/goings/dayzero/data/sync/SupabaseChatRemotePullGatewayTest.kt)**: Added datetime parsing tests covering UTC `Z`, offsets (`+00:00`, `+08:00`, `-05:00`), varying sub-second precision (including microsecond formats), invalid formats, and blank inputs. Verified that failures do not fallback to system execution time.
+- **[SyncHealthReporterChatPullTest.kt](file:///D:/Goings/APPProjects/DayZero/core/sync/src/test/java/com/goings/dayzero/data/sync/SyncHealthReporterChatPullTest.kt)**: Added a test verifying that subsequent successful pulls clear the fatal failure count and restore health status, and fixed the missing `assertNull` import compilation error.
 
 ### Time Parsing Strategy
 - Parse remote times using:
@@ -465,10 +469,10 @@ This configuration caused `ComponentActivity` to register as a launcher activity
 ## Phase A: Nutrition Capsule Data Link & Sync (2026-06-26)
 
 ### 2. 领域层与 Card DTO 的扩展
-- **[FoodEntry](file:///D:/Goings/APPProjects/DayZero/core/model/src/main/java/com/example/domain/model/FoodEntry.kt)** 包含 `carbohydratesG`, `proteinG`, `fatG`, `fiberG` (Float? = null)。
-- **[ConfirmCardItem](file:///D:/Goings/APPProjects/DayZero/core/model/src/main/java/com/example/domain/model/ai/assistant/AiChatCard.kt)** 新增上述四个字段。
-- **[ConfirmCardItemDto](file:///D:/Goings/APPProjects/DayZero/core/network/src/main/java/com/example/data/remote/dto/assistant/AiChatCardDto.kt)** 及 **[AssistantActionItemDto](file:///D:/Goings/APPProjects/DayZero/core/network/src/main/java/com/example/data/remote/dto/assistant/AssistantActionDto.kt)** 补充上述四个字段，使用 Moshi 进行序列化。
-- **[AssistantTurnV2ResponseMapper](file:///D:/Goings/APPProjects/DayZero/core/network/src/main/java/com/example/data/remote/mapper/AssistantTurnV2ResponseMapper.kt)** 及 **[AiAssistantRemoteMapper](file:///D:/Goings/APPProjects/DayZero/core/network/src/main/java/com/example/data/remote/mapper/AiAssistantRemoteMapper.kt)** 完整实现双向往返映射。
+- **[FoodEntry](file:///D:/Goings/APPProjects/DayZero/core/model/src/main/java/com/goings/dayzero/domain/model/FoodEntry.kt)** 包含 `carbohydratesG`, `proteinG`, `fatG`, `fiberG` (Float? = null)。
+- **[ConfirmCardItem](file:///D:/Goings/APPProjects/DayZero/core/model/src/main/java/com/goings/dayzero/domain/model/ai/assistant/AiChatCard.kt)** 新增上述四个字段。
+- **[ConfirmCardItemDto](file:///D:/Goings/APPProjects/DayZero/core/network/src/main/java/com/goings/dayzero/data/remote/dto/assistant/AiChatCardDto.kt)** 及 **[AssistantActionItemDto](file:///D:/Goings/APPProjects/DayZero/core/network/src/main/java/com/goings/dayzero/data/remote/dto/assistant/AssistantActionDto.kt)** 补充上述四个字段，使用 Moshi 进行序列化。
+- **[AssistantTurnV2ResponseMapper](file:///D:/Goings/APPProjects/DayZero/core/network/src/main/java/com/goings/dayzero/data/remote/mapper/AssistantTurnV2ResponseMapper.kt)** 及 **[AiAssistantRemoteMapper](file:///D:/Goings/APPProjects/DayZero/core/network/src/main/java/com/goings/dayzero/data/remote/mapper/AiAssistantRemoteMapper.kt)** 完整实现双向往返映射。
   - 历史 Card JSON 缺少营养字段时，正常解析得到 `null`，不崩溃且不转为 0。
   - `date_mismatch_guard_card` 中嵌套的 `pendingOriginalCard` 能对称传输并不丢营养字段。
 
@@ -478,10 +482,10 @@ This configuration caused `ComponentActivity` to register as a launcher activity
 - **mealsJson 兼容**: 借助 Moshi，新/旧 `mealsJson` 反序列化为 `FoodEntry` 时能对未知键得到 `null`，保存时正常序列化并保留 0 与 null 的独立语义。
 
 ### 4. 同步对称性 (Sync Payload, Push, Pull & Backfill)
-- **[SyncPayloadBuilder](file:///D:/Goings/APPProjects/DayZero/core/sync/src/main/java/com/example/data/sync/SyncPayloadBuilder.kt)**: `foodPayload` 输出 `carbsG`, `proteinG`, `fatG`, `fiberG`，显式支持 `null -> JSONObject.NULL`，确保能够被客户端清空及修改。
-- **[SupabaseRemoteSyncGateway](file:///D:/Goings/APPProjects/DayZero/core/sync/src/main/java/com/example/data/sync/SupabaseRemoteSyncGateway.kt)**: `foodEntryBody` 新增 `fiber_g` 列的写入，向 Supabase 发送 Push 请求时，值保留 null/0/正数。
-- **[SupabaseRemotePullGateway](file:///D:/Goings/APPProjects/DayZero/core/sync/src/main/java/com/example/data/sync/SupabaseRemotePullGateway.kt)**: `FoodEntryRemoteDto` 增加 `fiberG` 字段；`foodEntryFromJson` 在从 JSON 解析时，读取 `fiber_g` 并支持缺失字段兼容 (返回 null)。
-- **[PullCoordinator](file:///D:/Goings/APPProjects/DayZero/core/sync/src/main/java/com/example/data/sync/PullCoordinator.kt)**: `buildMeals` 在构造 `FoodEntry` 领域模型时，成功映射 remote 的四个营养字段，实现了 Pull 流程的数据流补齐。
+- **[SyncPayloadBuilder](file:///D:/Goings/APPProjects/DayZero/core/sync/src/main/java/com/goings/dayzero/data/sync/SyncPayloadBuilder.kt)**: `foodPayload` 输出 `carbsG`, `proteinG`, `fatG`, `fiberG`，显式支持 `null -> JSONObject.NULL`，确保能够被客户端清空及修改。
+- **[SupabaseRemoteSyncGateway](file:///D:/Goings/APPProjects/DayZero/core/sync/src/main/java/com/goings/dayzero/data/sync/SupabaseRemoteSyncGateway.kt)**: `foodEntryBody` 新增 `fiber_g` 列的写入，向 Supabase 发送 Push 请求时，值保留 null/0/正数。
+- **[SupabaseRemotePullGateway](file:///D:/Goings/APPProjects/DayZero/core/sync/src/main/java/com/goings/dayzero/data/sync/SupabaseRemotePullGateway.kt)**: `FoodEntryRemoteDto` 增加 `fiberG` 字段；`foodEntryFromJson` 在从 JSON 解析时，读取 `fiber_g` 并支持缺失字段兼容 (返回 null)。
+- **[PullCoordinator](file:///D:/Goings/APPProjects/DayZero/core/sync/src/main/java/com/goings/dayzero/data/sync/PullCoordinator.kt)**: `buildMeals` 在构造 `FoodEntry` 领域模型时，成功映射 remote 的四个营养字段，实现了 Pull 流程的数据流补齐。
 - **Backfill**: 因为 Backfill 调用 `foodPayload`，更新 `SyncPayloadBuilder` 后，历史营养字段和 null 属性会自动加入 Backfill 流程，实现了同步对称。
 
 ### 5. Supabase 变更已于 2026-06-26 成功部署并验证
@@ -553,7 +557,7 @@ This configuration caused `ComponentActivity` to register as a launcher activity
 ## Phase C1: Nutrition Capsule Client Logic & Functional UI (2026-06-26)
 
 ### 1. 计算逻辑
-- 新增 `NutritionCapsuleCalculator`，位置：`core/ui/src/main/java/com/example/ui/components/ai/NutritionCapsuleCalculator.kt`。
+- 新增 `NutritionCapsuleCalculator`，位置：`core/ui/src/main/java/com/goings/dayzero/ui/components/ai/NutritionCapsuleCalculator.kt`。
 - 胶囊按整张 `show_confirm_card` 的 `payload.meals[].items[]` 汇总，不从 `calories` 反推营养。
 - `carbohydratesG` 表示包含 `fiberG` 的总碳水；展示用净碳水：
   - `totalCarbohydratesG = sum(items.carbohydratesG)`
@@ -587,18 +591,18 @@ This configuration caused `ComponentActivity` to register as a launcher activity
 
 ### 5. 修改文件与测试
 - 修改文件：
-  - `core/ui/src/main/java/com/example/ui/components/ai/FoodDraftConfirmCard.kt`
-  - `core/ui/src/main/java/com/example/ui/components/ai/NutritionCapsuleCalculator.kt`
+  - `core/ui/src/main/java/com/goings/dayzero/ui/components/ai/FoodDraftConfirmCard.kt`
+  - `core/ui/src/main/java/com/goings/dayzero/ui/components/ai/NutritionCapsuleCalculator.kt`
   - `core/ui/build.gradle.kts`
-  - `feature/ai-record/src/main/java/com/example/ui/screens/AiRecordScreen.kt`
-  - `feature/ai-record/src/main/java/com/example/ui/screens/AssistantCardRenderer.kt`
-  - `app/src/main/java/com/example/ui/AppNavigation.kt`
-  - `app/src/main/java/com/example/DayZeroViewModel.kt`
-  - `core/ui/src/test/java/com/example/ui/components/ai/NutritionCapsuleCalculatorTest.kt`
-  - `feature/ai-record/src/test/java/com/example/ui/screens/AiRecordPhase3Test.kt`
-  - `app/src/test/java/com/example/DayZeroDateMismatchGuardTest.kt`
-  - `app/src/test/java/com/example/ConfirmFoodRecordUseCaseTest.kt`
-  - `core/network/src/test/java/com/example/data/remote/mapper/AiAssistantRemoteMapperTest.kt`
+  - `feature/ai-record/src/main/java/com/goings/dayzero/ui/screens/AiRecordScreen.kt`
+  - `feature/ai-record/src/main/java/com/goings/dayzero/ui/screens/AssistantCardRenderer.kt`
+  - `app/src/main/java/com/goings/dayzero/ui/AppNavigation.kt`
+  - `app/src/main/java/com/goings/dayzero/DayZeroViewModel.kt`
+  - `core/ui/src/test/java/com/goings/dayzero/ui/components/ai/NutritionCapsuleCalculatorTest.kt`
+  - `feature/ai-record/src/test/java/com/goings/dayzero/ui/screens/AiRecordPhase3Test.kt`
+  - `app/src/test/java/com/goings/dayzero/DayZeroDateMismatchGuardTest.kt`
+  - `app/src/test/java/com/goings/dayzero/ConfirmFoodRecordUseCaseTest.kt`
+  - `core/network/src/test/java/com/goings/dayzero/data/remote/mapper/AiAssistantRemoteMapperTest.kt`
   - `docs/PROJECT_CONTEXT_FOR_CHATGPT.md`
 - 测试覆盖：
   - 纯计算：单 item、多 meal 多 item、总碳水含纤维、净碳水 clamp、null/负数/NaN/Infinity/空 items 隐藏、0 合法、比例和约等于 1。
@@ -902,19 +906,19 @@ Mapped to stable enums: `SOURCE_OPEN_FAILED`, `SOURCE_TOO_LARGE`, `UNSUPPORTED_F
 - `SendUserMessageWithMediaUseCase` is wired in Hilt but not yet invoked from the production send path.
 
 **Key Files**
-- `core/domain/src/main/java/com/example/domain/model/ai/SendUserMessageWithMediaRequest.kt`
-- `core/domain/src/main/java/com/example/domain/model/ai/SendUserMessageWithMediaResult.kt`
-- `core/domain/src/main/java/com/example/domain/repository/ChatMediaTransactionRepository.kt`
-- `core/domain/src/main/java/com/example/domain/usecase/SendUserMessageWithMediaUseCase.kt`
-- `core/domain/src/main/java/com/example/domain/usecase/ObserveConversationMediaUseCase.kt`
-- `core/data/src/main/java/com/example/data/repository/RoomChatMediaTransactionRepository.kt`
-- `core/data/src/main/java/com/example/data/local/mapper/AiChatMessageMapper.kt`
-- `core/database/src/main/java/com/example/data/local/dao/MediaAssetDao.kt`
-- `core/sync/src/main/java/com/example/data/sync/chat/ChatSyncQueueWriter.kt`
-- `feature/ai-record/src/main/java/com/example/ui/screens/MessageWithMedia.kt`
-- `feature/ai-record/src/main/java/com/example/ui/screens/AiRecordScreen.kt`
-- `feature/ai-record/src/main/java/com/example/ui/screens/AiRecordViewModel.kt`
-- `app/src/main/java/com/example/di/DayZeroHiltModule.kt`
+- `core/domain/src/main/java/com/goings/dayzero/domain/model/ai/SendUserMessageWithMediaRequest.kt`
+- `core/domain/src/main/java/com/goings/dayzero/domain/model/ai/SendUserMessageWithMediaResult.kt`
+- `core/domain/src/main/java/com/goings/dayzero/domain/repository/ChatMediaTransactionRepository.kt`
+- `core/domain/src/main/java/com/goings/dayzero/domain/usecase/SendUserMessageWithMediaUseCase.kt`
+- `core/domain/src/main/java/com/goings/dayzero/domain/usecase/ObserveConversationMediaUseCase.kt`
+- `core/data/src/main/java/com/goings/dayzero/data/repository/RoomChatMediaTransactionRepository.kt`
+- `core/data/src/main/java/com/goings/dayzero/data/local/mapper/AiChatMessageMapper.kt`
+- `core/database/src/main/java/com/goings/dayzero/data/local/dao/MediaAssetDao.kt`
+- `core/sync/src/main/java/com/goings/dayzero/data/sync/chat/ChatSyncQueueWriter.kt`
+- `feature/ai-record/src/main/java/com/goings/dayzero/ui/screens/MessageWithMedia.kt`
+- `feature/ai-record/src/main/java/com/goings/dayzero/ui/screens/AiRecordScreen.kt`
+- `feature/ai-record/src/main/java/com/goings/dayzero/ui/screens/AiRecordViewModel.kt`
+- `app/src/main/java/com/goings/dayzero/di/DayZeroHiltModule.kt`
 
 **Validation**
 - `:core:data:testDebugUnitTest` — `RoomChatMediaTransactionRepositoryTest` passes.
@@ -1201,24 +1205,24 @@ Allowed fields:
 * Processing duration
 
 ### Modified / Added Files
-* `core/model/src/main/java/com/example/domain/model/ai/assistant/PreparedVisionRequest.kt`
-* `core/domain/src/main/java/com/example/domain/model/ai/assistant/PrepareVisionAttachmentsRequest.kt`
-* `core/domain/src/main/java/com/example/domain/repository/VisionAttachmentPreparationRepository.kt`
-* `core/domain/src/main/java/com/example/domain/usecase/PrepareVisionAttachmentsForMessageUseCase.kt`
-* `core/domain/src/main/java/com/example/domain/usecase/ReleasePreparedVisionAttachmentsUseCase.kt`
-* `core/data/src/main/java/com/example/data/repository/AndroidVisionAttachmentPreparationRepository.kt`
-* `core/data/src/main/java/com/example/data/media/AiImageDerivativeProcessor.kt`
-* `core/data/src/main/java/com/example/data/media/AndroidAiImageDerivativeProcessor.kt`
-* `core/data/src/main/java/com/example/data/media/MediaFileStore.kt`
-* `core/data/src/main/java/com/example/data/media/AndroidMediaFileStore.kt`
-* `core/network/src/main/java/com/example/data/remote/dto/assistant/AiAssistantRequestDto.kt`
-* `core/network/src/main/java/com/example/data/remote/mapper/assistant/AiAssistantRemoteMapper.kt`
-* `app/src/main/java/com/example/di/DayZeroHiltModule.kt`
+* `core/model/src/main/java/com/goings/dayzero/domain/model/ai/assistant/PreparedVisionRequest.kt`
+* `core/domain/src/main/java/com/goings/dayzero/domain/model/ai/assistant/PrepareVisionAttachmentsRequest.kt`
+* `core/domain/src/main/java/com/goings/dayzero/domain/repository/VisionAttachmentPreparationRepository.kt`
+* `core/domain/src/main/java/com/goings/dayzero/domain/usecase/PrepareVisionAttachmentsForMessageUseCase.kt`
+* `core/domain/src/main/java/com/goings/dayzero/domain/usecase/ReleasePreparedVisionAttachmentsUseCase.kt`
+* `core/data/src/main/java/com/goings/dayzero/data/repository/AndroidVisionAttachmentPreparationRepository.kt`
+* `core/data/src/main/java/com/goings/dayzero/data/media/AiImageDerivativeProcessor.kt`
+* `core/data/src/main/java/com/goings/dayzero/data/media/AndroidAiImageDerivativeProcessor.kt`
+* `core/data/src/main/java/com/goings/dayzero/data/media/MediaFileStore.kt`
+* `core/data/src/main/java/com/goings/dayzero/data/media/AndroidMediaFileStore.kt`
+* `core/network/src/main/java/com/goings/dayzero/data/remote/dto/assistant/AiAssistantRequestDto.kt`
+* `core/network/src/main/java/com/goings/dayzero/data/remote/mapper/AiAssistantRemoteMapper.kt`
+* `app/src/main/java/com/goings/dayzero/di/DayZeroHiltModule.kt`
 * Tests:
-  * `core/domain/src/test/java/com/example/domain/usecase/PrepareVisionAttachmentsForMessageUseCaseTest.kt`
-  * `core/data/src/test/java/com/example/data/repository/AndroidVisionAttachmentPreparationRepositoryTest.kt`
-  * `core/data/src/test/java/com/example/data/media/AndroidAiImageDerivativeProcessorTest.kt`
-  * `core/network/src/test/java/com/example/data/remote/mapper/assistant/AiAssistantRemoteMapperTest.kt`
+  * `core/domain/src/test/java/com/goings/dayzero/domain/usecase/PrepareVisionAttachmentsForMessageUseCaseTest.kt`
+  * `core/data/src/test/java/com/goings/dayzero/data/repository/AndroidVisionAttachmentPreparationRepositoryTest.kt`
+  * `core/data/src/test/java/com/goings/dayzero/data/media/AndroidAiImageDerivativeProcessorTest.kt`
+  * `core/network/src/test/java/com/goings/dayzero/data/remote/mapper/AiAssistantRemoteMapperTest.kt`
 
 ### Verification Commands & Results
 
@@ -1497,18 +1501,18 @@ Independent verification (`Phase 2B-3A-V`). After acceptance, Phase 2B-3B may re
 * **Goal**: Connect persisted image user messages to the existing `assistant-turn-v2-stream` / `assistant-turn-v2` production chain from Android, with prepare-once, stream-first, eligible fallback, deterministic placeholder, and guaranteed cleanup.
 * **Result**: `VisionAssistantTurnOrchestrator` implemented in `:app` and covered by unit tests; Hilt wiring and ViewModel forwarding completed. Phase 2B-3C1-F1 targeted fixes resolved independent-verification findings.
 * **New files**:
-  * `core/model/src/main/java/com/example/domain/model/ai/assistant/VisionAssistantTurnResult.kt`
-  * `app/src/main/java/com/example/assistant/VisionAssistantTurnOrchestrator.kt`
-  * `app/src/test/java/com/example/VisionAssistantTurnOrchestratorTest.kt`
-  * `app/src/test/java/com/example/DayZeroViewModelVisionAttemptOwnershipTest.kt`
-  * `app/src/test/java/com/example/assistant/FakeVisionAssistantTurnOrchestrator.kt`
+  * `core/model/src/main/java/com/goings/dayzero/domain/model/ai/assistant/VisionAssistantTurnResult.kt`
+  * `app/src/main/java/com/goings/dayzero/assistant/VisionAssistantTurnOrchestrator.kt`
+  * `app/src/test/java/com/goings/dayzero/VisionAssistantTurnOrchestratorTest.kt`
+  * `app/src/test/java/com/goings/dayzero/DayZeroViewModelVisionAttemptOwnershipTest.kt`
+  * `app/src/test/java/com/goings/dayzero/assistant/FakeVisionAssistantTurnOrchestrator.kt`
 * **Modified files**:
-  * `core/domain/src/main/java/com/example/domain/repository/AiDraftRepository.kt`
-  * `core/data/src/main/java/com/example/data/repository/RemoteAiDraftRepository.kt`
-  * `core/data/src/main/java/com/example/data/repository/FakeAiDraftRepository.kt`
-  * `app/src/main/java/com/example/DayZeroViewModel.kt`
-  * `app/src/main/java/com/example/di/DayZeroHiltModule.kt`
-  * `app/src/main/java/com/example/ui/AppNavigation.kt`
+  * `core/domain/src/main/java/com/goings/dayzero/domain/repository/AiDraftRepository.kt`
+  * `core/data/src/main/java/com/goings/dayzero/data/repository/RemoteAiDraftRepository.kt`
+  * `core/data/src/main/java/com/goings/dayzero/data/repository/FakeAiDraftRepository.kt`
+  * `app/src/main/java/com/goings/dayzero/DayZeroViewModel.kt`
+  * `app/src/main/java/com/goings/dayzero/di/DayZeroHiltModule.kt`
+  * `app/src/main/java/com/goings/dayzero/ui/AppNavigation.kt`
   * `:feature:ai-record` test fakes (`AiRecordPhase2ATest`, `AiRecordPhase3Test`).
 * **Design highlights**:
   * Validates the persisted user message (exists, role=user, has `contentJson.media`, not already final).
@@ -1875,3 +1879,112 @@ P2-6 最小修复范围：让 `RoomRecordRepository` 获得同一个 `DayZeroDat
 - Fallback smoke used valid generated JPEGs and Android-equivalent DTO field omission (only userText/date/turnType/ordered attachments; no null fields or promptCacheKey). Text-only and single-image calls were HTTP 200. Explicit three-meal call was HTTP 200 with one confirm, breakfast/lunch/dinner Meals, no ask card, `explicitPhotoHintCount=3`, deterministic=3, final=3, and one whitelisted source photo per Meal.
 - Streaming v15 -> v16, ACTIVE, `verify_jwt=false`, prompt `stream_compact_v7_deterministic_multi_meal_photo_assignment`, with exact 5-file content readback and bundle SHA `f3e1d322a4eadcc3821d8abab8d77f67b7ec80b135e83e7af27f385e08dd76ab`. Text, single-image, and explicit three-image SSE calls passed; multi-image event order was status -> reply_delta* -> final -> debug_timing -> done, final was exactly once, no error/ask, and the three safe assignment counters were all 3.
 - No rollback occurred in F3. Unchanged: Android auto-assignment, Schema/RLS/Storage/Auth/Secrets, Room, timeout, device operations, and Git operations.
+
+## AI Vision Derivative Payload Reduction (2026-07-10)
+
+- Reduced the AI vision derivative JPEG first-tier spec from **1280 px / q80** to **1024 px / q74**, and tightened the per-image acceptance threshold from **640 KiB** to **384 KiB**. The five-tier encoding ladder was updated to: `1024/q74`, `1024/q66`, `896/q64`, `832/q60`, `768/q56`.
+- Motivation: lower JSON/Base64 payload size during peak hours to reduce upstream first-packet timeout risk and to keep 6-image fallback requests from hitting the 50 s fallback ceiling. The model-gateway/Edge hard caps (640 KiB per image, 4 MiB total) remain unchanged.
+- Rollback is safe and local-only: revert the `DerivativeSpec` constants and ladder in `AiImageDerivativeProcessor.kt`; no protocol, schema, or Edge Function change is required.
+
+## Vision Runtime Forensic Audit + Dynamic Upstream Timeout Deployment (2026-07-10)
+
+- Root-cause finding: the `assistant-turn-v2-stream` AbortController only wrapped **connect + request-body upload + Moonshot vision prefill up to response headers**; the response-body read loop was not covered. Real multi-image requests (~3 images, ~2.1 MiB JSON) routinely took 13 s to >15 s before headers arrived, so they were aborted at the 15 s boundary. The Edge Function converted the abort into an SSE `error` event, Android surfaced it as a `ProtocolException` (the "协议错误" symptom), and the orchestrator silently fell back to the non-streaming endpoint — which is why replies appeared to "pop out" all at once instead of typing in.
+- Fix (deployed):
+  - Added shared helper `supabase/functions/_shared/assistant_upstream_timeout.ts`.
+  - Streaming header timeout is now dynamic: `clamp(25 s, 15 s + 10 s/MiB of decoded attachment bytes, 50 s)`; text-only requests keep the original 15 s.
+  - On streaming abort the Edge emits `{code:"UPSTREAM_HEADER_TIMEOUT", retryable:true}` as an SSE error.
+  - The non-streaming fallback now enforces a matching 50 s total upstream timeout and returns HTTP 504 `UPSTREAM_TOTAL_TIMEOUT` on abort.
+  - Android side: `VisionAssistantTurnOrchestrator.FallbackReason` gained `UPSTREAM_HEADER_TIMEOUT` (matched by message, correcting the previous masking as `PROTOCOL_ERROR`); `StreamErrorEventDto` gained `code`/`retryable` fields.
+  - Normalization was also tightened: meals with empty items are filtered and confirm cards with empty items are discarded, preventing a latent server-side→client mapper protocol error.
+- Deployment: `assistant-turn-v2-stream` v16 → **v17** and `assistant-turn-v2` v27 → **v28**, both `ACTIVE` with `verify_jwt=false`. Prompt version strings did not change (`stream_compact_v7_deterministic_multi_meal_photo_assignment` / `compact_v8_deterministic_multi_meal_photo_assignment`).
+- Key corrected finding: the dominant multi-image bottleneck is **Moonshot vision prefill time (pixel-bound)**, not upload bytes. Streaming mode withholds response headers until prefill completes (verified: `upstreamHeadersMs ≈ kimiTimeToFirstTokenMs`). Reducing JPEG *quality* does not help prefill; only reducing *resolution* helps. The 1280 px → 1024 px change cuts pixels by ~36% and helps in normal periods, but cannot overcome Moonshot's peak-congestion windows (roughly 19:00–23:00 CST), where even a single 500 KiB/1280 px image can exceed 25 s to headers. This is an upstream-capacity/temporal condition, not a client bug.
+- Verification: `:core:data:testDebugUnitTest` PASS, `:app:assembleDebug` PASS, 95 Deno tests PASS. No schema/RLS/storage/auth/Room change.
+
+## Phase 4B-1-R — Photo Editor Reality Audit (2026-07-10)
+
+- User reported that the photo-assignment editor ("编辑模式还没有") was not visible on the device, contradicting the documented `READY_FOR_PHASE_4B_1_DEVICE_TEST` state.
+- Read-only audit conclusion: **the implementation is complete and correctly wired in source; the first broken link was delivery, not code.**
+- Verified call chain:
+  - Entry: `FoodDraftConfirmCard.kt:292` ("整理照片 · N 张"), gated by `AssistantCardRenderer.kt:155-171` (`state == "pending"`, meals non-empty, legal 1..6 origin photo set).
+  - Origin resolution: `PhotoEditorCardResolver.resolveOriginMediaIds` pairs the card's assistant message to its origin image user message via deterministic `assistantPlaceholderId(userMsgId) == assistantMsgId` and reads that message's `sourceMediaIds`.
+  - Overlay host: `AiRecordScreen.kt:602-620`, reusing `PhotoViewerOverlay`.
+  - Session + save: `AiRecordViewModel.openPhotoAssignmentEditor` / `savePhotoAssignments` (re-validates live card editability, calls `UpdateFoodCardPhotoAssignmentsUseCase` exactly once, debounces, propagates cancellation).
+  - Persistence: `RoomFoodCardPhotoAssignmentRepository` (raw JSON update preserving unknown/nutrition/weight/state fields, supports `date_mismatch_guard_card.pendingOriginalCard`, enqueues `UPSERT_AI_CHAT_MESSAGE` once per save, idempotent).
+  - DI: `DayZeroHiltModule.kt:326/337`.
+- Delivery gap: the entire feature was **uncommitted working-tree changes** (`photoeditor/` directory, the UseCase, the Repo, and modified wiring files) with empty git history, so the installed APK never contained the editor.
+- Resolution: no source re-implementation (the "second editor" rule forbids it). Built a fresh `app-debug.apk` from the existing working tree. All photo-editor module tests + `:app:assembleDebug` PASS; `:app:testDebugUnitTest` had only the 2 whitelisted timezone failures.
+- Status: `READY_FOR_PHOTO_EDITOR_DEVICE_RETEST`. **Not declared:** `PHASE_4B_COMPLETE` / `DEVICE_TEST_PASSED`.
+- Boundaries observed: no Edge/prompt/schema/Room/MealEntry/Calendar/cloud-sync change; no Git write; no device install/clear.
+
+## Commit 2bd958e — Photo Editor Code Committed (2026-07-11)
+
+- On 2026-07-11 the working-tree changes identified by the Phase 4B-1-R reality audit were committed as `2bd958e Add and update feature implementations`.
+- The commit includes:
+  - `feature/ai-record/src/main/java/com/goings/dayzero/ui/screens/photoeditor/*` — full editor implementation (`PhotoAssignmentEditorScreen`, `PhotoAssignmentDraft`, `FanDeckMath`, `PhotoEditorCardResolver`, `PhotoAssignmentEditorUiState`).
+  - `core/domain/.../UpdateFoodCardPhotoAssignmentsUseCase.kt` and `core/data/.../RoomFoodCardPhotoAssignmentRepository.kt`.
+  - `core/ui` updates: `PhotoViewerOverlay`, `PinnedPhotoStrip` quiet-journal redesign, `LocalMediaThumbnail`, `FoodDraftConfirmCard` stale-draft fix.
+  - Wiring: `AiRecordScreen`, `AiRecordViewModel`, `AssistantCardRenderer`, `AppNavigation`, `DayZeroHiltModule`, `DayZeroViewModel`.
+  - Edge Function shared modules: `assistant_upstream_timeout.ts`, `explicit_photo_meal_assignment.ts`, and handler/normalization changes for both `assistant-turn-v2-stream` and `assistant-turn-v2`.
+  - New/updated tests across `:app`, `:feature:ai-record`, `:core:model`, `:core:domain`, `:core:data`, `:core:sync`, and `:core:ui`.
+- No source logic was changed from the 2026-07-10 audited state; the commit only closed the delivery gap.
+- Build/test baseline remains: `:app:assembleDebug` PASS; `:app:testDebugUnitTest` only the 2 documented timezone-fragile failures; no new failures.
+- Current status: `READY_FOR_PHOTO_EDITOR_DEVICE_RETEST` — the implementation is now in git, but the user must still install a freshly built APK and complete the real-device "pending Confirm Card → 整理照片 · N 张 → editor → reassign → save → Room update → reopen" flow before `PHASE_4B_COMPLETE` can be declared. `DEVICE_TEST_PASSED` is **not** declared.
+
+## Phase G1 — Alibaba Cloud Gateway Local Protocol Completion (2026-07-12)
+
+- **Goal**: add formal `/api/ai/` routes, an independent `/ready` readiness endpoint, a stable `X-Request-Id` contract, and hardened HTTP request-entry validation to the local Gateway candidate in `server/dayzero-ai-gateway/`.
+- **Scope**: only local Gateway source and tests; no Android, Supabase, Edge Function, Room, sync, Docker, ACR, ECS, Nginx, or deployment changes.
+- **Frozen files verified unchanged**: `src/shared/assistant_upstream_timeout.ts`, `src/shared/prompt.ts`, `src/shared/normalization.ts`, `src/shared/assistant_vision.ts`, `src/shared/explicit_photo_meal_assignment.ts` all retained their start-of-task SHA-256.
+- **Routing** (`src/main.ts`):
+  - New formal paths: `POST /api/ai/assistant-turn-v2`, `POST /api/ai/assistant-turn-v2-stream`.
+  - Compatibility aliases preserved: `POST /assistant-turn-v2`, `POST /assistant-turn-v2-stream`.
+  - Both old and new paths call the same handlers; no internal forwarding, no duplicated business logic, no double Kimi request.
+  - Added `GET /ready`; `GET /health` remains process-liveness only.
+  - 405 returned for unsupported methods on known paths; 404 for unknown paths.
+- **Readiness** (`src/handlers/ready.ts`):
+  - `/ready` verifies config loaded, Kimi URL/model/key present and URL well-formed, and (when `ENABLE_AUTH=true`) Supabase URL/audience present and URL well-formed.
+  - Does not call Kimi, Supabase, or JWKS; does not emit config values or secrets.
+  - Returns `200 {status:"ready"}` or `503` with a stable `errorCode`.
+- **Request ID** (`src/request_id.ts`):
+  - Inbound `X-Request-Id` reused only when 8–128 chars and ASCII `[A-Za-z0-9\-_.:]`.
+  - Invalid/missing values replaced by a fresh generated id; invalid input is never logged or echoed.
+  - Every response (`/health`, `/ready`, fallback JSON, SSE, 4xx/5xx) carries `X-Request-Id`.
+- **Request entry validation** (`src/body_reader.ts`, `src/shared/request_parser.ts`):
+  - Non-object JSON bodies (null, array, string, number) now return `400 INVALID_BODY_TYPE` instead of causing 500.
+  - `turnType` restricted to `user_message` or `interaction_result` (`INVALID_TURN_TYPE`).
+  - `interaction_result` requires `interactionResult` to be an object (`MISSING_INTERACTION_RESULT`).
+  - `date`, `recentMessages`, `todayRecord`, `pendingDraft`, `userText`, `traceId` type-checked; attachments continue to be validated by the existing Vision validator.
+  - Existing Android DTO compatibility preserved; unknown fields are ignored.
+- **Testing**: `deno fmt --check`, `deno lint`, `deno check src/main.ts`, and `deno task test` all pass. Test count increased from 33 to 80. New tests cover routing (11), readiness (8), request id (10), request parser (13), and body reader (6).
+- **Status**: `PHASE_G1_COMPLETE`. Next recommended phase is JWT/JWKS hardening and log sanitization; not started.
+
+## Phase G2 / G2-F1 — AI Gateway Production Hardening & Security Acceptance (2026-07-12)
+
+- **Goal**: harden the local `server/dayzero-ai-gateway/` candidate for production deployment: strict JWT/JWKS verification, log sanitization, production-grade Nginx/HTTPS/SSE template, traceable Docker/Compose configuration, and executable deployment/rollback runbook. No Android, Supabase, Edge Function, Room, sync, or ECS changes.
+- **Completion**: `PHASE_G2_COMPLETE` (`docs/PHASE_G2_COMPLETION_REPORT_20260712.md`). Key deliverables:
+  - `src/config.ts`: `APP_ENV`, `SUPABASE_JWKS_URL`, `SUPABASE_ISSUER`, `SUPABASE_AUDIENCE`; legacy alias compatibility.
+  - `src/auth.ts`: ES256-only, `kid`/`exp`/`sub`/`iss`/`aud` validation, single JWKS refresh on unknown `kid`, no auth bypass when JWKS is unavailable, production fail-fast when `ENABLE_AUTH=false`.
+  - `src/logger.ts`: SHA-256 user-id digest (`u_<hex>`), explicit sensitive-key redaction.
+  - `Dockerfile`: OCI `revision`/`created`/`version`/`source` labels plus custom `com.dayzero.source_bundle_sha`.
+  - `docker-compose.production.yml`: Gateway `expose: 8080`, Nginx owns 80/443, `/ready` healthcheck, log rotation.
+  - `nginx.production.conf.template`: HTTPS 443, HTTP→HTTPS redirect, ACME challenge, all new/legacy routes, SSE buffering controls, `X-Accel-Buffering no`.
+  - `deployment.manifest.template.yml` and `docs/DEPLOYMENT_AND_ROLLBACK_20260712.md`.
+  - Tests increased from 80 to 100; Docker build, Nginx config test, and Compose config passed.
+- **Independent security audit**: `NOT_ACCEPTABLE_FOR_DEPLOYMENT` (`docs/PHASE_G2_SECURITY_ACCEPTANCE_20260712.md`). Critical/High findings:
+  - Logger black-list was incomplete; `pendingDraft`, `detail`, `message`, `error`, `cause`, `stack`, `imagePath`, and similar keys could leak.
+  - Raw exception messages and Kimi error bodies were echoed to logs/client.
+  - `/ready` depended on legacy Supabase config fields, returning 503 when only the new canonical variables were set.
+  - Docker healthcheck used `/health` instead of `/ready`.
+  - JWKS fetch had no timeout, no single-flight, and no failure cooldown.
+  - Deployment/rollback runbook lacked real ACME flow and a valid v1 rollback command.
+- **G2-F1 remediation**: `PHASE_G2_F1_COMPLETE` (`docs/PHASE_G2_F1_COMPLETION_REPORT_20260712.md`). All Critical/High findings fixed:
+  - Logger rewritten as an explicit allow-list; objects/arrays/exceptions are dropped. Added 17 logger safety tests.
+  - Upstream errors mapped to fixed `UpstreamErrorCode` enums; no Kimi body or raw error message reaches logs/client.
+  - `/ready` checks canonical `supabaseJwksUrl`/`supabaseIssuer`/`supabaseAudience` only.
+  - Healthcheck and Compose now probe `/ready`; Nginx waits for Gateway `service_healthy`.
+  - JWKS fetch: 4s timeout, global single-flight, unknown-kid single refresh per request, 5s failure cooldown.
+  - Added `.dockerignore`; Compose uses digest-only image references.
+  - Deployment/rollback guide updated with ACME first-time/renewal/failure policy and executable v1 rollback.
+  - Tests increased from 100 to 127 and all passed.
+- **Independent reverification**: `ACCEPTABLE_FOR_CONTROLLED_DEPLOYMENT` (`docs/PHASE_G2_F1_SECURITY_REVERIFICATION_20260712.md`). No new Critical/High risks; frozen file hashes matched baseline.
+- **Status**: G2-F1 is **not deployed** to ECS. Real domain, DNS, and production HTTPS certificates are still pending.

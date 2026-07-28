@@ -1,0 +1,183 @@
+# DayZero AI Gateway production Nginx template.
+# Replace the __PLACEHOLDERS__ with the real domain and certificate paths before deploying.
+# Do NOT commit real certificate files or private keys.
+
+worker_processes auto;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    # Per-IP rate limiting. The burst absorbs short spikes; nodelay keeps latency low.
+    limit_req_zone $binary_remote_addr zone=perip:10m rate=10r/s;
+
+    # Reasonable body limit for AI requests with image attachments.
+    client_max_body_size 10m;
+
+    # Do not reveal the Nginx version to clients.
+    server_tokens off;
+
+    upstream dayzero_ai_gateway {
+        server dayzero-ai-gateway:8080;
+        keepalive 32;
+    }
+
+    # HTTP: only ACME challenges (if needed) and redirect everything else to HTTPS.
+    server {
+        listen 80;
+        listen [::]:80;
+        server_name __DAYZERO_DOMAIN__;
+
+        location /.well-known/acme-challenge/ {
+            root /var/www/certbot;
+        }
+
+        location / {
+            return 301 https://$host$request_uri;
+        }
+    }
+
+    # HTTPS: all authenticated AI traffic terminates here and proxies to the Gateway.
+    server {
+        listen 443 ssl;
+        listen [::]:443 ssl;
+        server_name __DAYZERO_DOMAIN__;
+
+        ssl_certificate __SSL_CERTIFICATE_PATH__;
+        ssl_certificate_key __SSL_CERTIFICATE_KEY_PATH__;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+        ssl_prefer_server_ciphers off;
+
+        # Health/readiness endpoints.
+        location = /health {
+            proxy_pass http://dayzero_ai_gateway;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header Authorization $http_authorization;
+            proxy_set_header X-Request-Id $http_x_request_id;
+        }
+
+        location = /ready {
+            proxy_pass http://dayzero_ai_gateway;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header Authorization $http_authorization;
+            proxy_set_header X-Request-Id $http_x_request_id;
+        }
+
+        # New formal AI paths.
+        location = /api/ai/assistant-turn-v2 {
+            limit_req zone=perip burst=10 nodelay;
+            limit_req_status 429;
+
+            # Defensive: never retry the same user request against another upstream.
+            proxy_next_upstream off;
+
+            proxy_pass http://dayzero_ai_gateway;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header Authorization $http_authorization;
+            proxy_set_header X-Request-Id $http_x_request_id;
+
+            proxy_buffering off;
+            proxy_cache off;
+            proxy_request_buffering off;
+            proxy_read_timeout 120s;
+            proxy_send_timeout 120s;
+        }
+
+        # Streaming paths: disable every layer of buffering and compression.
+        location = /api/ai/assistant-turn-v2-stream {
+            limit_req zone=perip burst=10 nodelay;
+            limit_req_status 429;
+
+            # Defensive: never retry the same user request against another upstream.
+            proxy_next_upstream off;
+
+            proxy_pass http://dayzero_ai_gateway;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header Authorization $http_authorization;
+            proxy_set_header X-Request-Id $http_x_request_id;
+
+            proxy_buffering off;
+            proxy_cache off;
+            proxy_request_buffering off;
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
+
+            add_header X-Accel-Buffering no always;
+            gzip off;
+        }
+
+        # Legacy compatibility paths (migration period only).
+        location = /assistant-turn-v2 {
+            limit_req zone=perip burst=10 nodelay;
+            limit_req_status 429;
+
+            proxy_next_upstream off;
+
+            proxy_pass http://dayzero_ai_gateway;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header Authorization $http_authorization;
+            proxy_set_header X-Request-Id $http_x_request_id;
+
+            proxy_buffering off;
+            proxy_cache off;
+            proxy_request_buffering off;
+            proxy_read_timeout 120s;
+            proxy_send_timeout 120s;
+        }
+
+        location = /assistant-turn-v2-stream {
+            limit_req zone=perip burst=10 nodelay;
+            limit_req_status 429;
+
+            proxy_next_upstream off;
+
+            proxy_pass http://dayzero_ai_gateway;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header Authorization $http_authorization;
+            proxy_set_header X-Request-Id $http_x_request_id;
+
+            proxy_buffering off;
+            proxy_cache off;
+            proxy_request_buffering off;
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
+
+            add_header X-Accel-Buffering no always;
+            gzip off;
+        }
+
+        # Explicitly avoid any fallback to Supabase Edge or other upstreams.
+        location / {
+            return 404;
+        }
+    }
+}

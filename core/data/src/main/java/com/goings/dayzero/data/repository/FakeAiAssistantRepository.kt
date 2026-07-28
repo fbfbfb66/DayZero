@@ -1,0 +1,19 @@
+package com.goings.dayzero.data.repository
+
+import com.goings.dayzero.domain.model.ai.assistant.AiAssistantRequest
+import com.goings.dayzero.domain.model.ai.assistant.AiAssistantTurn
+import com.goings.dayzero.domain.model.ai.assistant.AiIntent
+import com.goings.dayzero.domain.repository.AiAssistantRepository
+import java.util.UUID
+
+class FakeAiAssistantRepository : AiAssistantRepository {
+    override suspend fun sendMessage(request: AiAssistantRequest): AiAssistantTurn {
+        return AiAssistantTurn(
+            id = UUID.randomUUID().toString(),
+            intent = AiIntent.GeneralChat,
+            replyText = "AssistantTurnV2 fake reply: ${request.userText}",
+            cards = emptyList(),
+            suggestedReplies = emptyList()
+        )
+    }
+}

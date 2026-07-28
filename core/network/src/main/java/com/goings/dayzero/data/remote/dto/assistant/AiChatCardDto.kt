@@ -1,0 +1,79 @@
+package com.goings.dayzero.data.remote.dto.assistant
+
+import com.goings.dayzero.data.remote.dto.AiDraftResponseDto
+import com.squareup.moshi.JsonClass
+
+@JsonClass(generateAdapter = true)
+data class AiChatCardDto(
+    val type: String,
+    val id: String,
+    // DraftCard
+    val draft: AiDraftResponseDto? = null,
+    // ChoiceCard
+    val title: String? = null,
+    val message: String? = null,
+    val options: List<AiChoiceOptionDto>? = null,
+    val relatedDraftId: String? = null,
+    val resolved: Boolean? = null,
+    val state: String? = null,
+    val originalText: String? = null,
+    val field: String? = null,
+    val continuationContext: Map<String, Any?>? = null,
+    // SummaryCard
+    val totalCalories: Int? = null,
+    val recordedMeals: List<String>? = null,
+    val summary: String? = null,
+    // WeightCard
+    val date: String? = null,
+    val weightKg: Double? = null,
+    // Edit/Delete Confirm
+    val targetRecordId: String? = null,
+    val targetMealType: String? = null,
+    val targetFoodId: String? = null,
+    val targetFoodName: String? = null,
+    val newQuantity: String? = null,
+    val newEstimatedCalories: Int? = null,
+    val newMealType: String? = null,
+    val operationDescription: String? = null,
+    // ShowConfirmCard
+    val confirmType: String? = null,
+    val mealType: String? = null, // Legacy
+    val items: List<ConfirmCardItemDto>? = null, // Legacy
+    val meals: List<ConfirmCardMealDto>? = null,
+    val buttons: List<AiChoiceOptionDto>? = null,
+    // Local-only DateMismatchGuardCard. This is persisted in Room chat JSON and is not sent as an AI tool.
+    val conversationId: String? = null,
+    val conversationDate: String? = null,
+    val detectedCurrentDate: String? = null,
+    val pendingOriginalCard: AiChatCardDto? = null,
+    val createdAt: Long? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class ConfirmCardMealDto(
+    val mealType: String,
+    val mealLabel: String? = null,
+    val subtotalCalories: Int? = null,
+    val items: List<ConfirmCardItemDto>,
+    val sourceMediaIds: List<String>? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class ConfirmCardItemDto(
+    val id: String? = null,
+    val name: String,
+    val amountText: String? = null,
+    val calories: Int,
+    val calorieConfidence: String,
+    val carbohydratesG: Float? = null,
+    val proteinG: Float? = null,
+    val fatG: Float? = null,
+    val fiberG: Float? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class AiChoiceOptionDto(
+    val id: String,
+    val label: String,
+    val action: String? = null
+)

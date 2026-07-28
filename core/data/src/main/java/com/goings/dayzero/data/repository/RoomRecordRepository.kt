@@ -1,0 +1,213 @@
+package com.goings.dayzero.data.repository
+
+import android.util.Log
+import androidx.room.withTransaction
+import com.goings.dayzero.data.identity.StaticLocalIdentityProvider
+import com.goings.dayzero.data.local.dao.DailyRecordDao
+import com.goings.dayzero.data.local.dao.SyncQueueDao
+import com.goings.dayzero.data.local.database.DayZeroDatabase
+import com.goings.dayzero.data.local.entity.SyncQueueEntity
+import com.goings.dayzero.data.local.mapper.DailyRecordMapper
+import com.goings.dayzero.data.mock.createMockRecords
+import com.goings.dayzero.data.sync.DayZeroSyncConstants
+import com.goings.dayzero.data.sync.SyncPayloadBuilder
+import com.goings.dayzero.domain.identity.AppIdentity
+import com.goings.dayzero.domain.identity.CurrentIdentityProvider
+import com.goings.dayzero.domain.model.DailyRecord
+import com.goings.dayzero.domain.model.MealType
+import com.goings.dayzero.domain.model.RecordStatus
+import com.goings.dayzero.domain.repository.RecordRepository
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onStart
+import java.time.LocalDate
+
+class RoomRecordRepository(
+    private val database: DayZeroDatabase,
+    private val dao: DailyRecordDao,
+    private val syncQueueDao: SyncQueueDao,
+    private val identityProvider: CurrentIdentityProvider = StaticLocalIdentityProvider()
+) : RecordRepository {
+    private val mapper = DailyRecordMapper()
+    private val payloadBuilder = SyncPayloadBuilder()
+
+    companion object {
+        private const val ENABLE_DEMO_SEEDING = false
+    }
+
+    override fun observeRecords(): Flow<List<DailyRecord>> {
+        return dao.observeAllRecords()
+            .onStart {
+                if (ENABLE_DEMO_SEEDING && dao.getRecordCount() == 0) {
+                    createMockRecords().forEach { 
+                        dao.upsertRecord(mapper.toEntity(it))
+                    }
+                }
+            }
+            .map { entities ->
+                entities.map { mapper.toDomain(it) }
+            }
+    }
+
+    override suspend fun upsertRecord(record: DailyRecord) {
+        val identity = identityProvider.currentIdentity()
+        dao.upsertRecord(mapper.toEntity(record, identity.localOwnerId))
+        enqueueRecordUpsert(record, identity)
+    }
+
+    override suspend fun deleteRecordById(recordId: String) {
+        val identity = identityProvider.currentIdentity()
+        val deletedAt = System.currentTimeMillis()
+        dao.deleteRecordById(recordId, deletedAt)
+        enqueueSoftDelete(recordId, identity, deletedAt)
+    }
+
+    override suspend fun getRecordById(recordId: String): DailyRecord? {
+        return dao.getRecordById(recordId)?.let { mapper.toDomain(it) }
+    }
+
+    override suspend fun getRecordByDateAndStatus(date: LocalDate, status: RecordStatus): DailyRecord? {
+        return dao.getRecordByDateAndStatus(date.toString(), status.name)?.let { mapper.toDomain(it) }
+    }
+
+    override suspend fun updateRecordStatus(recordId: String, status: RecordStatus, weightKg: Float?) {
+        val entity = dao.getRecordById(recordId)
+        if (entity != null) {
+            val identity = identityProvider.currentIdentity()
+            val updatedEntity = entity.copy(
+                status = status.name,
+                weightKg = weightKg ?: entity.weightKg,
+                updatedAt = System.currentTimeMillis(),
+                ownerLocalId = identity.localOwnerId
+            )
+            dao.upsertRecord(updatedEntity)
+            enqueueRecordUpsert(mapper.toDomain(updatedEntity), identity)
+        }
+    }
+
+    override suspend fun deleteFoodFromRecord(recordId: String, mealType: MealType, foodId: String) {
+        val entity = dao.getRecordById(recordId)
+        if (entity != null) {
+            val domain = mapper.toDomain(entity)
+            if (domain.status == RecordStatus.Draft) {
+                val updatedMeals = domain.meals.map { meal ->
+                    if (meal.mealType == mealType) {
+                        meal.copy(foods = meal.foods.filter { it.id != foodId })
+                    } else {
+                        meal
+                    }
+                }
+                val updatedDomain = domain.copy(meals = updatedMeals)
+                val identity = identityProvider.currentIdentity()
+                dao.upsertRecord(mapper.toEntity(updatedDomain, identity.localOwnerId))
+                enqueueRecordUpsert(updatedDomain, identity)
+            }
+        }
+    }
+
+    override suspend fun clearAllRecords() {
+        database.withTransaction {
+            dao.deleteAllRecords()
+            // Purge queued business tasks so cleared records are not re-pushed to remote.
+            syncQueueDao.deleteBusinessRecordTasks()
+        }
+    }
+
+    private suspend fun enqueueRecordUpsert(record: DailyRecord, identity: AppIdentity) {
+        val queueDao = syncQueueDao
+        Log.d(DayZeroSyncConstants.LOG_PREFIX, "enqueue start dailyRecord=${record.id} ownerLocalId=${identity.localOwnerId}")
+        try {
+            val now = System.currentTimeMillis()
+            queueDao.insert(
+                SyncQueueEntity(
+                    entityType = "daily_record",
+                    entityLocalId = record.id,
+                    operation = DayZeroSyncConstants.OP_UPSERT_DAILY_RECORD,
+                    payloadJson = payloadBuilder.dailyRecordPayload(record, identity).toString(),
+                    status = DayZeroSyncConstants.STATUS_PENDING,
+                    createdAt = now,
+                    updatedAt = now,
+                    ownerLocalId = identity.localOwnerId
+                )
+            )
+
+            record.meals.forEach { meal ->
+                queueDao.insert(
+                    SyncQueueEntity(
+                        entityType = "meal",
+                        entityLocalId = meal.id,
+                        operation = DayZeroSyncConstants.OP_UPSERT_MEAL,
+                        payloadJson = payloadBuilder.mealPayload(record.id, meal, identity).toString(),
+                        status = DayZeroSyncConstants.STATUS_PENDING,
+                        createdAt = now,
+                        updatedAt = now,
+                        ownerLocalId = identity.localOwnerId
+                    )
+                )
+                meal.foods.forEach { food ->
+                    queueDao.insert(
+                        SyncQueueEntity(
+                            entityType = "food_entry",
+                            entityLocalId = food.id,
+                            operation = DayZeroSyncConstants.OP_UPSERT_FOOD_ENTRY,
+                            payloadJson = payloadBuilder.foodPayload(record.id, meal.id, food, identity).toString(),
+                            status = DayZeroSyncConstants.STATUS_PENDING,
+                            createdAt = now,
+                            updatedAt = now,
+                            ownerLocalId = identity.localOwnerId
+                        )
+                    )
+                }
+            }
+
+            record.weightKg?.let { weightKg ->
+                queueDao.insert(
+                    SyncQueueEntity(
+                        entityType = "weight_record",
+                        entityLocalId = "${record.id}:weight",
+                        operation = DayZeroSyncConstants.OP_UPSERT_WEIGHT_RECORD,
+                        payloadJson = payloadBuilder.weightPayload(record.id, record.date.toString(), weightKg, identity).toString(),
+                        status = DayZeroSyncConstants.STATUS_PENDING,
+                        createdAt = now,
+                        updatedAt = now,
+                        ownerLocalId = identity.localOwnerId
+                    )
+                )
+            }
+            Log.d(DayZeroSyncConstants.LOG_PREFIX, "enqueue success dailyRecord=${record.id}")
+            Log.d(DayZeroSyncConstants.LOG_PREFIX, "pending count ${queueDao.getPendingCount()}")
+            if (!identity.canRemoteSync) {
+                Log.d(DayZeroSyncConstants.LOG_PREFIX, "remote sync skipped: waiting for auth")
+            }
+        } catch (e: Exception) {
+            Log.e(DayZeroSyncConstants.LOG_PREFIX, "enqueue error dailyRecord=${record.id}", e)
+        }
+    }
+
+    private suspend fun enqueueSoftDelete(recordId: String, identity: AppIdentity, deletedAt: Long = System.currentTimeMillis()) {
+        val queueDao = syncQueueDao
+        Log.d(DayZeroSyncConstants.LOG_PREFIX, "enqueue start softDelete=$recordId ownerLocalId=${identity.localOwnerId}")
+        try {
+            val now = System.currentTimeMillis()
+            queueDao.insert(
+                SyncQueueEntity(
+                    entityType = "daily_record",
+                    entityLocalId = recordId,
+                    operation = DayZeroSyncConstants.OP_SOFT_DELETE_RECORD,
+                    payloadJson = payloadBuilder.softDeletePayload(recordId, identity, deletedAt).toString(),
+                    status = DayZeroSyncConstants.STATUS_PENDING,
+                    createdAt = now,
+                    updatedAt = now,
+                    ownerLocalId = identity.localOwnerId
+                )
+            )
+            Log.d(DayZeroSyncConstants.LOG_PREFIX, "enqueue success softDelete=$recordId")
+            Log.d(DayZeroSyncConstants.LOG_PREFIX, "pending count ${queueDao.getPendingCount()}")
+            if (!identity.canRemoteSync) {
+                Log.d(DayZeroSyncConstants.LOG_PREFIX, "remote sync skipped: waiting for auth")
+            }
+        } catch (e: Exception) {
+            Log.e(DayZeroSyncConstants.LOG_PREFIX, "enqueue error softDelete=$recordId", e)
+        }
+    }
+}

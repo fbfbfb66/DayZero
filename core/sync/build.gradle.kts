@@ -3,7 +3,7 @@ plugins {
 }
 
 android {
-  namespace = "com.example.core.sync"
+  namespace = "com.goings.dayzero.core.sync"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {

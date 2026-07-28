@@ -1,0 +1,69 @@
+# Production Compose template for DayZero AI Gateway.
+# Copy to the server, fill in .env, and run `docker compose -f docker-compose.production.yml config`
+# before applying. Do NOT commit real .env or certificates.
+#
+# The old v1 image is intentionally kept in the registry (not overwritten) for rollback.
+
+services:
+  dayzero-ai-gateway:
+    # PRODUCTION: always use an immutable digest reference: repository@sha256:<digest>.
+    # Do not rely on a floating tag for production deploys.
+    image: ${GATEWAY_IMAGE_REPOSITORY}@${GATEWAY_IMAGE_DIGEST}
+    container_name: dayzero-ai-gateway
+    restart: unless-stopped
+    # SECURITY: 8080 is intentionally NOT published to the host/public network.
+    # The gateway is reachable only over the internal `dayzero-net` bridge, so the
+    # sole public entrypoint is the TLS-terminating Nginx reverse proxy.
+    expose:
+      - "8080"
+    networks:
+      - dayzero-net
+    env_file:
+      - ${ENV_FILE:-.env}
+    environment:
+      # APP_ENV=production forces ENABLE_AUTH=true at startup.
+      - APP_ENV=${APP_ENV:-production}
+      - PORT=8080
+      - ENABLE_AUTH=${ENABLE_AUTH:-true}
+    healthcheck:
+      test: ["CMD", "deno", "run", "--allow-net", "--allow-env", "src/healthcheck.ts"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  nginx:
+    image: ${NGINX_IMAGE:-nginx:alpine}
+    container_name: dayzero-ai-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    networks:
+      - dayzero-net
+    volumes:
+      - ./nginx/nginx.production.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      dayzero-ai-gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+networks:
+  dayzero-net:
+    driver: bridge

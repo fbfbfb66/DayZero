@@ -1,0 +1,43 @@
+package com.goings.dayzero.domain.model.ai.assistant
+
+import com.goings.dayzero.domain.model.DailyRecord
+import com.goings.dayzero.domain.model.ai.AiChatMessage
+import java.time.LocalDate
+
+data class AiAssistantRequest(
+    val date: LocalDate,
+    val userText: String,
+    val todayRecord: DailyRecord? = null,
+    val pendingDraft: DailyRecord? = null,
+    val recentMessages: List<AiChatMessage> = emptyList(),
+    val turnType: String = "user_message", // "user_message" or "interaction_result"
+    val interactionResult: InteractionResult? = null,
+    val primaryIntent: String? = null,
+    val speechAct: String? = null,
+    val consumptionStatus: String? = null,
+    val shouldCreateDraft: Boolean? = null,
+    val shouldAskMealTime: Boolean? = null,
+    val extractedFoodText: String? = null,
+    val traceId: String? = null,
+    val attachments: List<PreparedVisionAttachment>? = null
+)
+
+data class InteractionResult(
+    val interactionId: String,
+    val actionType: String,
+    val selectedOptionId: String,
+    val selectedOptionLabel: String,
+    val field: String? = null,
+    val originalText: String? = null,
+    val confirmType: String? = null,
+    val payloadSummary: PayloadSummary? = null,
+    val continuationContext: AssistantContinuationContext? = null
+)
+
+data class PayloadSummary(
+    val originalText: String? = null,
+    val weightKg: Double? = null,
+    val meals: List<ConfirmCardMeal>? = null,
+    val mealType: String? = null,
+    val items: List<ConfirmCardItem>? = null
+)

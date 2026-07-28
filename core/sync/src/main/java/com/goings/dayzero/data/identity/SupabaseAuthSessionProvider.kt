@@ -1,0 +1,19 @@
+package com.goings.dayzero.data.identity
+
+interface SupabaseAuthSessionProvider {
+    suspend fun currentSessionOrNull(): SupabaseAuthSession?
+    suspend fun forceRefreshSession(): SupabaseAuthSession?
+
+    fun currentSessionStatus(): SupabaseAuthSessionStatus = SupabaseAuthSessionStatus.NoStoredSession
+}
+
+sealed class SupabaseAuthSessionStatus {
+    data object NoStoredSession : SupabaseAuthSessionStatus()
+    data class AccessTokenUsable(val userId: String) : SupabaseAuthSessionStatus()
+    data class RefreshSucceeded(val userId: String) : SupabaseAuthSessionStatus()
+    data class RefreshTemporaryFailure(val reason: String) : SupabaseAuthSessionStatus()
+    data class RefreshPermanentlyRejected(val reason: String) : SupabaseAuthSessionStatus()
+    data class AnonymousSignUpSucceeded(val userId: String) : SupabaseAuthSessionStatus()
+    data class PasswordSignInSucceeded(val userId: String) : SupabaseAuthSessionStatus()
+    data class StoredSessionRejected(val reason: String) : SupabaseAuthSessionStatus()
+}

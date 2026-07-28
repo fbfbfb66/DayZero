@@ -15,7 +15,7 @@ Write-Host "This is a safe install that preserves local data (Room, SharedPrefer
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host "Install successful. Launching MainActivity..." -ForegroundColor Green
-    adb shell am start -n com.aistudio.dayzero.djwqop/com.example.MainActivity
+    adb shell am start -n com.goings.dayzero/com.goings.dayzero.MainActivity
 } else {
     Write-Host "Install failed." -ForegroundColor Red
     exit 1

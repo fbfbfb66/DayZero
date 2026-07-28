@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-  namespace = "com.example.core.ui"
+  namespace = "com.goings.dayzero.core.ui"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {
