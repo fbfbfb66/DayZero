@@ -10,6 +10,7 @@ import com.goings.dayzero.data.identity.StaticLocalIdentityProvider
 import com.goings.dayzero.data.remote.api.AiDraftApiService
 import com.goings.dayzero.data.remote.mapper.AiDraftRemoteMapper
 import com.goings.dayzero.data.sync.chat.ChatSyncQueueWriter
+import com.goings.dayzero.data.sync.title.ConversationTitleJobQueueWriter
 import com.goings.dayzero.domain.identity.CurrentIdentityProvider
 import com.goings.dayzero.domain.model.ai.AiChatMessage
 import com.goings.dayzero.domain.model.ai.AiDraftRequest
@@ -39,6 +40,7 @@ class RemoteAiDraftRepository(
     private val chatDao = database.aiChatMessageDao()
     private val conversationDao = database.conversationDao()
     private val chatSyncQueueWriter = syncQueueDao?.let { ChatSyncQueueWriter(it) }
+    private val titleJobQueueWriter = syncQueueDao?.let { ConversationTitleJobQueueWriter(it) }
 
     override suspend fun generateDraft(request: AiDraftRequest): CheckinDraft {
         val requestDto = mapper.toRequestDto(request)
@@ -150,6 +152,13 @@ class RemoteAiDraftRepository(
             chatDao.insertMessage(firstMessageEntity)
             chatSyncQueueWriter?.enqueueConversationUpsert(conversation, identity)
             chatSyncQueueWriter?.enqueueMessageUpsert(firstMessageEntity, identity)
+            titleJobQueueWriter?.enqueue(
+                conversationId = conversationId,
+                firstUserMessageId = firstMessage.id,
+                firstUserText = trimmed,
+                identity = identity,
+                now = now
+            )
         }
         return conversationId
     }

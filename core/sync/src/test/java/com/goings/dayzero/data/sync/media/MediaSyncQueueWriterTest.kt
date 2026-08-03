@@ -80,6 +80,12 @@ class MediaSyncQueueWriterTest {
     ) : com.goings.dayzero.data.local.dao.SyncQueueDao {
         val inserted = mutableListOf<SyncQueueEntity>()
         override suspend fun insert(item: SyncQueueEntity) { inserted.add(item) }
+        override suspend fun insertIgnore(item: SyncQueueEntity): Long {
+            inserted.add(item)
+            return 1L
+        }
+        override suspend fun getStatusById(id: String): String? = null
+        override suspend fun countActiveTasksForOperation(operation: String): Int = 0
         override suspend fun coalescePendingTask(ownerLocalId: String, entityType: String, entityLocalId: String, operation: String, payloadJson: String, updatedAt: Long, reason: String?): Int = coalesceResult
         override suspend fun getRunnableTasks(now: Long, limit: Int): List<SyncQueueEntity> = emptyList()
         override suspend fun getPending(now: Long, limit: Int): List<SyncQueueEntity> = emptyList()

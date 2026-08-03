@@ -22,7 +22,8 @@ data class MealRemoteDto(
     val createdAt: Long,
     val updatedAt: Long,
     val deletedAt: Long?,
-    val schemaVersion: Int
+    val schemaVersion: Int,
+    val mediaIds: List<String> = emptyList()
 )
 
 data class FoodEntryRemoteDto(

@@ -73,7 +73,6 @@ fun createMockRecords(): List<DailyRecord> {
         meals = listOf(
             MealEntry(
                 mealType = MealType.Breakfast,
-                hasPhoto = false,
                 foods = listOf(
                     FoodEntry(name = "肉包子", quantity = "2个", estimatedCalories = 374, confidence = "medium"),
                     FoodEntry(name = "香蕉", quantity = "1根", estimatedCalories = 105, confidence = "high")
@@ -81,7 +80,6 @@ fun createMockRecords(): List<DailyRecord> {
             ),
             MealEntry(
                 mealType = MealType.Lunch,
-                hasPhoto = false,
                 foods = listOf(
                     FoodEntry(name = "猪肉肠粉", quantity = "1碗", estimatedCalories = 450, confidence = "medium")
                 )

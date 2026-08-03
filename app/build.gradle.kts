@@ -58,6 +58,9 @@ android {
 secrets {
   propertiesFileName = ".env"
   defaultPropertiesFileName = ".env.example"
+  // This value is owned by :core:network's BuildConfig. A blank optional
+  // default is not a valid Java literal when auto-exported by this plugin.
+  ignoreList.add("AI_GATEWAY_BASE_URL")
 }
 
 // Some unused dependencies are commented out below instead of being removed.
@@ -107,6 +110,8 @@ dependencies {
   // implementation(libs.play.services.location)
   implementation(libs.retrofit)
   implementation(libs.hilt.android)
+  implementation(libs.androidx.work.runtime.ktx)
+  implementation(libs.androidx.hilt.work)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)
@@ -126,4 +131,5 @@ dependencies {
   "ksp"(libs.androidx.room.compiler)
   "ksp"(libs.moshi.kotlin.codegen)
   "ksp"(libs.hilt.android.compiler)
+  "ksp"(libs.androidx.hilt.compiler)
 }

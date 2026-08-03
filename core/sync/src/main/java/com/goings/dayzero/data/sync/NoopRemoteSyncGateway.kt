@@ -24,6 +24,8 @@ class NoopRemoteSyncGateway : RemoteSyncGateway {
 
     override suspend fun upsertChatMessage(payload: SyncPayload): RemoteSyncResult = noopResult()
 
+    override suspend fun submitConversationTitleJob(payload: SyncPayload): RemoteSyncResult = noopResult()
+
     override suspend fun upsertMediaAsset(payload: SyncPayload): RemoteSyncResult = noopResult()
 
     override suspend fun downloadMediaAsset(payload: SyncPayload): RemoteSyncResult = noopResult()

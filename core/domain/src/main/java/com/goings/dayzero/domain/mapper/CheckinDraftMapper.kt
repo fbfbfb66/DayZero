@@ -24,7 +24,7 @@ class CheckinDraftMapper {
     private fun toMealEntry(draftMeal: DraftMeal): MealEntry {
         return MealEntry(
             mealType = draftMeal.mealType,
-            hasPhoto = draftMeal.photoUri != null,
+            mediaIds = emptyList(),
             foods = draftMeal.foods.map { toFoodEntry(it) }
         )
     }

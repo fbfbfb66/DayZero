@@ -160,7 +160,7 @@ class AiRecordPhase3Test {
 
         composeRule.onNodeWithTag(AiRecordTestTags.HomeInput).assertIsDisplayed()
         composeRule.onNodeWithText("Lunch chat").assertIsDisplayed()
-        composeRule.onNodeWithText("noodles").assertIsDisplayed()
+        composeRule.onAllNodesWithText("noodles").assertCountEquals(0)
         composeRule.onAllNodesWithTag(AiRecordTestTags.EmptyHistory).assertCountEquals(0)
     }
 

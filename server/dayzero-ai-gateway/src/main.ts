@@ -7,6 +7,7 @@ import { handleHealth } from "./handlers/health.ts";
 import { handleReady } from "./handlers/ready.ts";
 import { handleAssistantTurnV2 } from "./handlers/assistant_turn_v2.ts";
 import { handleAssistantTurnV2Stream } from "./handlers/assistant_turn_v2_stream.ts";
+import { handleConversationTitleJob } from "./handlers/conversation_title_jobs.ts";
 import { createErrorResponse, handleUnexpectedError } from "./errors.ts";
 
 const AI_PATHS = new Set([
@@ -14,6 +15,7 @@ const AI_PATHS = new Set([
   "/assistant-turn-v2-stream",
   "/api/ai/assistant-turn-v2",
   "/api/ai/assistant-turn-v2-stream",
+  "/api/ai/conversation-title-jobs",
 ]);
 
 function isStreamingPath(path: string): boolean {
@@ -23,6 +25,10 @@ function isStreamingPath(path: string): boolean {
 
 function isAssistantPostPath(path: string): boolean {
   return AI_PATHS.has(path);
+}
+
+function isConversationTitleJobPath(path: string): boolean {
+  return path === "/api/ai/conversation-title-jobs";
 }
 
 /**
@@ -112,6 +118,15 @@ export async function handler(
     }
 
     try {
+      if (isConversationTitleJobPath(routePath)) {
+        return await handleConversationTitleJob(
+          req,
+          config,
+          logger,
+          requestId,
+          auth.userIdDigest,
+        );
+      }
       if (isStreamingPath(routePath)) {
         return await handleAssistantTurnV2Stream(
           req,

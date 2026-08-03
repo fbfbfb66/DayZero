@@ -40,6 +40,7 @@ android {
     minSdk = 24
     buildConfigField("String", "SUPABASE_URL", quoted(readEnvValue("SUPABASE_URL")))
     buildConfigField("String", "SUPABASE_ANON_KEY", quoted(readEnvValue("SUPABASE_ANON_KEY")))
+    buildConfigField("String", "AI_GATEWAY_BASE_URL", quoted(readEnvValue("AI_GATEWAY_BASE_URL")))
   }
 
   buildTypes {

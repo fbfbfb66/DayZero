@@ -10,6 +10,7 @@ import com.goings.dayzero.domain.model.media.MediaLifecycleState
 import com.goings.dayzero.domain.model.media.NewMediaAssetRequest
 import com.goings.dayzero.domain.repository.MediaRepository
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 
 class RoomMediaRepository(
@@ -32,6 +33,13 @@ class RoomMediaRepository(
         if (ids.isEmpty()) return emptyList()
         require(ids.all { it.isNotBlank() }) { "Media id must not be blank" }
         return mediaDao.getByIds(ids).map(MediaAssetMapper::toDomain)
+    }
+
+    override fun observeMediaByIds(ids: List<String>): Flow<List<MediaAsset>> {
+        if (ids.isEmpty()) return flowOf(emptyList())
+        require(ids.all { it.isNotBlank() }) { "Media id must not be blank" }
+        return mediaDao.observeActiveByIds(ids.distinct())
+            .map { entities -> entities.map(MediaAssetMapper::toDomain) }
     }
 
     override suspend fun createStagedMedia(

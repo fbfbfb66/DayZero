@@ -13,6 +13,7 @@ import com.goings.dayzero.data.local.entity.SyncQueueEntity
 import com.goings.dayzero.data.sync.DayZeroSyncConstants
 import com.goings.dayzero.data.sync.chat.ChatSyncQueueContract
 import com.goings.dayzero.data.sync.chat.ChatSyncQueueWriter
+import com.goings.dayzero.data.sync.title.ConversationTitleSyncContract
 import com.goings.dayzero.domain.identity.AppIdentity
 import com.goings.dayzero.domain.identity.CurrentIdentityProvider
 import com.goings.dayzero.domain.model.ai.AiChatMessage
@@ -105,10 +106,16 @@ class RoomChatMediaTransactionRepositoryTest {
         assertEquals("look at this", conversation!!.lastMessagePreview)
 
         val tasks = database.syncQueueDao().getTasksByStatus(DayZeroSyncConstants.STATUS_PENDING)
-        // conversation + message + 1 media-asset upsert
-        assertEquals(3, tasks.size)
+        // conversation + message + title job + 1 media-asset upsert
+        assertEquals(4, tasks.size)
         assertTrue(tasks.any { it.entityType == ChatSyncQueueContract.ENTITY_CONVERSATION })
         assertTrue(tasks.any { it.entityType == ChatSyncQueueContract.ENTITY_MESSAGE && it.entityLocalId == userMessageId })
+        assertTrue(
+            tasks.any {
+                it.entityType == ConversationTitleSyncContract.ENTITY_TITLE_JOB &&
+                    it.operation == ConversationTitleSyncContract.OP_SUBMIT_TITLE_JOB
+            }
+        )
         assertTrue(
             tasks.any {
                 it.entityType == com.goings.dayzero.data.sync.media.MediaSyncQueueContract.ENTITY_MEDIA_ASSET &&
@@ -187,8 +194,8 @@ class RoomChatMediaTransactionRepositoryTest {
         val messages = database.aiChatMessageDao().getMessagesByConversationId(conversationId)
         assertEquals(2, messages.size)
         val tasks = database.syncQueueDao().getTasksByStatus(DayZeroSyncConstants.STATUS_PENDING)
-        // conversation + message + 2 media-asset upserts (duplicate request does not re-enqueue)
-        assertEquals(4, tasks.size)
+        // conversation + message + title job + 2 media-asset upserts (duplicate request does not re-enqueue)
+        assertEquals(5, tasks.size)
     }
 
     @Test
@@ -962,6 +969,9 @@ class RoomChatMediaTransactionRepositoryTest {
         override suspend fun getByIds(ids: List<String>): List<MediaAssetEntity> =
             delegate.getByIds(ids)
 
+        override fun observeActiveByIds(ids: List<String>): kotlinx.coroutines.flow.Flow<List<MediaAssetEntity>> =
+            delegate.observeActiveByIds(ids)
+
         override suspend fun getActiveByConversation(conversationId: String): List<MediaAssetEntity> =
             delegate.getActiveByConversation(conversationId)
 
@@ -1062,6 +1072,12 @@ class RoomChatMediaTransactionRepositoryTest {
                 throw RuntimeException("Injected queue failure for $failForEntityType")
             }
         }
+        override suspend fun insertIgnore(item: SyncQueueEntity): Long {
+            insert(item)
+            return 1L
+        }
+        override suspend fun getStatusById(id: String): String? = null
+        override suspend fun countActiveTasksForOperation(operation: String): Int = 0
 
         override suspend fun coalescePendingTask(
             ownerLocalId: String,

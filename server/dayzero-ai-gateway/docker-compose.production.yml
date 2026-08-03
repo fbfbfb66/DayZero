@@ -37,6 +37,30 @@ services:
         max-size: "50m"
         max-file: "5"
 
+  dayzero-title-worker:
+    image: ${GATEWAY_IMAGE_REPOSITORY}@${GATEWAY_IMAGE_DIGEST}
+    container_name: dayzero-title-worker
+    restart: unless-stopped
+    command:
+      - deno
+      - run
+      - --frozen
+      - --allow-net
+      - --allow-env
+      - --allow-read
+      - src/title_worker.ts
+    networks:
+      - dayzero-net
+    # The worker-only file contains SUPABASE_SERVICE_ROLE_KEY. It must never be
+    # reused by dayzero-ai-gateway.
+    env_file:
+      - ${WORKER_ENV_FILE:-.env.worker}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "25m"
+        max-file: "5"
+
   nginx:
     image: ${NGINX_IMAGE:-nginx:alpine}
     container_name: dayzero-ai-nginx

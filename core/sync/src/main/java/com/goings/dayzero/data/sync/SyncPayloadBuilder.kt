@@ -5,6 +5,7 @@ import com.goings.dayzero.domain.model.DailyRecord
 import com.goings.dayzero.domain.model.FoodEntry
 import com.goings.dayzero.domain.model.MealEntry
 import org.json.JSONObject
+import org.json.JSONArray
 
 class SyncPayloadBuilder {
     fun dailyRecordPayload(record: DailyRecord, identity: AppIdentity): JSONObject {
@@ -28,9 +29,9 @@ class SyncPayloadBuilder {
             .put("ownerLocalId", identity.localOwnerId)
             .put("dailyRecordClientId", recordId)
             .put("mealType", meal.mealType.name)
-            .put("hasPhoto", meal.hasPhoto)
+            .put("mediaIds", JSONArray(meal.mediaIds))
             .put("subtotalCalories", meal.mealCalories)
-            .put("schemaVersion", 1)
+            .put("schemaVersion", 2)
     }
 
     fun foodPayload(recordId: String, mealId: String, food: FoodEntry, identity: AppIdentity): JSONObject {

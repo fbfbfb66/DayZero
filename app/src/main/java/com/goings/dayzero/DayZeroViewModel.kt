@@ -43,6 +43,7 @@ import com.goings.dayzero.domain.usecase.ClearLocalDataAction
 import com.goings.dayzero.domain.usecase.ClearLocalDataUseCase
 import com.goings.dayzero.domain.usecase.ConfirmFoodCardUseCase
 import com.goings.dayzero.domain.usecase.CreateConversationWithFirstMessageUseCase
+import com.goings.dayzero.domain.usecase.ObserveMediaByIdsUseCase
 import com.goings.dayzero.ui.sync.SyncStatusUiState
 import com.goings.dayzero.ui.sync.SyncStatusUiStateMapper
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -52,6 +53,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
@@ -83,6 +87,7 @@ class DayZeroViewModel @Inject constructor(
     private val syncScheduler: SyncScheduler,
     private val visionAssistantTurnOrchestrator: VisionAssistantTurnOrchestrator,
     private val networkAvailabilityProvider: NetworkAvailabilityProvider,
+    private val observeMediaByIdsUseCase: ObserveMediaByIdsUseCase = ObserveMediaByIdsUseCase(),
     private val syncStatusRepository: SyncStatusRepository? = null,
     private val cloudBackupCleaner: SupabaseCloudBackupCleaner? = null
 ) : ViewModel() {
@@ -106,6 +111,7 @@ class DayZeroViewModel @Inject constructor(
 
     init {
         observeRecords()
+        observeRecordMedia()
         observeChatMessages()
         refreshSyncHealth("app_start")
         triggerInitialBackfill("app_start", delayMs = 1_500L)
@@ -139,6 +145,24 @@ class DayZeroViewModel @Inject constructor(
             recordRepository.observeRecords().collect { records ->
                 _uiState.update { it.copy(records = records) }
             }
+        }
+    }
+
+    private fun observeRecordMedia() {
+        viewModelScope.launch {
+            uiState
+                .map { state ->
+                    state.records.asSequence()
+                        .filter { it.status == RecordStatus.Confirmed }
+                        .flatMap { it.meals.asSequence() }
+                        .flatMap { it.mediaIds.asSequence() }
+                        .filter { it.isNotBlank() }
+                        .distinct()
+                        .toList()
+                }
+                .distinctUntilChanged()
+                .flatMapLatest { ids -> observeMediaByIdsUseCase(ids) }
+                .collect { assets -> _uiState.update { it.copy(recordMediaById = assets.associateBy { asset -> asset.id }) } }
         }
     }
 

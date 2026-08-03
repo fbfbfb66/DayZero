@@ -8,6 +8,7 @@ import com.goings.dayzero.data.local.entity.SyncQueueEntity
 import com.goings.dayzero.data.sync.chat.ChatSyncQueueContract
 import com.goings.dayzero.data.sync.chat.ChatSyncQueueWriter
 import com.goings.dayzero.data.sync.media.MediaSyncQueueContract
+import com.goings.dayzero.data.sync.title.ConversationTitleSyncContract
 import com.goings.dayzero.domain.identity.CurrentIdentityProvider
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -131,6 +132,8 @@ class LocalFirstSyncCoordinator(
             DayZeroSyncConstants.OP_SOFT_DELETE_RECORD -> remoteSyncGateway.softDeleteRecord(payload)
             ChatSyncQueueContract.OP_UPSERT_CONVERSATION -> remoteSyncGateway.upsertChatConversation(payload)
             ChatSyncQueueContract.OP_UPSERT_MESSAGE -> remoteSyncGateway.upsertChatMessage(payload)
+            ConversationTitleSyncContract.OP_SUBMIT_TITLE_JOB ->
+                remoteSyncGateway.submitConversationTitleJob(payload)
             MediaSyncQueueContract.OP_UPSERT_MEDIA_ASSET -> remoteSyncGateway.upsertMediaAsset(payload)
             MediaSyncQueueContract.OP_SOFT_DELETE_MEDIA_ASSET -> remoteSyncGateway.upsertMediaAsset(payload)
             MediaSyncQueueContract.OP_DOWNLOAD_MEDIA_ASSET -> remoteSyncGateway.downloadMediaAsset(payload)

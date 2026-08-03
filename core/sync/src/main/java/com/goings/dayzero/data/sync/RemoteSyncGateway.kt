@@ -12,6 +12,8 @@ interface RemoteSyncGateway {
     suspend fun softDeleteRecord(payload: SyncPayload): RemoteSyncResult
     suspend fun upsertChatConversation(payload: SyncPayload): RemoteSyncResult
     suspend fun upsertChatMessage(payload: SyncPayload): RemoteSyncResult
+    suspend fun submitConversationTitleJob(payload: SyncPayload): RemoteSyncResult =
+        RemoteSyncResult.Skipped("title_jobs_unsupported")
 
     /** Uploads master/thumbnail bytes to Storage then upserts the media_assets metadata row. */
     suspend fun upsertMediaAsset(payload: SyncPayload): RemoteSyncResult

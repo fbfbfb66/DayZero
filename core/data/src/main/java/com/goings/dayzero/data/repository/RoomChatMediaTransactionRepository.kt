@@ -10,6 +10,7 @@ import com.goings.dayzero.data.local.entity.AiChatMessageEntity
 import com.goings.dayzero.data.local.mapper.AiChatMessageMapper
 import com.goings.dayzero.data.sync.chat.ChatSyncQueueWriter
 import com.goings.dayzero.data.sync.media.MediaSyncQueueWriter
+import com.goings.dayzero.data.sync.title.ConversationTitleJobQueueWriter
 import com.goings.dayzero.domain.identity.CurrentIdentityProvider
 import com.goings.dayzero.domain.model.ai.AiChatMessage
 import com.goings.dayzero.domain.model.ai.ChatMessageType
@@ -19,6 +20,7 @@ import com.goings.dayzero.domain.model.ai.SendUserMessageWithMediaResult
 import com.goings.dayzero.domain.model.ai.assistant.assistantPlaceholderId
 import com.goings.dayzero.domain.model.media.MediaLifecycleState
 import com.goings.dayzero.domain.repository.ChatMediaTransactionRepository
+import com.goings.dayzero.domain.sync.ConversationTitleDeliveryScheduler
 import kotlinx.coroutines.CancellationException
 import java.nio.charset.StandardCharsets
 import java.util.UUID
@@ -28,7 +30,9 @@ class RoomChatMediaTransactionRepository(
     private val identityProvider: CurrentIdentityProvider,
     private val chatSyncQueueWriter: ChatSyncQueueWriter,
     private val mediaSyncQueueWriter: MediaSyncQueueWriter = MediaSyncQueueWriter(database.syncQueueDao()),
-    private val mediaAssetDao: MediaAssetDao = database.mediaAssetDao()
+    private val mediaAssetDao: MediaAssetDao = database.mediaAssetDao(),
+    private val titleDeliveryScheduler: ConversationTitleDeliveryScheduler =
+        ConversationTitleDeliveryScheduler.Noop
 ) : ChatMediaTransactionRepository {
 
     private val chatDao: AiChatMessageDao = database.aiChatMessageDao()
@@ -43,7 +47,7 @@ class RoomChatMediaTransactionRepository(
         // BEFORE opening the Room write transaction so network latency never blocks
         // while holding the DB write lock.
         val identity = identityProvider.currentIdentity()
-        return try {
+        val result = try {
             database.withTransaction {
                 executeTransaction(request, identity)
             }
@@ -59,6 +63,10 @@ class RoomChatMediaTransactionRepository(
         } catch (e: Exception) {
             SendUserMessageWithMediaResult.Failed(e)
         }
+        if (result is SendUserMessageWithMediaResult.Committed) {
+            titleDeliveryScheduler.schedule(request.conversationId)
+        }
+        return result
     }
 
     private suspend fun executeTransaction(
@@ -111,6 +119,7 @@ class RoomChatMediaTransactionRepository(
             abort(SendUserMessageWithMediaResult.MediaAlreadyAttached(alreadyAttachedIds))
         }
 
+        val isFirstUserMessage = chatDao.countActiveUserMessages(request.conversationId) == 0
         val userMessageEntity = buildUserMessageEntity(request)
         chatDao.insertMessageStrict(userMessageEntity)
 
@@ -146,9 +155,14 @@ class RoomChatMediaTransactionRepository(
         chatDao.insertMessageStrict(placeholderEntity)
 
         val preview = buildPreview(request)
+        val fallbackTitle = if (isFirstUserMessage && request.text.isBlank()) {
+            IMAGE_ONLY_FALLBACK_TITLE
+        } else {
+            conversation.title.ifBlank { preview }
+        }
         conversationDao.updateConversationSummary(
             id = request.conversationId,
-            title = conversation.title.ifBlank { preview },
+            title = fallbackTitle,
             lastMessagePreview = preview,
             lastActivityAt = request.createdAt,
             updatedAt = request.createdAt
@@ -158,6 +172,15 @@ class RoomChatMediaTransactionRepository(
             ?: abort(SendUserMessageWithMediaResult.InvalidConversation("Conversation disappeared during transaction"))
         chatSyncQueueWriter.enqueueConversationUpsert(refreshedConversation, identity)
         chatSyncQueueWriter.enqueueMessageUpsert(userMessageEntity, identity)
+        if (isFirstUserMessage && request.text.isNotBlank()) {
+            ConversationTitleJobQueueWriter(database.syncQueueDao()).enqueue(
+                conversationId = request.conversationId,
+                firstUserMessageId = request.userMessageId,
+                firstUserText = request.text,
+                identity = identity,
+                now = request.createdAt
+            )
+        }
 
         // Enqueue media upload for each freshly-bound asset. Reload post-attach so the
         // payload reflects the committed sourceMessageId. Only newly-attached READY assets
@@ -321,6 +344,7 @@ class RoomChatMediaTransactionRepository(
         private const val MAX_MEDIA_COUNT = 6
         private const val PREVIEW_MAX_LENGTH = 32
         private const val PLACEHOLDER_CREATED_AT_OFFSET_MS = 1L
+        private const val IMAGE_ONLY_FALLBACK_TITLE = "图片饮食记录"
 
         fun assistantPlaceholderId(userMessageId: String): String =
             com.goings.dayzero.domain.model.ai.assistant.assistantPlaceholderId(userMessageId)

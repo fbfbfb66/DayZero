@@ -23,6 +23,9 @@ interface AiChatMessageDao {
     @Query("SELECT * FROM ai_chat_messages WHERE conversationId = :conversationId AND deletedAt IS NULL ORDER BY createdAt DESC, id DESC LIMIT :limit")
     suspend fun getRecentMessagesByConversationId(conversationId: String, limit: Int): List<AiChatMessageEntity>
 
+    @Query("SELECT COUNT(*) FROM ai_chat_messages WHERE conversationId = :conversationId AND role = 'User' AND deletedAt IS NULL")
+    suspend fun countActiveUserMessages(conversationId: String): Int
+
     @Query("SELECT * FROM ai_chat_messages WHERE id = :id AND deletedAt IS NULL LIMIT 1")
     suspend fun getMessageById(id: String): AiChatMessageEntity?
 

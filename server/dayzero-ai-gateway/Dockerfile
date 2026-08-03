@@ -21,7 +21,7 @@ COPY deno.json deno.lock ./
 COPY src ./src
 # --frozen fails the build if resolution would change deno.lock, guaranteeing the pinned,
 # integrity-verified dependency set is what ships in the image.
-RUN deno cache --frozen src/main.ts && deno check src/main.ts
+RUN deno cache --frozen src/main.ts src/title_worker.ts && deno check src/main.ts src/title_worker.ts
 
 USER dayzero
 

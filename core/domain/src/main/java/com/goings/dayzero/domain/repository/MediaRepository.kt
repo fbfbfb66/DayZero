@@ -3,6 +3,7 @@ package com.goings.dayzero.domain.repository
 import com.goings.dayzero.domain.model.media.MediaAsset
 import com.goings.dayzero.domain.model.media.NewMediaAssetRequest
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
 
 interface MediaRepository {
     fun observeConversationMedia(conversationId: String): Flow<List<MediaAsset>>
@@ -10,6 +11,9 @@ interface MediaRepository {
     suspend fun getConversationMedia(conversationId: String): List<MediaAsset>
 
     suspend fun getMediaByIds(ids: List<String>): List<MediaAsset>
+
+    /** Default keeps legacy test doubles source-compatible; production repositories override reactively. */
+    fun observeMediaByIds(ids: List<String>): Flow<List<MediaAsset>> = flowOf(emptyList())
 
     suspend fun createStagedMedia(
         requests: List<NewMediaAssetRequest>,

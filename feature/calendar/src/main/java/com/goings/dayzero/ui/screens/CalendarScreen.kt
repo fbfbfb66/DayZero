@@ -31,7 +31,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material3.Button
 import androidx.compose.material3.Surface
@@ -51,6 +50,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.clip
@@ -59,6 +59,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.semantics.invisibleToUser
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import com.goings.dayzero.domain.model.AppState
@@ -74,14 +76,19 @@ import com.goings.dayzero.ui.theme.BorderNormal
 import com.goings.dayzero.ui.theme.TextPrimary
 import com.goings.dayzero.ui.theme.TextSecondary
 import com.goings.dayzero.ui.theme.WarmBackground
+import com.goings.dayzero.ui.components.PinnedPhotoStrip
+import com.goings.dayzero.ui.components.PhotoViewerItem
+import com.goings.dayzero.ui.components.PhotoViewerOverlay
+import com.goings.dayzero.ui.components.toPhotoViewerItems
 import java.time.LocalDate
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
 fun CalendarScreen(uiState: AppState, onNavigateToAi: () -> Unit) {
     var selectedDate by remember { mutableStateOf(uiState.currentDate) }
+    var viewer by remember { mutableStateOf<CalendarViewerState?>(null) }
 
     val yearMonth = remember(selectedDate) { YearMonth.from(selectedDate) }
     val daysInMonth = yearMonth.lengthOfMonth()
@@ -91,7 +98,9 @@ fun CalendarScreen(uiState: AppState, onNavigateToAi: () -> Unit) {
     val confirmedRecords = uiState.records.filter { it.status == RecordStatus.Confirmed }
     val recordForSelectedDate = confirmedRecords.find { it.date == selectedDate }
 
+    Box(modifier = Modifier.fillMaxSize()) {
     Scaffold(
+        modifier = if (viewer == null) Modifier else Modifier.semantics { invisibleToUser() },
         topBar = {
             TopAppBar(
                 title = { 
@@ -340,7 +349,11 @@ fun CalendarScreen(uiState: AppState, onNavigateToAi: () -> Unit) {
                             Spacer(modifier = Modifier.height(16.dp))
                             
                             targetRecord.meals.forEach { meal ->
-                                ExpandableMealItem(meal)
+                                ExpandableMealItem(
+                                    meal = meal,
+                                    mediaById = uiState.recordMediaById,
+                                    onPhotoClick = { items, index -> viewer = CalendarViewerState(items, index) }
+                                )
                             }
                             
                             if (targetRecord.aiSummary.isNotEmpty()) {
@@ -363,30 +376,38 @@ fun CalendarScreen(uiState: AppState, onNavigateToAi: () -> Unit) {
             }
         }
     }
+    viewer?.let { activeViewer ->
+        PhotoViewerOverlay(
+            items = activeViewer.items,
+            initialIndex = activeViewer.initialIndex,
+            onDismiss = { viewer = null },
+            modifier = Modifier.fillMaxSize()
+        )
+    }
+    }
 }
 
 @Composable
-fun ExpandableMealItem(meal: MealEntry) {
+fun ExpandableMealItem(
+    meal: MealEntry,
+    mediaById: Map<String, com.goings.dayzero.domain.model.media.MediaAsset>,
+    onPhotoClick: (List<PhotoViewerItem>, Int) -> Unit
+) {
     var expanded by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .animateContentSize()
-            .clickable { expanded = !expanded }
             .padding(vertical = 4.dp)
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded }.padding(vertical = 4.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(meal.mealType.displayName, color = TextPrimary, fontWeight = FontWeight.Medium)
-                if (meal.hasPhoto) {
-                    Spacer(modifier = Modifier.size(4.dp))
-                    Icon(Icons.Default.Image, contentDescription = "有照片", modifier = Modifier.size(16.dp), tint = BorderNormal)
-                }
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("${meal.mealCalories} kcal", color = TextSecondary)
@@ -421,6 +442,15 @@ fun ExpandableMealItem(meal: MealEntry) {
                 }
             }
         }
+        val photoItems = meal.mediaIds.toPhotoViewerItems(mediaById)
+        if (photoItems.isNotEmpty()) {
+            PinnedPhotoStrip(
+                items = photoItems,
+                onPhotoClick = { index -> onPhotoClick(photoItems, index) },
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                onEditClick = null
+            )
+        }
     }
 }
 
@@ -428,3 +458,5 @@ private data class SummaryState(
     val date: LocalDate,
     val record: DailyRecord?
 )
+
+private data class CalendarViewerState(val items: List<PhotoViewerItem>, val initialIndex: Int)

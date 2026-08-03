@@ -25,6 +25,7 @@ import java.net.URLEncoder
 import java.time.Instant
 import java.time.LocalDate
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 
 class SupabaseRemoteSyncGateway(
     private val okHttpClient: OkHttpClient,
@@ -34,9 +35,13 @@ class SupabaseRemoteSyncGateway(
     private val isConfigured: Boolean = SupabaseConfig.isConfigured(),
     private val mediaBinaryStore: MediaBinaryStore? = null,
     private val mediaAssetDao: MediaAssetDao? = null,
-    private val storageBucket: String = "media-assets"
+    private val storageBucket: String = "media-assets",
+    private val aiGatewayBaseUrl: String = SupabaseConfig.AI_GATEWAY_BASE_URL
 ) : RemoteSyncGateway {
     private val chatMapper = RemoteChatSyncMapper()
+    private val titleJobHttpClient = okHttpClient.newBuilder()
+        .callTimeout(10, TimeUnit.SECONDS)
+        .build()
 
     override suspend fun canSync(identity: AppIdentity): Boolean {
         return isConfigured && identity.canRemoteSync && !identity.remoteUserId.isNullOrBlank()
@@ -98,6 +103,68 @@ class SupabaseRemoteSyncGateway(
             clientId = payload.clientId(),
             body = body
         )
+    }
+
+    override suspend fun submitConversationTitleJob(payload: SyncPayload): RemoteSyncResult =
+        withContext(Dispatchers.IO) {
+            if (aiGatewayBaseUrl.isBlank()) {
+                return@withContext RemoteSyncResult.Skipped("title_gateway_not_configured")
+            }
+            val body = runCatching {
+                JSONObject()
+                    .put("requestId", payload.body.getString("requestId"))
+                    .put("conversationId", payload.body.getString("conversationId"))
+                    .put("firstUserMessageId", payload.body.getString("firstUserMessageId"))
+                    .put("firstUserText", payload.body.getString("firstUserText"))
+                    .toString()
+            }.getOrElse {
+                return@withContext RemoteSyncResult.FatalFailure("title_job_payload_invalid")
+            }
+
+            var session = sessionProvider.currentSessionOrNull()
+                ?: return@withContext sessionUnavailableSyncResult()
+            var response: okhttp3.Response? = null
+            try {
+                response = titleJobHttpClient.newCall(titleJobRequest(body, session)).execute()
+                if (response.code == 401) {
+                    response.close()
+                    session = sessionProvider.forceRefreshSession()
+                        ?: return@withContext sessionUnavailableSyncResult()
+                    response = titleJobHttpClient.newCall(titleJobRequest(body, session)).execute()
+                }
+                when {
+                    response.code == 202 -> {
+                        Log.d("DayZeroTitleDelivery", "title job accepted")
+                        RemoteSyncResult.Success
+                    }
+                    response.code in RETRYABLE_STATUS_CODES ->
+                        RemoteSyncResult.RetryableFailure("title_job_http_${response.code}")
+                    response.code in FATAL_STATUS_CODES || response.code == 413 ->
+                        RemoteSyncResult.FatalFailure("title_job_http_${response.code}")
+                    else -> RemoteSyncResult.RetryableFailure("title_job_http_${response.code}")
+                }
+            } catch (error: Exception) {
+                RemoteSyncResult.RetryableFailure(
+                    "title_job_transport_${error::class.java.simpleName}"
+                )
+            } finally {
+                response?.close()
+            }
+        }
+
+    private fun titleJobRequest(body: String, session: SupabaseAuthSession): Request {
+        val base = if (aiGatewayBaseUrl.endsWith("/")) aiGatewayBaseUrl else "$aiGatewayBaseUrl/"
+        return Request.Builder()
+            .url("${base}api/ai/conversation-title-jobs")
+            .header("Authorization", "Bearer ${session.accessToken}")
+            .header("Content-Type", "application/json")
+            .header(
+                "X-Request-Id",
+                runCatching { JSONObject(body).getString("requestId") }
+                    .getOrDefault("conversation-title")
+            )
+            .post(body.toRequestBody(JSON_MEDIA_TYPE))
+            .build()
     }
 
     override suspend fun upsertMediaAsset(payload: SyncPayload): RemoteSyncResult {
@@ -418,6 +485,7 @@ class SupabaseRemoteSyncGateway(
             .putNullable("meal_type", payload.body.optNullableString("mealType"))
             .putNullable("logged_at", payload.body.optNullableString("loggedAt"))
             .putNullable("display_order", payload.body.optNullableNumber("displayOrder"))
+            .put("media_ids", payload.body.optJSONArray("mediaIds") ?: org.json.JSONArray())
     }
 
     private fun foodEntryBody(payload: SyncPayload): JSONObject {

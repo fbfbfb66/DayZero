@@ -31,6 +31,7 @@ import com.goings.dayzero.ui.components.ai.AskRecordIntentCard
 import com.goings.dayzero.ui.components.ai.DebugChoiceCard
 import com.goings.dayzero.ui.components.ai.FoodDraftConfirmCard
 import com.goings.dayzero.ui.components.PhotoViewerItem
+import com.goings.dayzero.ui.components.toPhotoViewerItems
 import com.goings.dayzero.domain.model.media.MediaAsset
 import com.goings.dayzero.ui.theme.BrandGreen
 import com.goings.dayzero.ui.theme.CardBackground
@@ -192,18 +193,6 @@ private fun DateMismatchGuardCard(
     }
 }
 
-internal fun List<String>?.toPhotoViewerItems(mediaById: Map<String, MediaAsset>): List<PhotoViewerItem> =
-    this?.mapIndexed { index, id ->
-        val asset = mediaById[id]
-        PhotoViewerItem(
-            mediaId = id,
-            masterRelativePath = asset?.masterRelativePath,
-            thumbnailRelativePath = asset?.thumbnailRelativePath,
-            width = asset?.width,
-            height = asset?.height,
-            accessibilityLabel = if (asset == null) "图片未找到 ${index + 1}，共 ${size} 张" else "图片 ${index + 1}，共 ${size} 张"
-        )
-    }.orEmpty()
 
 @Composable
 private fun DateMismatchPendingCard(

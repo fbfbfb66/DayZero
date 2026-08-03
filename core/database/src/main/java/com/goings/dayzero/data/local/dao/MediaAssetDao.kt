@@ -40,6 +40,9 @@ interface MediaAssetDao {
     @Query("SELECT * FROM media_assets WHERE id IN (:ids)")
     suspend fun getByIds(ids: List<String>): List<MediaAssetEntity>
 
+    @Query("SELECT * FROM media_assets WHERE id IN (:ids) AND deletedAt IS NULL")
+    fun observeActiveByIds(ids: List<String>): Flow<List<MediaAssetEntity>>
+
     @Query(
         """
         UPDATE media_assets

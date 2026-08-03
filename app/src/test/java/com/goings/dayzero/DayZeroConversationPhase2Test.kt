@@ -19,6 +19,7 @@ import com.goings.dayzero.data.sync.chat.ChatBackfillCoordinator
 import com.goings.dayzero.data.sync.chat.ChatBackfillStateStore
 import com.goings.dayzero.data.sync.chat.ChatSyncQueueContract
 import com.goings.dayzero.data.sync.chat.ChatSyncQueueWriter
+import com.goings.dayzero.data.sync.title.ConversationTitleSyncContract
 import com.goings.dayzero.data.telemetry.AiLatencyTraceLogger
 import com.goings.dayzero.domain.identity.AppIdentity
 import com.goings.dayzero.domain.identity.CurrentIdentityProvider
@@ -133,7 +134,7 @@ class DayZeroConversationPhase2Test {
         val conversationId = syncingRepository.createConversationWithFirstMessage("sync lunch", now)!!
 
         val tasks = database.syncQueueDao().getTasksByStatus(DayZeroSyncConstants.STATUS_PENDING)
-        assertEquals(2, tasks.size)
+        assertEquals(3, tasks.size)
         assertTrue(tasks.any {
             it.entityType == ChatSyncQueueContract.ENTITY_CONVERSATION &&
                 it.entityLocalId == conversationId &&
@@ -142,6 +143,11 @@ class DayZeroConversationPhase2Test {
         assertTrue(tasks.any {
             it.entityType == ChatSyncQueueContract.ENTITY_MESSAGE &&
                 it.operation == ChatSyncQueueContract.OP_UPSERT_MESSAGE
+        })
+        assertTrue(tasks.any {
+            it.entityType == ConversationTitleSyncContract.ENTITY_TITLE_JOB &&
+                it.entityLocalId == conversationId &&
+                it.operation == ConversationTitleSyncContract.OP_SUBMIT_TITLE_JOB
         })
     }
 

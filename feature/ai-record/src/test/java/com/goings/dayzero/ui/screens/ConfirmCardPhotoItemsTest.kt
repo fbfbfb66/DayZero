@@ -3,6 +3,7 @@ package com.goings.dayzero.ui.screens
 import com.goings.dayzero.domain.model.media.MediaAsset
 import com.goings.dayzero.domain.model.media.MediaLifecycleState
 import com.goings.dayzero.domain.model.media.MediaSource
+import com.goings.dayzero.ui.components.toPhotoViewerItems
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test

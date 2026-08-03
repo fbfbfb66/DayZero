@@ -19,6 +19,8 @@ const ALLOWED_LOG_FIELDS = new Set([
   "winnerAttemptIndex",
   "cancelledAttemptCount",
   "status",
+  "attemptCount",
+  "titleLength",
   "httpStatus",
   "errorCode",
   "retryable",

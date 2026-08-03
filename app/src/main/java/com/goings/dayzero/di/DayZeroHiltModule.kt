@@ -66,7 +66,10 @@ import com.goings.dayzero.domain.usecase.ConfirmFoodCardUseCase
 import com.goings.dayzero.domain.usecase.ConfirmFoodRecordUseCase
 import com.goings.dayzero.domain.usecase.CreateStagedMediaAssetsUseCase
 import com.goings.dayzero.domain.usecase.CreateConversationWithFirstMessageUseCase
+import com.goings.dayzero.domain.sync.ConversationTitleDeliveryScheduler
+import com.goings.dayzero.sync.WorkManagerConversationTitleDeliveryScheduler
 import com.goings.dayzero.domain.usecase.ObserveConversationMediaUseCase
+import com.goings.dayzero.domain.usecase.ObserveMediaByIdsUseCase
 import com.goings.dayzero.domain.usecase.ImportLocalMediaUseCase
 import com.goings.dayzero.domain.usecase.RetryLocalMediaImportUseCase
 import com.goings.dayzero.domain.usecase.DiscardStagedMediaUseCase
@@ -448,6 +451,10 @@ object DayZeroHiltModule {
     }
 
     @Provides
+    fun provideObserveMediaByIdsUseCase(mediaRepository: MediaRepository): ObserveMediaByIdsUseCase =
+        ObserveMediaByIdsUseCase(mediaRepository)
+
+    @Provides
     fun provideCreateStagedMediaAssetsUseCase(
         mediaRepository: MediaRepository
     ): CreateStagedMediaAssetsUseCase {
@@ -595,10 +602,20 @@ object DayZeroHiltModule {
 
     @Provides
     fun provideCreateConversationWithFirstMessageUseCase(
-        aiDraftRepository: AiDraftRepository
+        aiDraftRepository: AiDraftRepository,
+        titleDeliveryScheduler: ConversationTitleDeliveryScheduler
     ): CreateConversationWithFirstMessageUseCase {
-        return CreateConversationWithFirstMessageUseCase(aiDraftRepository = aiDraftRepository)
+        return CreateConversationWithFirstMessageUseCase(
+            aiDraftRepository = aiDraftRepository,
+            titleDeliveryScheduler = titleDeliveryScheduler
+        )
     }
+
+    @Provides
+    @Singleton
+    fun provideConversationTitleDeliveryScheduler(
+        scheduler: WorkManagerConversationTitleDeliveryScheduler
+    ): ConversationTitleDeliveryScheduler = scheduler
 
     @Provides
     @Singleton
@@ -644,13 +661,15 @@ object DayZeroHiltModule {
         database: DayZeroDatabase,
         identityProvider: CurrentIdentityProvider,
         chatSyncQueueWriter: ChatSyncQueueWriter,
-        mediaSyncQueueWriter: com.goings.dayzero.data.sync.media.MediaSyncQueueWriter
+        mediaSyncQueueWriter: com.goings.dayzero.data.sync.media.MediaSyncQueueWriter,
+        titleDeliveryScheduler: ConversationTitleDeliveryScheduler
     ): ChatMediaTransactionRepository {
         return RoomChatMediaTransactionRepository(
             database = database,
             identityProvider = identityProvider,
             chatSyncQueueWriter = chatSyncQueueWriter,
-            mediaSyncQueueWriter = mediaSyncQueueWriter
+            mediaSyncQueueWriter = mediaSyncQueueWriter,
+            titleDeliveryScheduler = titleDeliveryScheduler
         )
     }
 

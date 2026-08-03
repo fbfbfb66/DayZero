@@ -35,11 +35,15 @@ object ConfirmFoodRecordMerger {
             }
 
             val existingMealIndex = updatedMeals.indexOfFirst { it.mealType == mealType }
+            val incomingMediaIds = cardMeal.sourceMediaIds.orEmpty().stableDistinctNonBlank()
             if (existingMealIndex != -1) {
                 val existingMeal = updatedMeals[existingMealIndex]
-                updatedMeals[existingMealIndex] = existingMeal.copy(foods = existingMeal.foods + newFoods)
+                updatedMeals[existingMealIndex] = existingMeal.copy(
+                    foods = existingMeal.foods + newFoods,
+                    mediaIds = (existingMeal.mediaIds + incomingMediaIds).stableDistinctNonBlank()
+                )
             } else {
-                updatedMeals.add(MealEntry(mealType = mealType, foods = newFoods))
+                updatedMeals.add(MealEntry(mealType = mealType, mediaIds = incomingMediaIds, foods = newFoods))
             }
         }
 
@@ -76,5 +80,11 @@ object ConfirmFoodRecordMerger {
             "snack", "加餐" -> MealType.Snack
             else -> MealType.Snack
         }
+    }
+
+    private fun List<String>.stableDistinctNonBlank(): List<String> {
+        val seen = LinkedHashSet<String>()
+        forEach { id -> if (id.isNotBlank()) seen += id }
+        return seen.toList()
     }
 }

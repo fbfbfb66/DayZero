@@ -1,5 +1,88 @@
 # DayZero 开发日志
 
+## 2026-07-27 代码基线检查点：包名迁移、媒体同步与 Gateway 落地（commit `bb328d6`）
+
+### 背景
+
+自 2026-07-12 快照（commit `2bd958e`）以来，工作区中积累了应用身份统一、跨设备媒体同步、阿里云 AI Gateway 生产加固、营养胶囊 C3、照片分配编辑器、Vision 多模态端到端、聊天同步推拉回填、以及若干 UI 打磨。本次 `bb328d6 checkpoint package migration, media sync, and gateway` 将这些变更正式提交到 `main` 分支，消除“代码已实现但未入 Git”的交付缺口。
+
+### 已落地内容
+
+1. **应用身份统一**
+   - 所有模块 `namespace` 与 `applicationId` 统一为 `com.goings.dayzero`。
+   - 源码目录从 `com/example` 物理迁移到 `com/goings/dayzero`，共 22 个 source-set；Gradle `namespace`/`applicationId`、安装脚本 `scripts/install-debug-preserve-data.ps1` 同步更新。
+   - `AndroidManifest.xml` 使用相对名（`.MainActivity` / `.DayZeroApplication`），无需修改。
+   - 未修改业务逻辑、数据库表结构、Supabase 配置或 AI Gateway 行为。
+
+2. **跨设备照片同步**
+   - Room 12 → 13（`MIGRATION_12_13`），`media_assets` 新增 `remoteSyncState`（LOCAL_ONLY/UPLOADED/REMOTE_PENDING/DOWNLOADED）、`remoteMasterPath`、`remoteThumbnailPath` 与索引。
+   - 新增 `MediaBinaryStore` / `AndroidMediaBinaryStore` 处理二进制 IO。
+   - 新增 `MediaSyncQueueContract` / `MediaSyncQueueWriter` / `MediaSyncPayloadBuilder` 将媒体资产入队到现有 `sync_queue`。
+   - 新增 `MediaPullCoordinator` / `MediaRemoteMerger` / `MediaRemotePullGateway` / `SupabaseMediaRemotePullGateway` 完成远程拉取与合并。
+   - 远端迁移 `20260711120000_dayzero_media_assets_sync_schema.sql` 建 `public.media_assets` 表、私有 Storage bucket `media-assets`、owner-scoped RLS，已通过 MCP 应用到 DayZero 项目并跑 verification（17/17 passed）。
+   - UI：`MessageWithMedia` 新增 `RemotePending` 引用态，`AiRecordScreen` 为下载中图片显示 spinner +「图片下载中」。
+   - 隐私与删除策略：照片离开设备并持久化到 Supabase Storage（跨设备同步固有前提）；bucket 私有且按 owner 目录隔离；软删除元数据行，Storage 字节暂不物理删除。
+
+3. **阿里云 AI Gateway**
+   - `server/dayzero-ai-gateway/` 完整入仓，含：
+     - 路由：`POST /api/ai/assistant-turn-v2[-stream]`、旧路径兼容、`GET /ready`、`GET /health`。
+     - 认证：`ES256` 强制、`kid`/`exp`/`sub`/`iss`/`aud` 校验、未知 `kid` 单次 JWKS 刷新、生产环境 `ENABLE_AUTH=false` 时 fail-fast。
+     - 日志：显式白名单，丢弃对象/数组/异常；`sub`/`userText`/`recentMessages`/`todayRecord`/`interactionResult`/`prompt`/Base64/data URL/Authorization/`detail`/`message`/`cause`/`stack`/`imagePath` 不泄露。
+     - 部署模板：`Dockerfile`（OCI 构建参数/labels）、`docker-compose.production.yml`（digest-only image、Nginx `service_healthy`）、`nginx.production.conf.template`（HTTPS 443、HTTP→HTTPS、`X-Accel-Buffering no`、SSE 完整防缓冲、无跨服务器 fallback）、`deployment.manifest.template.yml`。
+   - 完成报告与验收文档：`docs/PHASE_G2_COMPLETION_REPORT_20260712.md`、`docs/PHASE_G2_SECURITY_ACCEPTANCE_20260712.md`、`docs/PHASE_G2_F1_COMPLETION_REPORT_20260712.md`、`docs/PHASE_G2_F1_SECURITY_REVERIFICATION_20260712.md`、`docs/DEPLOYMENT_AND_ROLLBACK_20260712.md`。
+   - G2-F1 独立安全复验结论：`ACCEPTABLE_FOR_CONTROLLED_DEPLOYMENT`。
+
+4. **Vision 多模态生产链路**
+   - Android：`VisionAssistantTurnOrchestrator` 实现“准备一次、stream 优先、合格 fallback、幂等占位、统一释放”；`PrepareVisionAttachmentsForMessageUseCase`、`AndroidAiImageDerivativeProcessor`、Base64 DTO 扩展、fallback 异常矩阵、attempt ownership。
+   - Edge Function：`assistant-turn-v2` / `-stream` 增加共享 `assistant_vision.ts`，支持 text + `image_url[]` 多模态 content；fallback/streaming 共用同一视觉语义说明与附件体积限制（单张 ≤ 640 KiB、总计 ≤ 4 MiB）。
+   - 远端部署：fallback/streaming 已受控部署并通过烟雾测试（后续迭代至 v17/v28，引入动态上游超时）。
+
+5. **照片分配编辑器**
+   - `PhotoAssignmentEditorScreen` 全屏覆盖层，复用 `PhotoViewerOverlay`。
+   - 扇形牌堆 `FanDeckMath`、餐次 pill 行、当前餐次照片墙 `JournalPhotoTile`、跨餐次移动/移除。
+   - 原子保存：`UpdateFoodCardPhotoAssignmentsUseCase` + `RoomFoodCardPhotoAssignmentRepository`（保留未知 JSON/营养/体重、支持 `date_mismatch_guard_card.pendingOriginalCard`、 exactly-once sync enqueue）。
+   - 完整测试覆盖：`PhotoAssignmentEditorScreenTest`、`PhotoAssignmentEditorSessionTest`、`PhotoEditorViewerReuseTest`、`AiRecordPhotoEditorSavePersistenceTest`、`FanDeckMathTest` 等。
+
+6. **营养胶囊 C3**
+   - 卡片级营养摘要，满足“至少一个食物 item、四项营养字段非 null/有限/非负、展示总和 > 0”才显示。
+   - 进度环动画与入口动画，使用 BrandGreen 主题色。
+   - 覆盖食物编辑、体重、确认取消等既有测试全部保持通过。
+
+7. **聊天同步全链路**
+   - Phase 6A：schema/contract（`ai_conversations`、`ai_chat_messages`、RLS、tombstones）。
+   - Phase 6B：push + backfill（`ChatBackfillCoordinator`、`ChatSyncQueueWriter`、`ChatSyncPayloadBuilder`）。
+   - Phase 6C：pull transport + merge（`SupabaseChatRemotePullGateway`、`ChatMessageRemoteMerger`、`ChatConversationRemoteMerger`、`ChatMessageCardMergePolicy`）。
+   - Phase 6D：orchestrator + scheduler + health reporting（`ChatPullCoordinator`、`InProcessSyncScheduler`、Hilt 装配、`SyncHealthReporter`）。
+
+8. **UI 打磨**
+   - 日历：去除月份切换闪烁、当前日期高亮优化、动态占位、仅当天显示 AI 记录入口。
+   - 导航：底部导航栏与输入栏过渡平滑、 premium 视差横向转场替代纵向滑入。
+   - 聊天：进入会话默认滚动到底部；AI 回复生成期间智能滚动跟随，用户手动滚动时自动暂停。
+
+9. **本地安全修复（P1/P2 audit）**
+   - `backup_rules.xml` / `data_extraction_rules.xml` 收紧。
+   - `RoomChatMediaTransactionRepository`、`RoomFoodCardConfirmationRepository` 持久化边界加固。
+   - `SyncQueueDao` 边界补齐，食物确认持久化修复。
+
+### 验证结果
+
+- `:app:assembleDebug` BUILD SUCCESSFUL。
+- `:core:model:test`、`:core:domain:test`、`:core:data:testDebugUnitTest`、`:core:network:testDebugUnitTest`、`:core:sync:testDebugUnitTest`、`:core:ui:testDebugUnitTest`、`:feature:ai-record:testDebugUnitTest` 全部 PASS。
+- `:app:testDebugUnitTest` 138 测试完成，**仅 2 个既有时区脆弱测试失败**（白名单基线），无新增失败。
+- 根级 `test` 退出码 `1`，同样仅上述 2 个时区测试失败，无新增失败。
+- Gateway：`deno fmt --check`、`deno lint`、`deno check`、`deno task test` 通过（测试数 127）。
+- 未执行 ECS 部署、真实 HTTPS 证书签发、应用商店发布、connectedDebugAndroidTest、真实用户数据读取。
+
+### 当前状态
+
+**HEAD = `bb328d6`，`main` 分支已同步，working tree clean。**
+
+### 下一步建议
+
+- 真机复测照片分配编辑器完整流程（pending Confirm Card → 整理照片 → 全屏编辑器 → 改分配 → 保存 → Room 卡片更新 → 再次打开仍是新分配）。
+- Vision 动态上游超时在非高峰时段真机复测。
+- Gateway 受控生产部署（需真实域名/DNS/HTTPS 证书）。
+
 ## Phase G2：Gateway JWT/JWKS、日志安全、Nginx HTTPS/SSE 与可追溯部署配置（2026-07-12）
 
 - 目标目录：`server/dayzero-ai-gateway/`。

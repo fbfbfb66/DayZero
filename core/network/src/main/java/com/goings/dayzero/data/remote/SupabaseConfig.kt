@@ -8,6 +8,7 @@ object SupabaseConfig {
     val DAYZERO_FIXED_AUTH_EMAIL: String = BuildConfig.DAYZERO_FIXED_AUTH_EMAIL.trim()
     val DAYZERO_FIXED_AUTH_PASSWORD: String = BuildConfig.DAYZERO_FIXED_AUTH_PASSWORD
     val DAYZERO_FIXED_AUTH_USER_ID: String = BuildConfig.DAYZERO_FIXED_AUTH_USER_ID.trim()
+    val AI_GATEWAY_BASE_URL: String = normalizeBaseUrl(BuildConfig.AI_GATEWAY_BASE_URL)
     val SAFE_BASE_URL: String = normalizeBaseUrl(SUPABASE_URL).ifBlank { "https://example.invalid/" }
 
     fun edgeFunctionUrl(functionName: String): String {
@@ -25,6 +26,8 @@ object SupabaseConfig {
             DAYZERO_FIXED_AUTH_PASSWORD.isNotBlank() &&
             DAYZERO_FIXED_AUTH_USER_ID.isNotBlank()
     }
+
+    fun aiGatewayConfigured(): Boolean = AI_GATEWAY_BASE_URL.isNotBlank()
 
     private fun normalizeBaseUrl(value: String): String {
         if (!isUsableValue(value)) return ""

@@ -13,6 +13,9 @@ interface SyncQueueDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(item: SyncQueueEntity)
 
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIgnore(item: SyncQueueEntity): Long
+
     @Query(
         """
         SELECT * FROM sync_queue
@@ -27,6 +30,7 @@ interface SyncQueueDao {
             WHEN 'UPSERT_WEIGHT_RECORD' THEN 40
             WHEN 'SOFT_DELETE_RECORD' THEN 50
             WHEN 'UPSERT_AI_CHAT_MESSAGE' THEN 60
+            WHEN 'SUBMIT_AI_CONVERSATION_TITLE_JOB' THEN 65
             WHEN 'UPSERT_MEDIA_ASSET' THEN 70
             WHEN 'DOWNLOAD_MEDIA_ASSET' THEN 75
             WHEN 'SOFT_DELETE_MEDIA_ASSET' THEN 80
@@ -41,6 +45,18 @@ interface SyncQueueDao {
     suspend fun getPending(now: Long = System.currentTimeMillis(), limit: Int = 50): List<SyncQueueEntity> {
         return getRunnableTasks(now, limit)
     }
+
+    @Query("SELECT status FROM sync_queue WHERE id = :id LIMIT 1")
+    suspend fun getStatusById(id: String): String?
+
+    @Query(
+        """
+        SELECT COUNT(*) FROM sync_queue
+        WHERE operation = :operation
+          AND status IN ('PENDING', 'PROCESSING', 'FAILED_RETRYABLE', 'WAITING_FOR_AUTH')
+        """
+    )
+    suspend fun countActiveTasksForOperation(operation: String): Int
 
     @Query(
         """

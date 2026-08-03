@@ -182,6 +182,9 @@ class SupabaseRemotePullGateway(
             mealType = json.optNullableString("meal_type"),
             loggedAt = parseNullableRemoteTime(json.optNullableString("logged_at")),
             displayOrder = json.optNullableInt("display_order"),
+            mediaIds = json.optJSONArray("media_ids")?.let { array ->
+                List(array.length()) { index -> array.optString(index) }.filter { it.isNotBlank() }
+            }.orEmpty(),
             createdAt = parseRemoteTime(json.optString("created_at")),
             updatedAt = parseRemoteTime(json.optString("updated_at")),
             deletedAt = parseNullableRemoteTime(json.optNullableString("deleted_at")),

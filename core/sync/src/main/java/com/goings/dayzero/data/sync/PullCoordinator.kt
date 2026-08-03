@@ -255,7 +255,7 @@ class PullCoordinator(
                 MealEntry(
                     id = meal.clientId,
                     mealType = parseMealType(meal.mealType.orEmpty()),
-                    hasPhoto = false,
+                    mediaIds = meal.mediaIds,
                     foods = foodsByMeal[meal.clientId].orEmpty()
                         .sortedBy { it.createdAt }
                         .map { food ->

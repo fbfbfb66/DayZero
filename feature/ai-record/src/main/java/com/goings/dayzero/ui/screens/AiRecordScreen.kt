@@ -730,32 +730,15 @@ private fun ConversationHistoryRow(
         border = BorderStroke(1.dp, BorderNormal.copy(alpha = 0.45f)),
         shadowElevation = 0.dp
     ) {
-        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = conversation.title.ifBlank { "Conversation" },
-                    color = TextPrimary,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 15.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
-                )
-                Text(
-                    text = formatConversationTime(conversation.lastActivityAt),
-                    color = TextTertiary,
-                    fontSize = 12.sp
-                )
-            }
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = conversation.lastMessagePreview.ifBlank { "No preview" },
-                color = TextSecondary,
-                fontSize = 13.sp,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
+        Text(
+            text = conversation.title.ifBlank { "Conversation" },
+            color = TextPrimary,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 15.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)
+        )
     }
 }
 

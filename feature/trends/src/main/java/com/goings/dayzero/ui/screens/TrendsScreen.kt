@@ -1,10 +1,5 @@
 package com.goings.dayzero.ui.screens
 
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.absoluteOffset
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.ui.input.pointer.pointerInput
-import kotlin.math.roundToInt
 import java.time.format.DateTimeFormatter
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -37,11 +32,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.clipRect
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -50,7 +43,6 @@ import com.goings.dayzero.domain.model.RecordStatus
 import com.goings.dayzero.domain.model.formatWeightKg
 import com.goings.dayzero.ui.theme.CardBackground
 import com.goings.dayzero.ui.theme.LightGreen
-import com.goings.dayzero.ui.theme.BrandGreen
 import com.goings.dayzero.ui.theme.TextPrimary
 import com.goings.dayzero.ui.theme.TextSecondary
 import com.goings.dayzero.ui.theme.WarmBackground
@@ -141,13 +133,12 @@ fun TrendsScreen(
                         ChartDataPoint(
                             dateLabel = it.date.format(formatter),
                             value = it.totalCalories.toFloat(),
-                            tooltipText = "${it.date.format(formatter)}\n${it.totalCalories} kcal"
+                            formattedValue = "${it.totalCalories}"
                         )
                     }
-                    SimpleLineChart(
+                    AnimatedRoundedBarChart(
                         data = points,
-                        modifier = Modifier.fillMaxWidth().height(180.dp),
-                        lineColor = BrandGreen
+                        modifier = Modifier.fillMaxWidth().height(180.dp)
                     )
                 }
             }
@@ -168,14 +159,13 @@ fun TrendsScreen(
                             ChartDataPoint(
                                 dateLabel = record.date.format(formatter),
                                 value = weight,
-                                tooltipText = "${record.date.format(formatter)}\n${formatWeightKg(weight.toDouble())} kg"
+                                formattedValue = formatWeightKg(weight.toDouble())
                             )
                         }
                     }
-                    SimpleLineChart(
+                    AnimatedRoundedBarChart(
                         data = points,
-                        modifier = Modifier.fillMaxWidth().height(180.dp),
-                        lineColor = TextPrimary
+                        modifier = Modifier.fillMaxWidth().height(180.dp)
                     )
                 }
             }
@@ -212,150 +202,150 @@ fun TrendsScreen(
 data class ChartDataPoint(
     val dateLabel: String,
     val value: Float,
-    val tooltipText: String
+    val formattedValue: String
 )
 
 @Composable
-fun SimpleLineChart(data: List<ChartDataPoint>, modifier: Modifier = Modifier, lineColor: Color) {
-    if (data.isEmpty() || data.all { it.value == 0f }) {
+fun AnimatedRoundedBarChart(
+    data: List<ChartDataPoint>,
+    modifier: Modifier = Modifier
+) {
+    val validData = remember(data) { filterValidChartPoints(data) }
+
+    if (validData.isEmpty()) {
         Box(modifier = modifier, contentAlignment = Alignment.Center) {
             Text("暂无数据", color = TextSecondary)
         }
         return
     }
 
-    var selectedIndex by remember { mutableStateOf<Int?>(null) }
-    
-    var animationTriggered by remember { mutableStateOf(false) }
-    androidx.compose.runtime.LaunchedEffect(data) {
-        animationTriggered = true
+    val minVal = remember(validData) { validData.minOf { it.value } }
+    val maxVal = remember(validData) { validData.maxOf { it.value } }
+
+    val animationProgress = remember { androidx.compose.animation.core.Animatable(0f) }
+    androidx.compose.runtime.LaunchedEffect(validData) {
+        animationProgress.snapTo(0f)
+        animationProgress.animateTo(
+            targetValue = 1f,
+            animationSpec = androidx.compose.animation.core.tween(
+                durationMillis = 700,
+                easing = androidx.compose.animation.core.LinearEasing
+            )
+        )
     }
-    val progress by androidx.compose.animation.core.animateFloatAsState(
-        targetValue = if (animationTriggered) 1f else 0f,
-        animationSpec = androidx.compose.animation.core.tween(durationMillis = 800, easing = androidx.compose.animation.core.FastOutSlowInEasing),
-        label = "ChartProgress"
+
+    val textMeasurer = androidx.compose.ui.text.rememberTextMeasurer()
+    val density = androidx.compose.ui.platform.LocalDensity.current
+
+    val labelTextStyle = androidx.compose.ui.text.TextStyle(
+        fontFamily = androidx.compose.ui.text.font.FontFamily.Default,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 11.sp,
+        letterSpacing = 0.2.sp
     )
 
-    val maxVal = data.maxOf { it.value }.coerceAtLeast(1f)
-    val minVal = data.minOf { it.value }
-    val range = (maxVal - minVal).coerceAtLeast(1f) * 1.5f
-    val base = minVal - (range * 0.15f)
+    val dateTextStyle = androidx.compose.ui.text.TextStyle(
+        fontFamily = androidx.compose.ui.text.font.FontFamily.Default,
+        fontWeight = FontWeight.Normal,
+        fontSize = 10.sp,
+        color = TextSecondary
+    )
 
-    BoxWithConstraints(modifier = modifier) {
-        val widthDp = maxWidth
-        val heightDp = maxHeight - 20.dp
+    Canvas(
+        modifier = modifier.semantics {
+            contentDescription = "趋势图表, 共 ${validData.size} 条记录"
+        }
+    ) {
+        val canvasWidth = size.width
+        val canvasHeight = size.height
 
-        Canvas(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(heightDp)
-                .pointerInput(data) {
-                    detectTapGestures { offset ->
-                        val stepX = if (data.size > 1) size.width.toFloat() / (data.size - 1) else size.width.toFloat()
-                        val index = (offset.x / stepX).roundToInt().coerceIn(0, data.size - 1)
-                        selectedIndex = if (selectedIndex == index) null else index
-                    }
-                }
-        ) {
-            val width = size.width
-            val height = size.height
-            val stepX = if (data.size > 1) width / (data.size - 1) else width
-            val path = Path()
+        val topLabelSpacePx = 26.dp.toPx()
+        val bottomDateSpacePx = 22.dp.toPx()
+        val maxBarHeightPx = (canvasHeight - topLabelSpacePx - bottomDateSpacePx).coerceAtLeast(10.dp.toPx())
+        val baselineY = canvasHeight - bottomDateSpacePx
 
-            data.forEachIndexed { index, point ->
-                val x = index * stepX
-                val y = height - ((point.value - base) / range * height).coerceIn(0f, height)
-                
-                if (index == 0) {
-                    path.moveTo(x, y)
-                } else {
-                    path.lineTo(x, y)
-                }
-            }
+        // Grid lines
+        val gridLineColor = TextSecondary.copy(alpha = 0.12f)
+        val gridStrokeWidth = 1.dp.toPx()
+        val gridSteps = 3
+        for (i in 0..gridSteps) {
+            val gridY = topLabelSpacePx + (maxBarHeightPx * (i.toFloat() / gridSteps))
+            drawLine(
+                color = gridLineColor,
+                start = Offset(0f, gridY),
+                end = Offset(canvasWidth, gridY),
+                strokeWidth = gridStrokeWidth
+            )
+        }
 
-            clipRect(right = width * progress) {
-                drawPath(
-                    path = path,
-                    color = lineColor.copy(alpha = 0.5f),
-                    style = Stroke(
-                        width = 3.dp.toPx(),
-                        cap = StrokeCap.Round,
-                        join = StrokeJoin.Round
-                    )
+        val positions = calculateBarPositions(validData.size, canvasWidth)
+        val dateIndices = calculateDateLabelIndices(validData.size)
+
+        validData.forEachIndexed { index, point ->
+            val pos = positions[index]
+            val barColor = calculateBarColor(point.value, minVal, maxVal)
+            val fullHeightFraction = calculateBarHeightFraction(point.value, minVal, maxVal)
+            val fullBarHeightPx = maxBarHeightPx * fullHeightFraction
+
+            val barAnimProgress = calculateBarProgress(
+                index = index,
+                masterProgress = animationProgress.value,
+                totalCount = validData.size
+            )
+
+            val currentBarHeightPx = fullBarHeightPx * barAnimProgress
+            val barTopY = baselineY - currentBarHeightPx
+            val barLeft = pos.centerX - (pos.width / 2f)
+
+            // Draw Rounded Bar
+            if (currentBarHeightPx > 0f) {
+                val maxRadiusPx = minOf(pos.width / 2f, currentBarHeightPx / 2f)
+                val preferredRadiusPx = 10.dp.toPx()
+                val cornerRadiusPx = preferredRadiusPx.coerceAtMost(maxRadiusPx).coerceAtLeast(0f)
+
+                drawRoundRect(
+                    color = barColor,
+                    topLeft = Offset(barLeft, barTopY),
+                    size = androidx.compose.ui.geometry.Size(pos.width, currentBarHeightPx),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(cornerRadiusPx, cornerRadiusPx)
                 )
             }
 
-            val lineX = width * progress
-            val growRangePx = 24.dp.toPx()
-            data.forEachIndexed { index, point ->
-                val x = index * stepX
-                val y = height - ((point.value - base) / range * height).coerceIn(0f, height)
-                val isSelected = selectedIndex == index
-                
-                val scale = ((lineX - (x - growRangePx)) / growRangePx).coerceIn(0f, 1f)
-                
-                if (scale > 0f) {
-                    drawCircle(
-                        color = if (isSelected) Color.White else lineColor,
-                        radius = (if (isSelected) 6.dp else 4.dp).toPx() * scale,
-                        center = Offset(x, y)
-                    )
-                    if (isSelected) {
-                        drawCircle(
-                            color = lineColor,
-                            radius = 6.dp.toPx() * scale,
-                            center = Offset(x, y),
-                            style = Stroke(width = 2.dp.toPx() * scale)
-                        )
-                    }
-                }
+            // Draw Top Numerical Label
+            if (barAnimProgress > 0f) {
+                val labelLayout = textMeasurer.measure(
+                    text = point.formattedValue,
+                    style = labelTextStyle.copy(color = barColor.copy(alpha = barAnimProgress))
+                )
+                val textWidth = labelLayout.size.width.toFloat()
+                val textHeight = labelLayout.size.height.toFloat()
+
+                val textX = (pos.centerX - textWidth / 2f).coerceIn(0f, (canvasWidth - textWidth).coerceAtLeast(0f))
+                val textY = (barTopY - textHeight - 2.dp.toPx()).coerceAtLeast(0f)
+
+                drawText(
+                    textLayoutResult = labelLayout,
+                    topLeft = Offset(textX, textY)
+                )
             }
-        }
-        
-        data.forEachIndexed { index, point ->
-            val xDp = if (data.size > 1) widthDp * (index.toFloat() / (data.size - 1)) else 0.dp
-            Text(
-                text = point.dateLabel,
-                color = TextSecondary,
-                fontSize = 10.sp,
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .absoluteOffset(x = xDp - 10.dp, y = 0.dp)
-            )
-        }
-        
-        selectedIndex?.let { index ->
-            val point = data[index]
-            val xDp = if (data.size > 1) widthDp * (index.toFloat() / (data.size - 1)) else widthDp / 2
-            val finalXDp = when {
-                xDp < 40.dp -> 0.dp
-                xDp > widthDp - 40.dp -> widthDp - 80.dp
-                else -> xDp - 40.dp
-            }
-            
-            val yPxLocal = heightDp.value - ((point.value - base) / range * heightDp.value).coerceIn(0f, heightDp.value)
-            val finalYDp = (yPxLocal.dp - 40.dp).coerceAtLeast(0.dp)
-            
-            androidx.compose.animation.AnimatedVisibility(
-                visible = selectedIndex == index,
-                enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.scaleIn(),
-                exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.scaleOut(),
-                modifier = Modifier.absoluteOffset(x = finalXDp, y = finalYDp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .background(Color(0xD93A3A35), RoundedCornerShape(8.dp))
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                ) {
-                    Text(
-                        text = point.tooltipText,
-                        color = Color.White,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.align(Alignment.Center)
-                    )
-                }
+
+            // Draw X-Axis Date Label
+            if (index in dateIndices) {
+                val dateLayout = textMeasurer.measure(
+                    text = point.dateLabel,
+                    style = dateTextStyle
+                )
+                val dateWidth = dateLayout.size.width.toFloat()
+                val dateX = (pos.centerX - dateWidth / 2f).coerceIn(0f, (canvasWidth - dateWidth).coerceAtLeast(0f))
+                val dateY = baselineY + 4.dp.toPx()
+
+                drawText(
+                    textLayoutResult = dateLayout,
+                    topLeft = Offset(dateX, dateY)
+                )
             }
         }
     }
 }
+
+

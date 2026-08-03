@@ -78,6 +78,9 @@ class ChatSyncQueueWriterTest {
 
     private class FakeSyncQueueDao : com.goings.dayzero.data.local.dao.SyncQueueDao {
         override suspend fun insert(item: com.goings.dayzero.data.local.entity.SyncQueueEntity) {}
+        override suspend fun insertIgnore(item: com.goings.dayzero.data.local.entity.SyncQueueEntity): Long = 1L
+        override suspend fun getStatusById(id: String): String? = null
+        override suspend fun countActiveTasksForOperation(operation: String): Int = 0
         override suspend fun getRunnableTasks(now: Long, limit: Int): List<com.goings.dayzero.data.local.entity.SyncQueueEntity> = emptyList()
         override suspend fun getPending(now: Long, limit: Int): List<com.goings.dayzero.data.local.entity.SyncQueueEntity> = emptyList()
         override suspend fun markProcessing(id: String, now: Long, reason: String?): Int = 0

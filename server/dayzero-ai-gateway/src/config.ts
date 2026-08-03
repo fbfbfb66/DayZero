@@ -29,6 +29,7 @@ export type GatewayConfig = {
    * Legacy audience name. Kept for migration compatibility.
    */
   supabaseJwtAudience: string | undefined;
+  supabasePublishableKey: string | undefined;
   allowedOrigins: string[];
   requestBodyLimitBytes: number;
   logLevel: "debug" | "info" | "warn" | "error";
@@ -182,6 +183,7 @@ export function loadConfig(): GatewayConfig {
     supabaseAudience: supabaseAudience,
     supabaseUrl: supabaseUrlRaw,
     supabaseJwtAudience: supabaseJwtAudienceRaw,
+    supabasePublishableKey: getEnv("SUPABASE_PUBLISHABLE_KEY"),
     allowedOrigins,
     requestBodyLimitBytes: parseIntEnv("REQUEST_BODY_LIMIT_MB", 10) *
       1024 * 1024,
