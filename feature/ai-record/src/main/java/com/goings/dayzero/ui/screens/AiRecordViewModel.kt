@@ -42,6 +42,7 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.stateIn
@@ -71,7 +72,9 @@ data class AiConversationHistoryState(
     val isCreating: Boolean = false,
     val homeInputText: String = "",
     val lastCreatedConversationId: String? = null,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val homeConversationId: String? = null,
+    val draftState: ConversationAttachmentDraftState? = null
 )
 
 data class AiConversationDetailState(
@@ -135,15 +138,34 @@ class AiRecordViewModel @Inject constructor(
     private val pickerOpenStates = MutableStateFlow<Map<String, Boolean>>(emptyMap())
     private val cameraOpeningStates = MutableStateFlow<Map<String, Boolean>>(emptyMap())
 
+    private val homeConversationId = MutableStateFlow<String?>(savedStateHandle[KEY_HOME_CONVERSATION_ID] as? String)
+
+    fun getOrCreateHomeConversationId(): String {
+        val existing = homeConversationId.value
+        if (!existing.isNullOrBlank()) return existing
+        val newId = UUID.randomUUID().toString()
+        savedStateHandle[KEY_HOME_CONVERSATION_ID] = newId
+        homeConversationId.value = newId
+        return newId
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private val homeDraftState: Flow<ConversationAttachmentDraftState?> = homeConversationId.flatMapLatest { id ->
+        if (id.isNullOrBlank()) flowOf(null) else getDraftStateFlow(id)
+    }
+
     private val historyState: Flow<AiConversationHistoryState> = combine(
         observeHistory(),
-        historyTransient
-    ) { history: AiConversationHistoryState, overlay: HistoryTransientState ->
+        historyTransient,
+        homeDraftState
+    ) { history: AiConversationHistoryState, overlay: HistoryTransientState, draft: ConversationAttachmentDraftState? ->
         history.copy(
             isCreating = overlay.isCreating,
             homeInputText = overlay.homeInputText,
             lastCreatedConversationId = overlay.lastCreatedConversationId,
-            errorMessage = overlay.errorMessage ?: history.errorMessage
+            errorMessage = overlay.errorMessage ?: history.errorMessage,
+            homeConversationId = homeConversationId.value,
+            draftState = draft
         )
     }
 
@@ -184,7 +206,17 @@ class AiRecordViewModel @Inject constructor(
     }
 
     fun submitHomeInput() {
-        createConversationWithFirstMessage(historyTransient.value.homeInputText)
+        val convId = homeConversationId.value
+        val draft = uiState.value.history.draftState
+        val attachmentIds = draft?.attachmentIds.orEmpty()
+        val text = historyTransient.value.homeInputText
+        if (!convId.isNullOrBlank() && attachmentIds.isNotEmpty()) {
+            submitMediaMessage(convId, text, attachmentIds)
+            savedStateHandle.remove<String>(KEY_HOME_CONVERSATION_ID)
+            homeConversationId.value = null
+        } else {
+            createConversationWithFirstMessage(text)
+        }
     }
 
     fun createConversationWithFirstMessage(text: String) {
@@ -212,6 +244,8 @@ class AiRecordViewModel @Inject constructor(
                     if (conversationId == null) {
                         historyTransient.update { it.copy(isCreating = false, errorMessage = "Message cannot be blank") }
                     } else {
+                        savedStateHandle.remove<String>(KEY_HOME_CONVERSATION_ID)
+                        homeConversationId.value = null
                         savedStateHandle[KEY_CONVERSATION_ID] = conversationId
                         selectedConversationId.value = conversationId
                         historyTransient.value = HistoryTransientState(
@@ -718,6 +752,7 @@ class AiRecordViewModel @Inject constructor(
 
     private companion object {
         private const val KEY_CONVERSATION_ID = "conversationId"
+        private const val KEY_HOME_CONVERSATION_ID = "home_conversation_id"
         private const val MAX_ATTACHMENT_COUNT = 6
         private const val NETWORK_GATE_TAG = "DayZeroNetworkGate"
     }

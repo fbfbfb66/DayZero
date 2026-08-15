@@ -191,14 +191,41 @@ fun AiRecordHomeScreen(
     isAnalyzing: Boolean,
     onInputChange: (String) -> Unit,
     onSubmit: () -> Unit,
-    onOpenConversation: (String) -> Unit
+    onOpenConversation: (String) -> Unit,
+    onTakePhoto: () -> Unit = {},
+    onSelectPhotos: (List<String>) -> Unit = {},
+    onRemoveAttachment: (String) -> Unit = {},
+    onRetryAttachment: (String) -> Unit = {},
+    onSetPickerOpen: (Boolean) -> Unit = {}
 ) {
+    val context = LocalContext.current
+    var isPlusMenuOpen by remember { mutableStateOf(false) }
+    val pickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia(6)
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            onSelectPhotos(uris.map { it.toString() })
+        }
+        onSetPickerOpen(false)
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(WarmBackground)
             .testTag(AiRecordTestTags.Home)
     ) {
+        if (isPlusMenuOpen) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { isPlusMenuOpen = false }
+            )
+        }
+
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 16.dp, top = 28.dp, end = 16.dp, bottom = 28.dp),
@@ -213,10 +240,35 @@ fun AiRecordHomeScreen(
                 )
                 Spacer(modifier = Modifier.height(14.dp))
                 HomePromptBox(
+                    modifier = Modifier.fillMaxWidth(),
                     text = state.homeInputText,
                     enabled = !state.isCreating && !isAnalyzing,
                     isBusy = state.isCreating || isAnalyzing,
                     errorMessage = state.errorMessage,
+                    draftState = state.draftState,
+                    isPlusMenuOpen = isPlusMenuOpen,
+                    onPlusMenuToggle = { isPlusMenuOpen = it },
+                    onTakePhoto = {
+                        isPlusMenuOpen = false
+                        onTakePhoto()
+                    },
+                    onSelectPhotos = {
+                        isPlusMenuOpen = false
+                        val draft = state.draftState
+                        val currentCount = (draft?.attachmentIds?.size ?: 0) + (draft?.importingCount ?: 0)
+                        if (currentCount >= 6) {
+                            Toast.makeText(context, "最多只能添加6张图片", Toast.LENGTH_SHORT).show()
+                        } else {
+                            onSetPickerOpen(true)
+                            pickerLauncher.launch(
+                                androidx.activity.result.PickVisualMediaRequest(
+                                    ActivityResultContracts.PickVisualMedia.ImageOnly
+                                )
+                            )
+                        }
+                    },
+                    onRemoveAttachment = onRemoveAttachment,
+                    onRetryAttachment = onRetryAttachment,
                     onTextChange = onInputChange,
                     onSubmit = onSubmit
                 )
@@ -547,7 +599,8 @@ fun AiConversationScreen(
                 inputTestTag = AiRecordTestTags.ConversationInput,
                 sendTestTag = AiRecordTestTags.ConversationSend,
                 onInputChange = { inputText = it },
-                detailState = detailState,
+                draftState = detailState.draftState,
+                errorMessage = detailState.errorMessage,
                 isPlusMenuOpen = isPlusMenuOpen,
                 onPlusMenuToggle = { isPlusMenuOpen = it },
                 onTakePhoto = {
@@ -641,72 +694,140 @@ fun AiConversationScreen(
 
 @Composable
 private fun HomePromptBox(
+    modifier: Modifier = Modifier,
     text: String,
     enabled: Boolean,
     isBusy: Boolean,
     errorMessage: String?,
+    draftState: ConversationAttachmentDraftState? = null,
+    isPlusMenuOpen: Boolean,
+    onPlusMenuToggle: (Boolean) -> Unit,
+    onTakePhoto: () -> Unit,
+    onSelectPhotos: () -> Unit,
+    onRemoveAttachment: (String) -> Unit,
+    onRetryAttachment: (String) -> Unit,
     onTextChange: (String) -> Unit,
     onSubmit: () -> Unit
 ) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(28.dp),
-        color = Color.White,
-        border = BorderStroke(1.dp, BorderNormal.copy(alpha = 0.5f)),
-        shadowElevation = 0.dp
-    ) {
-        Column(modifier = Modifier.padding(start = 16.dp, top = 12.dp, end = 10.dp, bottom = 10.dp)) {
-            OutlinedTextField(
-                value = text,
-                onValueChange = onTextChange,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 92.dp, max = 180.dp)
-                    .testTag(AiRecordTestTags.HomeInput),
-                placeholder = { Text("Tell DayZero what happened...", color = TextSecondary) },
-                enabled = enabled,
-                colors = OutlinedTextFieldDefaults.colors(
-                    unfocusedBorderColor = Color.Transparent,
-                    focusedBorderColor = Color.Transparent,
-                    unfocusedContainerColor = Color.Transparent,
-                    focusedContainerColor = Color.Transparent,
-                    disabledBorderColor = Color.Transparent,
-                    disabledContainerColor = Color.Transparent
-                )
+    val draft = draftState
+    val isPlusDisabled = !enabled || (draft != null && draft.importingCount > 0)
+    val hasDraftAttachments = draft != null && (draft.attachmentIds.isNotEmpty() || draft.importingCount > 0)
+    val sendEnabled = (text.isNotBlank() || hasDraftAttachments) && enabled && !isBusy
+
+    Column(modifier = modifier.fillMaxWidth()) {
+        AnimatedVisibility(
+            visible = isPlusMenuOpen,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically()
+        ) {
+            PlusMenuCard(
+                onTakePhoto = onTakePhoto,
+                onSelectPhotos = onSelectPhotos
             )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = errorMessage.orEmpty(),
-                    color = MaterialTheme.colorScheme.error,
-                    fontSize = 12.sp,
-                    modifier = Modifier.weight(1f)
+        }
+
+        val showDraftBar = draft != null && (draft.attachmentIds.isNotEmpty() || draft.importingCount > 0)
+        AnimatedVisibility(
+            visible = showDraftBar,
+            enter = fadeIn(),
+            exit = fadeOut()
+        ) {
+            if (draft != null) {
+                AttachmentDraftBar(
+                    draft = draft,
+                    onRemove = onRemoveAttachment,
+                    onRetry = onRetryAttachment
                 )
-                Box(
+            }
+        }
+
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(28.dp),
+            color = Color.White,
+            border = BorderStroke(1.dp, BorderNormal.copy(alpha = 0.5f)),
+            shadowElevation = 0.dp
+        ) {
+            Column(modifier = Modifier.padding(start = 14.dp, top = 10.dp, end = 10.dp, bottom = 10.dp)) {
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = onTextChange,
                     modifier = Modifier
-                        .size(44.dp)
-                        .clip(CircleShape)
-                        .background(if (text.isNotBlank() && enabled) BrandGreen else BrandGreen.copy(alpha = 0.3f))
-                        .clickable(enabled = text.isNotBlank() && enabled && !isBusy) { onSubmit() }
-                        .testTag(AiRecordTestTags.HomeSend),
-                    contentAlignment = Alignment.Center
+                        .fillMaxWidth()
+                        .heightIn(min = 92.dp, max = 180.dp)
+                        .testTag(AiRecordTestTags.HomeInput),
+                    placeholder = { Text("Tell DayZero what happened...", color = TextSecondary) },
+                    enabled = enabled,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        unfocusedBorderColor = Color.Transparent,
+                        focusedBorderColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        focusedContainerColor = Color.Transparent,
+                        disabledBorderColor = Color.Transparent,
+                        disabledContainerColor = Color.Transparent
+                    )
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    if (isBusy) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            strokeWidth = 2.dp,
-                            color = Color.White
-                        )
-                    } else {
-                        Icon(
-                            Icons.AutoMirrored.Filled.Send,
-                            contentDescription = "Send",
-                            tint = Color.White,
-                            modifier = Modifier.size(20.dp)
-                        )
+                    Box(
+                        modifier = Modifier.size(44.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        IconButton(
+                            onClick = {
+                                if (!isPlusDisabled) {
+                                    onPlusMenuToggle(!isPlusMenuOpen)
+                                }
+                            },
+                            enabled = !isPlusDisabled
+                        ) {
+                            val angle by androidx.compose.animation.core.animateFloatAsState(
+                                targetValue = if (isPlusMenuOpen) 45f else 0f
+                            )
+                            Icon(
+                                Icons.Filled.Add,
+                                contentDescription = "More",
+                                tint = if (isPlusDisabled) TextSecondary.copy(alpha = 0.3f) else TextSecondary,
+                                modifier = Modifier.graphicsLayer { rotationZ = angle }
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = errorMessage.orEmpty(),
+                        color = MaterialTheme.colorScheme.error,
+                        fontSize = 12.sp,
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(horizontal = 8.dp)
+                    )
+
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .background(if (sendEnabled) BrandGreen else BrandGreen.copy(alpha = 0.3f))
+                            .clickable(enabled = sendEnabled) { onSubmit() }
+                            .testTag(AiRecordTestTags.HomeSend),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (isBusy) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                                color = Color.White
+                            )
+                        } else {
+                            Icon(
+                                Icons.AutoMirrored.Filled.Send,
+                                contentDescription = "Send",
+                                tint = Color.White,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -913,7 +1034,8 @@ private fun ConversationInputBar(
     inputTestTag: String,
     sendTestTag: String,
     onInputChange: (String) -> Unit,
-    detailState: AiConversationDetailState,
+    draftState: ConversationAttachmentDraftState? = null,
+    errorMessage: String? = null,
     isPlusMenuOpen: Boolean,
     onPlusMenuToggle: (Boolean) -> Unit,
     onTakePhoto: () -> Unit,
@@ -922,7 +1044,7 @@ private fun ConversationInputBar(
     onRetryAttachment: (String) -> Unit,
     onSubmit: () -> Unit
 ) {
-    val draft = detailState.draftState
+    val draft = draftState
     val isPlusDisabled = !enabled || (draft != null && draft.importingCount > 0)
 
     Column(
@@ -1081,10 +1203,10 @@ private fun ConversationInputBar(
                 }
             }
 
-            val errorMessage = detailState.errorMessage
-            if (!errorMessage.isNullOrBlank()) {
+            val currentErrorMessage = errorMessage
+            if (!currentErrorMessage.isNullOrBlank()) {
                 Text(
-                    text = errorMessage,
+                    text = currentErrorMessage,
                     color = MaterialTheme.colorScheme.error,
                     fontSize = 12.sp,
                     modifier = Modifier.padding(start = 72.dp, end = 16.dp, top = 4.dp, bottom = 4.dp)

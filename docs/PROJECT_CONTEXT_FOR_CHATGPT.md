@@ -1993,3 +1993,17 @@ P2-6 最小修复范围：让 `RoomRecordRepository` 获得同一个 `DayZeroDat
   - Tests increased from 100 to 127 and all passed.
 - **Independent reverification**: `ACCEPTABLE_FOR_CONTROLLED_DEPLOYMENT` (`docs/PHASE_G2_F1_SECURITY_REVERIFICATION_20260712.md`). No new Critical/High risks; frozen file hashes matched baseline.
 - **Status**: G2-F1 is **not deployed** to ECS. Real domain, DNS, and production HTTPS certificates are still pending.
+
+## Working-Tree Snapshot — Home Image Drafts and Gateway Restart Recovery (2026-08-04)
+
+- **Status**: uncommitted local work only. Do not describe this snapshot as deployed, accepted, or build-verified; no Git operation, ECS operation, or Android device test was performed as part of this documentation update.
+- **AI Record home composer**:
+  - The home prompt now exposes the same add-photo entry points as a conversation: take a photo or select up to six images, show draft thumbnails/import state, remove/retry attachments, and allow send when the draft has media even if text is blank.
+  - `AiRecordViewModel` owns a temporary `homeConversationId`, persisted through `SavedStateHandle`, so a home-screen attachment draft can use the existing per-conversation draft/import pipeline before the first message exists.
+  - Submitting a home draft with attachments sends it through `submitMediaMessage`; successful conventional text-only creation and attachment submission both clear the temporary home conversation id. Home camera navigation, picker state, remove, and retry are wired from `AppNavigation`.
+- **Trends UI**: bar-chart columns now have rounded top corners and square bottoms, so their baseline remains visually aligned.
+- **Gateway/Nginx restart recovery**:
+  - `nginx.production.conf.template` no longer resolves `dayzero-ai-gateway` once through a static upstream. It uses Docker embedded DNS (`127.0.0.11`) plus a variable-based proxy target so a restarted/recreated Gateway container can receive traffic without an Nginx reload.
+  - Added `ops/certbot-reload-nginx.sh` as a certbot deploy hook: it runs `nginx -t` in the Nginx container and reloads only after a successful validation.
+  - Added `ops/gateway-restart-smoke-test.sh`: restarts the Gateway through the production Compose file, waits for public `/health` and `/ready`, then confirms both anonymous AI endpoints still return `401`. The script intentionally does not reload Nginx.
+- **Follow-up required**: review the uncommitted changes, run the relevant Android/Gateway checks, and perform the ECS restart smoke test only with explicit deployment authorization. Keep the existing G2-F1 deployment status unchanged until those steps are completed.

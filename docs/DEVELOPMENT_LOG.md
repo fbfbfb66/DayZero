@@ -2004,3 +2004,32 @@ Gradle 真实结果（Android Studio JBR）：
 ### 下一阶段建议
 
 Gateway JWT/JWKS 与日志安全加固（仅建议，未实施）。
+
+## 工作区快照：AI 首页图片草稿与 Gateway 重启恢复（2026-08-04）
+
+### 状态与边界
+
+- 本节仅记录当前**未提交**工作区中的实现，尚未将其声明为已部署、已验收或已完成本轮构建验证。
+- 本次文档更新未执行 Git 操作、ECS/ACR/Docker 部署、Android 真机测试或生产域名请求。
+
+### AI Record 首页图片草稿
+
+- 首页输入框补齐与会话页一致的图片入口：拍照、从系统选择器最多选择 6 张、草稿缩略图/导入状态、删除与重试。
+- 有图片草稿时，即使输入文本为空也允许发送；图片导入进行中时禁用继续添加图片。
+- `AiRecordViewModel` 新增由 `SavedStateHandle` 保存的临时 `homeConversationId`。首页在首条消息创建前复用既有的按会话附件草稿、导入、删除和重试链路，不另建媒体持久化协议。
+- 首页带附件发送时调用既有 `submitMediaMessage`；纯文本首条会话创建或附件发送完成后，均清理临时首页会话 ID。`AppNavigation` 已接通首页的相机、选择器、删除、重试和 picker-open 状态。
+
+### Trends 图表细节
+
+- 柱状图改为仅顶部圆角、底部直角，避免柱体基线因四角圆角产生视觉悬浮。
+
+### Gateway / Nginx 容器重启恢复
+
+- `nginx.production.conf.template` 改用 Docker 内嵌 DNS `127.0.0.11` 与变量形式 `proxy_pass`，使 `dayzero-ai-gateway` 容器重启或重建、内部 IP 改变后无需手动 reload Nginx 即可重新解析上游。
+- 新增 `server/dayzero-ai-gateway/ops/certbot-reload-nginx.sh`：作为 certbot deploy hook，先在 Nginx 容器内执行 `nginx -t`，通过后才 reload。
+- 新增 `server/dayzero-ai-gateway/ops/gateway-restart-smoke-test.sh`：重启生产 Compose 中的 Gateway，等待公网 `/health` 与 `/ready` 返回 200，并验证两个匿名 AI 接口均返回 401；脚本明确不执行 Nginx reload。
+
+### 后续验证
+
+- 先评审并提交当前工作区，再运行相关 Android 与 Gateway 检查。
+- 只有在用户明确授权部署后，才在 ECS 执行 Gateway 重启烟测；在此之前，G2-F1 的“未部署”结论保持不变。

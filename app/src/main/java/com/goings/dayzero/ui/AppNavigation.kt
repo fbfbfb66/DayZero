@@ -332,6 +332,32 @@ fun MainApp() {
                                 navController.navigate(aiConversationRoute(conversationId)) {
                                     launchSingleTop = true
                                 }
+                            },
+                            onTakePhoto = {
+                                val convId = aiRecordViewModel.getOrCreateHomeConversationId()
+                                navController.navigate("ai_camera/$convId")
+                            },
+                            onSelectPhotos = { uris ->
+                                val convId = aiRecordViewModel.getOrCreateHomeConversationId()
+                                aiRecordViewModel.importPhotos(convId, uris)
+                            },
+                            onRemoveAttachment = { mediaId ->
+                                val convId = aiRecordUiState.history.homeConversationId
+                                if (convId != null) {
+                                    aiRecordViewModel.removeDraftAttachment(convId, mediaId)
+                                }
+                            },
+                            onRetryAttachment = { mediaId ->
+                                val convId = aiRecordUiState.history.homeConversationId
+                                if (convId != null) {
+                                    aiRecordViewModel.retryDraftAttachment(convId, mediaId)
+                                }
+                            },
+                            onSetPickerOpen = { isOpen ->
+                                val convId = aiRecordUiState.history.homeConversationId
+                                if (convId != null) {
+                                    aiRecordViewModel.setPickerOpen(convId, isOpen)
+                                }
                             }
                         )
                     }

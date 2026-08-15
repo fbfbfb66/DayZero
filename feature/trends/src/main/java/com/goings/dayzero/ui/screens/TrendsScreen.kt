@@ -30,8 +30,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.drawText
@@ -297,18 +301,29 @@ fun AnimatedRoundedBarChart(
             val barTopY = baselineY - currentBarHeightPx
             val barLeft = pos.centerX - (pos.width / 2f)
 
-            // Draw Rounded Bar
+            // Draw Rounded Bar (Top rounded, bottom square)
             if (currentBarHeightPx > 0f) {
-                val maxRadiusPx = minOf(pos.width / 2f, currentBarHeightPx / 2f)
+                val maxRadiusPx = minOf(pos.width / 2f, currentBarHeightPx)
                 val preferredRadiusPx = 10.dp.toPx()
                 val cornerRadiusPx = preferredRadiusPx.coerceAtMost(maxRadiusPx).coerceAtLeast(0f)
 
-                drawRoundRect(
-                    color = barColor,
-                    topLeft = Offset(barLeft, barTopY),
-                    size = androidx.compose.ui.geometry.Size(pos.width, currentBarHeightPx),
-                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(cornerRadiusPx, cornerRadiusPx)
+                val barRect = Rect(
+                    left = barLeft,
+                    top = barTopY,
+                    right = barLeft + pos.width,
+                    bottom = baselineY
                 )
+                val roundRect = RoundRect(
+                    rect = barRect,
+                    topLeft = CornerRadius(cornerRadiusPx, cornerRadiusPx),
+                    topRight = CornerRadius(cornerRadiusPx, cornerRadiusPx),
+                    bottomRight = CornerRadius.Zero,
+                    bottomLeft = CornerRadius.Zero
+                )
+                val path = Path().apply {
+                    addRoundRect(roundRect)
+                }
+                drawPath(path = path, color = barColor)
             }
 
             // Draw Top Numerical Label
