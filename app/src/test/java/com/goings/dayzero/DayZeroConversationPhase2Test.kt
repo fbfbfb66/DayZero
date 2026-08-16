@@ -63,6 +63,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -99,6 +100,41 @@ class DayZeroConversationPhase2Test {
     @After
     fun tearDown() {
         database.close()
+    }
+
+    @Test
+    fun ensureDraftConversationAllowsMediaStagingAndStaysOutOfNonEmptyHistory() = runTest(mainDispatcherRule.testDispatcher) {
+        val now = Instant.parse("2026-08-16T02:00:00Z").toEpochMilli()
+        val draftId = "home-draft-1"
+
+        assertTrue(repository.ensureDraftConversation(draftId, now))
+        assertFalse(repository.ensureDraftConversation(draftId, now))
+
+        // FK regression: staging media against the draft conversation must succeed.
+        val mediaRepository = com.goings.dayzero.data.repository.RoomMediaRepository(database)
+        val staged = mediaRepository.createStagedMedia(
+            listOf(
+                com.goings.dayzero.domain.model.media.NewMediaAssetRequest(
+                    id = "m-1",
+                    ownerLocalId = "owner-1",
+                    conversationId = draftId,
+                    source = com.goings.dayzero.domain.model.media.MediaSource.PHOTO_PICKER
+                )
+            ),
+            now = now
+        )
+        assertEquals(listOf("m-1"), staged.map { it.id })
+
+        // The empty draft is hidden from history until its first message is committed.
+        assertTrue(database.conversationDao().observeNonEmptyConversationsByLastActivity().first().isEmpty())
+        repository.insertChatMessage(
+            draftId,
+            AiChatMessage(id = "msg-1", conversationId = draftId, role = ChatRole.User, text = "hi", createdAt = now)
+        )
+        assertEquals(
+            listOf(draftId),
+            database.conversationDao().observeNonEmptyConversationsByLastActivity().first().map { it.id }
+        )
     }
 
     @Test

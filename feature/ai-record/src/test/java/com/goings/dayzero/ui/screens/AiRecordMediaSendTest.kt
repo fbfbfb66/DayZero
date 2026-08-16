@@ -195,6 +195,58 @@ class AiRecordMediaSendTest {
     }
 
     @Test
+    fun submitHomeInput_withAttachments_commitsAndClearsHomeState() = runTest(testDispatcher) {
+        val fakeRepo = FakeChatMediaTransactionRepository()
+        val savedStateHandle = SavedStateHandle()
+        savedStateHandle["home_conversation_id"] = "home-conv"
+        savedStateHandle["draft_ids_home-conv"] = listOf("media-a")
+        val viewModel = createViewModel(
+            transactionRepository = fakeRepo,
+            savedStateHandle = savedStateHandle,
+            mediaAssets = listOf(readyAsset("media-a", "home-conv"))
+        )
+
+        val eventDeferred = async { viewModel.events.first() }
+        viewModel.updateHomeInput("hello photo")
+        advanceUntilIdle()
+        viewModel.submitHomeInput()
+        advanceUntilIdle()
+
+        assertEquals(1, fakeRepo.callCount)
+        assertEquals("home-conv", fakeRepo.requests.single().conversationId)
+        assertTrue(eventDeferred.await() is AiRecordConversationEvent.MediaMessageCommitted)
+        assertEquals("", viewModel.uiState.value.history.homeInputText)
+        assertNull(viewModel.uiState.value.history.homeConversationId)
+        assertNull(savedStateHandle.get<String>("home_conversation_id"))
+    }
+
+    @Test
+    fun submitHomeInput_withAttachments_failureKeepsHomeState() = runTest(testDispatcher) {
+        val fakeRepo = FakeChatMediaTransactionRepository()
+        fakeRepo.nextResult = SendUserMessageWithMediaResult.Failed(RuntimeException("disk full"))
+        val savedStateHandle = SavedStateHandle()
+        savedStateHandle["home_conversation_id"] = "home-conv"
+        savedStateHandle["draft_ids_home-conv"] = listOf("media-a")
+        val viewModel = createViewModel(
+            transactionRepository = fakeRepo,
+            savedStateHandle = savedStateHandle,
+            mediaAssets = listOf(readyAsset("media-a", "home-conv"))
+        )
+
+        viewModel.updateHomeInput("hello photo")
+        advanceUntilIdle()
+        viewModel.submitHomeInput()
+        advanceUntilIdle()
+
+        assertEquals("hello photo", viewModel.uiState.value.history.homeInputText)
+        assertEquals("home-conv", viewModel.uiState.value.history.homeConversationId)
+        assertEquals(
+            listOf("media-a"),
+            savedStateHandle.get<List<String>>("draft_ids_home-conv")
+        )
+    }
+
+    @Test
     fun submitMediaMessage_conflict_doesNotEmitEventAndKeepsDrafts() = runTest(testDispatcher) {
         val fakeRepo = FakeChatMediaTransactionRepository()
         fakeRepo.nextResult = SendUserMessageWithMediaResult.Conflict("inconsistent")
