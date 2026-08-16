@@ -18,6 +18,7 @@ set -euo pipefail
 
 MODE="${1:-restart}"
 COMPOSE_FILE="/opt/dayzero-ai/docker-compose.production.yml"
+ENV_FILE="/opt/dayzero-ai/.env.production"
 PUBLIC_HOST="https://api.dayzero.cn"
 MAX_WAIT_SECONDS=120
 
@@ -49,11 +50,11 @@ wait_for_public() {
 case "${MODE}" in
     restart)
         log "Restarting Gateway container..."
-        docker compose -f "${COMPOSE_FILE}" restart dayzero-ai-gateway
+        docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" restart dayzero-ai-gateway
         ;;
     recreate)
         log "Recreating Gateway container (new container IP)..."
-        docker compose -f "${COMPOSE_FILE}" up -d --no-deps --force-recreate dayzero-ai-gateway
+        docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" up -d --no-deps --force-recreate dayzero-ai-gateway
         ;;
     *)
         echo "Usage: $0 [restart|recreate]" >&2

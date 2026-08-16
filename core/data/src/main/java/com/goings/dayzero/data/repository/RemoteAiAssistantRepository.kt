@@ -1,6 +1,7 @@
 package com.goings.dayzero.data.repository
 
 import android.util.Log
+import com.goings.dayzero.data.remote.SupabaseConfig
 import com.goings.dayzero.data.remote.api.AiDraftApiService
 import com.goings.dayzero.data.remote.mapper.AiAssistantRemoteMapper
 import com.goings.dayzero.data.remote.mapper.AssistantTurnV2ResponseMapper
@@ -98,7 +99,11 @@ class RemoteAiAssistantRepository(
 
         return try {
             latencyLogger?.mark(request.traceId, "http_assistant_turn_v2_start")
-            val response = apiService.sendAssistantTurnV2WithResponse(requestDto)
+            val response = apiService.sendAssistantTurnV2WithResponse(
+                url = SupabaseConfig.assistantTurnUrl("assistant-turn-v2"),
+                requestId = java.util.UUID.randomUUID().toString(),
+                request = requestDto
+            )
             val statusCode = response.code()
             latencyLogger?.mark(
                 request.traceId,

@@ -15,6 +15,20 @@ object SupabaseConfig {
         return "${SAFE_BASE_URL}functions/v1/$functionName"
     }
 
+    /**
+     * Endpoint abstraction for the assistant-turn-v2 protocol family. When the
+     * self-hosted AI gateway is configured (AI_GATEWAY_BASE_URL), assistant
+     * traffic goes to the gateway; otherwise it falls back to Supabase Edge
+     * Functions. Only assistant-turn endpoints are gateway-routed today.
+     */
+    fun assistantTurnUrl(functionName: String): String {
+        return if (aiGatewayConfigured()) {
+            "${AI_GATEWAY_BASE_URL}api/ai/$functionName"
+        } else {
+            edgeFunctionUrl(functionName)
+        }
+    }
+
     fun isConfigured(): Boolean {
         return normalizeBaseUrl(SUPABASE_URL).isNotBlank() &&
             isUsableValue(SUPABASE_PUBLISHABLE_KEY) &&

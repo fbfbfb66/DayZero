@@ -73,11 +73,16 @@ services:
     volumes:
       - ./nginx/nginx.production.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/ssl:/etc/nginx/ssl:ro
+      # ACME HTTP-01 webroot shared with the host certbot (webroot_path
+      # /opt/dayzero-ai/certbot/www); required for certificate renewal.
+      - ./certbot/www:/var/www/certbot:ro
     depends_on:
       dayzero-ai-gateway:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      # TLS cert is issued for the public domain, so the in-container check must
+      # skip certificate verification (--no-check-certificate).
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "--no-check-certificate", "https://localhost/ready"]
       interval: 30s
       timeout: 5s
       retries: 3

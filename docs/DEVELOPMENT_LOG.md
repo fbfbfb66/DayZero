@@ -2033,3 +2033,41 @@ Gateway JWT/JWKS 与日志安全加固（仅建议，未实施）。
 
 - 先评审并提交当前工作区，再运行相关 Android 与 Gateway 检查。
 - 只有在用户明确授权部署后，才在 ECS 执行 Gateway 重启烟测；在此之前，G2-F1 的“未部署”结论保持不变。
+
+## AI 请求迁移收尾：网关部署 + 客户端切流（2026-08-15）
+
+### 背景
+
+G2-F1 网关 7 月已上线，但客户端 AI 对话仍走 Supabase Edge；`ai_conversation_title_jobs` 相关迁移、title-worker、nginx 动态解析、证书自动续期均未部署（详见 2026-08-04 报告的阻塞项）。本轮在用户恢复 ECS SSH 访问后全部落地。
+
+### Supabase
+
+- 应用迁移 `20260728090000_add_meals_media_ids`（`meals.media_ids`）与 `20260728120000_ai_conversation_title_jobs`（标题任务表 + RPC + RLS），两个 verification 脚本全部通过，安全 advisors 无新增问题。
+
+### ECS / 网关（生产实测）
+
+- 回滚点备份：`/opt/dayzero-ai-backups/20260815-120840/`。
+- 镜像：本机 Docker 不可用且 docker.io 被墙（163/USTC mirror 均失效），改为 ECS 上经 `docker.m.daocloud.io` 拉取 `denoland/deno:2.9.0`（旧 ACR deno:2.0.5 不支持 lockfile v5），推入 ACR 后构建 `dayzero-ai-gateway:g2-20260815-120840-r4`，digest `sha256:003e1743…c254d3eb`，digest-only 引用写入 `.env.production`。
+- 新增 `dayzero-title-worker` 容器（`.env.worker`，600 权限，含 service role key，仅此容器持有）；gateway 切到现代 JWKS env（`ENV_FILE=.env.production`），并补 `SUPABASE_URL`/`SUPABASE_PUBLISHABLE_KEY`（title-jobs handler 需要，否则 503）。
+- nginx：部署动态 DNS 解析配置（`resolver 127.0.0.11` + 变量式 `proxy_pass`），`gateway-restart-smoke-test.sh` 的 restart 与 recreate 两种模式均通过（不手动 reload，公网自动恢复 200，匿名 401）。compose 增加 certbot webroot 挂载 `./certbot/www:/var/www/certbot:ro`，nginx 健康检查改为 `wget --no-check-certificate https://localhost/ready`。
+- 证书：`certbot-renew.timer` 已启用（每日）；deploy hook `01-dayzero-nginx-cert` 安装到 `/etc/letsencrypt/renewal-hooks/deploy/`；`certbot renew --dry-run` 通过。
+
+### 服务端代码修复（提交在仓库工作区）
+
+- `title_worker.ts`：kimi-k2.6 仅允许 temperature=0.6（否则 HTTP 400），由 0.2 改为 0.6；补 `deno-lint-ignore no-control-regex`（标题清洗正则有意为之）。
+- `test_helpers.ts`：补 `supabasePublishableKey: undefined`，修复 `GatewayConfig` 类型检查失败。
+- 修复后 `deno test` 134 passed / 0 failed，`deno lint` 0 problem。
+
+### 客户端切流（网关优先 + Edge 兜底）
+
+- `SupabaseConfig.assistantTurnUrl()`：`AI_GATEWAY_BASE_URL` 非空走 `api.dayzero.cn/api/ai/...`，否则回退 Supabase Edge。
+- `AssistantTurnStreamClient` 与 `AiDraftApiService`（改 `@Url` 动态地址）均接入该抽象，两条链路补 `X-Request-Id`（UUID）。
+- 本地 `.env` 填 `AI_GATEWAY_BASE_URL=https://api.dayzero.cn`；置空即整体回退 Edge，无需改代码。
+- 回归：`:core:network` / `:core:data` / `:core:sync` / `:app` 单测 + `:app:assembleDebug` 全部通过。
+
+### 端到端验收（公网实测，真实 JWT）
+
+- 非流式 `assistant-turn-v2`：200，Kimi 往返约 2s。
+- 流式 SSE：reply_delta 逐 token 推送正常。
+- title job 全链路：提交 202 → worker 领取 → Kimi 生成 → 会话标题回写 `ai_generated`（终态清理原文），实测标题「早餐包子和豆浆的热量估算」；测试数据已清理。
+- 未执行：Vision 图片请求的网关链路真机验收、Android 真机安装验证（需用户在设备上确认）。

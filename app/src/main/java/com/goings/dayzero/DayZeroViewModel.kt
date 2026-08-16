@@ -462,13 +462,6 @@ class DayZeroViewModel @Inject constructor(
                 val targetConversationId = sourceMessage?.conversationId
                     ?: _uiState.value.activeConversationId
                     ?: error("Cannot resolve conversation for interaction $interactionId")
-                // Authoritative media source for a resulting image-origin confirm card: the persisted
-                // image user message that owns this interaction chain (paired to the clicked card's
-                // assistant message via the deterministic assistantPlaceholderId). Never guessed.
-                val allowedSourceMediaIds = resolveInteractionImageMediaIds(
-                    conversationId = targetConversationId,
-                    clickedCardMessageId = sourceMessage?.id
-                )
                 val continuationContext = sourceMessage?.assistantCards
                     ?.firstOrNull { it.id == interactionId }
                     ?.let { card ->
@@ -478,6 +471,16 @@ class DayZeroViewModel @Inject constructor(
                             else -> null
                         }
                     }
+                // Authoritative media source for a resulting image-origin confirm card: the persisted
+                // image user message that owns this interaction chain (paired to the clicked card's
+                // assistant message via the deterministic assistantPlaceholderId, or carried forward
+                // by the clicked card's continuationContext once the chain is more than one turn
+                // deep). Never guessed from the whole conversation.
+                val allowedSourceMediaIds = resolveInteractionImageMediaIds(
+                    conversationId = targetConversationId,
+                    clickedCardMessageId = sourceMessage?.id,
+                    continuationContext = continuationContext
+                )
                 latencyLogger.mark(traceId, "room_card_resolve_start")
                 markCardAsResolved(interactionId)
                 latencyLogger.mark(traceId, "room_card_resolve_complete")
@@ -738,10 +741,13 @@ class DayZeroViewModel @Inject constructor(
      */
     private suspend fun resolveInteractionImageMediaIds(
         conversationId: String,
-        clickedCardMessageId: String?
+        clickedCardMessageId: String?,
+        continuationContext: com.goings.dayzero.domain.model.ai.assistant.AssistantContinuationContext? = null
     ): List<String> {
         if (clickedCardMessageId.isNullOrBlank()) return emptyList()
-        return aiDraftRepository.getRecentChatMessages(conversationId, RECENT_MESSAGES_FOR_MEDIA_ORIGIN)
+        val recentMessages =
+            aiDraftRepository.getRecentChatMessages(conversationId, RECENT_MESSAGES_FOR_MEDIA_ORIGIN)
+        val pairedOriginIds = recentMessages
             .firstOrNull { message ->
                 message.role == ChatRole.User &&
                     message.sourceMediaIds.isNotEmpty() &&
@@ -749,6 +755,25 @@ class DayZeroViewModel @Inject constructor(
             }
             ?.sourceMediaIds
             .orEmpty()
+        if (pairedOriginIds.isNotEmpty()) return pairedOriginIds
+
+        // Past the first answer the clicked card lives on an assistant message with its own
+        // id, so the placeholder pairing no longer resolves. The card's continuationContext
+        // carries the origin ids forward; they are accepted only after re-verifying that each
+        // id is still owned by a persisted image user message in this conversation, so remote
+        // data can never widen the allow-list.
+        val carriedIds = (continuationContext?.get(CONTINUATION_MEDIA_IDS_KEY) as? List<*>)
+            ?: return emptyList()
+        val conversationOwnedIds = recentMessages
+            .asSequence()
+            .filter { it.role == ChatRole.User }
+            .flatMap { it.sourceMediaIds.asSequence() }
+            .toSet()
+        return carriedIds
+            .filterIsInstance<String>()
+            .map(String::trim)
+            .filter { it.isNotEmpty() && it in conversationOwnedIds }
+            .distinct()
     }
 
     private suspend fun List<AiChatCard>.withDateMismatchGuardIfNeeded(
@@ -1259,6 +1284,9 @@ class DayZeroViewModel @Inject constructor(
 
         /** Lookback window for pairing an interaction_result confirm card to its origin image message. */
         const val RECENT_MESSAGES_FOR_MEDIA_ORIGIN = 30
+
+        /** continuationContext field carrying the turn's origin media ids across an interaction chain. */
+        const val CONTINUATION_MEDIA_IDS_KEY = "mediaIds"
     }
 
 }

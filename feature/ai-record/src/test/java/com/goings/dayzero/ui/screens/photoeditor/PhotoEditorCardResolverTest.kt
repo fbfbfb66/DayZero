@@ -92,6 +92,37 @@ class PhotoEditorCardResolverTest {
     }
 
     @Test
+    fun unpairedChainedCardFallsBackToItsOwnVerifiedAssignments() {
+        val chainedCard = confirmCard().copy(
+            meals = listOf(
+                ConfirmCardMeal(
+                    "lunch", "午餐", 100,
+                    listOf(ConfirmCardItem(name = "rice", amountText = null, calories = 100, calorieConfidence = "medium")),
+                    // "ghost" belongs to no image message of this conversation.
+                    sourceMediaIds = listOf("m2", "ghost", "m1")
+                )
+            )
+        )
+        val messages = listOf(
+            AiChatMessage(id = "user-1", conversationId = "conv", role = ChatRole.User, text = "", sourceMediaIds = listOf("m1", "m2")),
+            assistantMessage("assistant-chain-2", chainedCard)
+        )
+        assertEquals(
+            listOf("m2", "m1"),
+            resolveOriginMediaIds(messages, "assistant-chain-2", chainedCard)
+        )
+        // Without the card there is nothing legal to fall back to.
+        assertEquals(emptyList<String>(), resolveOriginMediaIds(messages, "assistant-chain-2"))
+    }
+
+    @Test
+    fun editableConfirmCardIsUnwrappedFromGuard() {
+        val inner = confirmCard("card-b")
+        assertEquals(inner, guard("approved", inner).editableConfirmCardOrNull())
+        assertEquals(inner, inner.editableConfirmCardOrNull())
+    }
+
+    @Test
     fun mealLabelFallsBackToLocalizedType() {
         assertEquals("自定义", mealDisplayLabel(ConfirmCardMeal("dinner", "自定义", null, emptyList())))
         assertEquals("早餐", mealDisplayLabel(ConfirmCardMeal("breakfast", null, null, emptyList())))

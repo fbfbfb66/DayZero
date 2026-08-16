@@ -296,6 +296,8 @@ class AiRecordPhotoEditorSavePersistenceTest {
         ) = throw UnsupportedOperationException("not used in this test")
 
         override suspend fun sendAssistantTurnV2WithResponse(
+            url: String,
+            requestId: String,
             request: com.goings.dayzero.data.remote.dto.assistant.AiAssistantRequestDto
         ) = throw UnsupportedOperationException("not used in this test")
 

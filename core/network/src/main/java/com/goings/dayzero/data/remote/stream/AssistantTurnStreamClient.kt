@@ -36,9 +36,10 @@ class AssistantTurnStreamClient(
         }
         val requestJson = requestAdapter.toJson(requestDto)
         val request = Request.Builder()
-            .url(SupabaseConfig.edgeFunctionUrl("assistant-turn-v2-stream"))
+            .url(SupabaseConfig.assistantTurnUrl("assistant-turn-v2-stream"))
             .post(requestJson.toRequestBody("application/json".toMediaType()))
             .header("Accept", "text/event-stream")
+            .header("X-Request-Id", java.util.UUID.randomUUID().toString())
             .build()
 
         okHttpClient.newCall(request).execute().use { response ->

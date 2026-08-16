@@ -25,9 +25,14 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import java.time.LocalDate
 
+// A full pending confirm card (header + weight + meal + strip + buttons) is taller than
+// Robolectric's default 320x470 window, which clips the trailing edit entry to zero height
+// and makes it un-displayable. A phone-sized window keeps the whole card laid out.
 @RunWith(RobolectricTestRunner::class)
+@Config(qualifiers = "w411dp-h891dp")
 class PinnedPhotoStripUiTest {
 
     @get:Rule

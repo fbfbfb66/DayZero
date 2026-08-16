@@ -11,6 +11,12 @@ object ConfirmCardPhotoAssignments {
             .map(String::trim)
             .filter(String::isNotEmpty)
             .distinct()
+        // No known origin set for this turn means "nothing to say about ownership",
+        // not "this card owns no photos". Filtering against an empty allow-list would
+        // silently erase assignments the server already resolved (e.g. a confirm card
+        // produced deeper in an interaction chain, where the origin ids travel in the
+        // continuationContext rather than through a paired image user message).
+        if (allowed.isEmpty()) return meals
         val allowedSet = allowed.toSet()
         val hasAnyExplicitAssignment = meals.any { it.sourceMediaIds != null }
         val defaultIds = if (

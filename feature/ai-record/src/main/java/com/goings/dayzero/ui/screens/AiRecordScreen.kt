@@ -121,6 +121,7 @@ import com.goings.dayzero.domain.ai.isVisionAssistantPlaceholder
 import com.goings.dayzero.ui.screens.photoeditor.PhotoAssignmentEditorActions
 import com.goings.dayzero.ui.screens.photoeditor.PhotoAssignmentEditorScreen
 import com.goings.dayzero.ui.screens.photoeditor.PhotoAssignmentEditorUiState
+import com.goings.dayzero.ui.screens.photoeditor.editableConfirmCardOrNull
 import com.goings.dayzero.ui.screens.photoeditor.resolveOriginMediaIds
 import com.goings.dayzero.ui.theme.BorderNormal
 import com.goings.dayzero.ui.theme.BrandGreen
@@ -957,10 +958,10 @@ private fun ChatMessageRow(
                     }
                 }
             }
-            val originMediaIds = remember(message.id, allMessages) {
-                resolveOriginMediaIds(allMessages, message.id)
-            }
             message.assistantCards.forEach { card ->
+                val originMediaIds = remember(message.id, allMessages, card) {
+                    resolveOriginMediaIds(allMessages, message.id, card.editableConfirmCardOrNull())
+                }
                 AssistantCardRenderer(
                     card = card,
                     actionHandler = actionHandler,

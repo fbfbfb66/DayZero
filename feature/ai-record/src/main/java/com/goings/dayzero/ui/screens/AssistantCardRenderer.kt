@@ -32,6 +32,7 @@ import com.goings.dayzero.ui.components.ai.DebugChoiceCard
 import com.goings.dayzero.ui.components.ai.FoodDraftConfirmCard
 import com.goings.dayzero.ui.components.PhotoViewerItem
 import com.goings.dayzero.ui.components.toPhotoViewerItems
+import com.goings.dayzero.ui.screens.photoeditor.PhotoAssignmentDraft
 import com.goings.dayzero.domain.model.media.MediaAsset
 import com.goings.dayzero.ui.theme.BrandGreen
 import com.goings.dayzero.ui.theme.CardBackground
@@ -149,6 +150,18 @@ private fun RenderShowConfirmCard(
     originMediaIds: List<String> = emptyList(),
     onEditMealPhotos: ((cardId: String, mealIndex: Int) -> Unit)? = null
 ) {
+    // Photo assignment is editable only on a pending card that owns a legal origin
+    // photo set (1..6 distinct ids from the paired image user message). Terminal
+    // cards (confirmed/cancelled) and text-only turns expose no entry, so the strip
+    // renders read-only there.
+    val editPhotos = onEditMealPhotos
+        ?.takeIf {
+            card.state == "pending" &&
+                !card.meals.isNullOrEmpty() &&
+                PhotoAssignmentDraft.isLegalOriginSet(originMediaIds)
+        }
+        ?.let { edit -> { mealIndex: Int -> edit(card.id, mealIndex) } }
+
     FoodDraftConfirmCard(
         card = card,
         onOptionSelected = { interactionId, optionId, optionLabel, payloadSummary ->
@@ -169,7 +182,9 @@ private fun RenderShowConfirmCard(
             )
         },
         photoItemsForMeal = { meal -> meal.sourceMediaIds.toPhotoViewerItems(mediaById) },
-        onMealPhotoClick = onMealPhotoClick
+        onMealPhotoClick = onMealPhotoClick,
+        onEditPhotos = editPhotos,
+        editableOriginPhotoCount = if (editPhotos != null) originMediaIds.size else 0
     )
 }
 

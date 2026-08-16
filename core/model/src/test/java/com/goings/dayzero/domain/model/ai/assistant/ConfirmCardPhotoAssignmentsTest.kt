@@ -60,6 +60,35 @@ class ConfirmCardPhotoAssignmentsTest {
         assertEquals(listOf("a"), result[1].sourceMediaIds)
     }
 
+    @Test fun unknownOriginSetPreservesAlreadyAssignedIdsInsteadOfErasingThem() {
+        // An empty allow-list means "this turn knows no origin set", not "this card owns no
+        // photos": a confirm card produced deeper in an interaction chain carries ids the
+        // server resolved from the continuationContext, and they must survive.
+        assertEquals(
+            listOf("a", "b"),
+            ConfirmCardPhotoAssignments.normalize(listOf(meal(listOf("a", "b"))), emptyList())
+                .single().sourceMediaIds
+        )
+
+        val card = confirm().copy(meals = listOf(meal(listOf("a"))))
+        val guarded = DateMismatchGuardCardPayload(
+            id = "guard",
+            conversationId = "conv",
+            conversationDate = java.time.LocalDate.of(2026, 7, 8),
+            detectedCurrentDate = java.time.LocalDate.of(2026, 7, 9),
+            pendingOriginalCard = card
+        )
+        val result = listOf(card, guarded).normalizeCardPhotoAssignments(emptyList())
+        assertEquals(
+            listOf("a"),
+            (result[0] as ShowConfirmCardPayload).meals?.single()?.sourceMediaIds
+        )
+        assertEquals(
+            listOf("a"),
+            (result[1] as DateMismatchGuardCardPayload).pendingOriginalCard.meals?.single()?.sourceMediaIds
+        )
+    }
+
     @Test fun sanitizerRemovesAskCardsWhenConfirmExistsRegardlessOfOrder() {
         assertEquals(
             listOf(confirm("c")),

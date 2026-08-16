@@ -82,6 +82,153 @@ class DayZeroInteractionResultPhotoAssignmentTest {
     fun interactionResult_edgeWinner_confirmCard_getsOriginImageMediaIds() =
         runInteractionResultAssignmentTest(useFallback = true)
 
+    /**
+     * Second and later answers in one interaction chain: the clicked card no longer lives on the
+     * assistant message paired to the image user message, so the placeholder pairing cannot
+     * resolve the origin set. The card's continuationContext carries the ids forward, and only
+     * ids still owned by an image user message in this conversation may be accepted.
+     */
+    @Test
+    fun interactionResult_deepChain_confirmCardInheritsOriginIdsFromContinuationContext() =
+        runDeepChainTest(
+            remoteSourceMediaIds = null,
+            continuationMediaIds = listOf(MEDIA_ID, "media-from-another-conversation")
+        )
+
+    /**
+     * Same chain depth, but with no ids to inherit locally: the server already resolved the
+     * assignment from its own continuation context, and an unknown local origin set must never
+     * erase it.
+     */
+    @Test
+    fun interactionResult_deepChain_keepsServerAssignedIdsWhenOriginSetIsUnknown() =
+        runDeepChainTest(
+            remoteSourceMediaIds = listOf(MEDIA_ID),
+            continuationMediaIds = null
+        )
+
+    private fun runDeepChainTest(
+        remoteSourceMediaIds: List<String>?,
+        continuationMediaIds: List<String>?
+    ) = runTest(mainDispatcherRule.testDispatcher) {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val directExecutor = java.util.concurrent.Executor { it.run() }
+        database = Room.inMemoryDatabaseBuilder(context, DayZeroDatabase::class.java)
+            .allowMainThreadQueries()
+            .setQueryExecutor(directExecutor)
+            .setTransactionExecutor(directExecutor)
+            .build()
+        aiDraftRepository = RemoteAiDraftRepository(
+            apiService = ThrowingAiDraftApiService(),
+            database = database
+        )
+
+        val conversationId = "conv-img"
+        val imageUserMessageId = "user-image-1"
+        val askCardId = "ask-mealtype-2"
+
+        database.conversationDao().insertConversation(
+            ConversationEntity(
+                id = conversationId,
+                conversationDate = LocalDate.of(2026, 7, 7).toString(),
+                title = "img",
+                lastMessagePreview = "",
+                lastActivityAt = 1000L,
+                createdAt = 1000L,
+                updatedAt = 1000L
+            )
+        )
+        aiDraftRepository.insertChatMessage(
+            conversationId,
+            AiChatMessage(
+                id = imageUserMessageId,
+                conversationId = conversationId,
+                role = ChatRole.User,
+                text = "",
+                sourceMediaIds = listOf(MEDIA_ID)
+            )
+        )
+        // First answer of the chain, already resolved: its card lived on the paired placeholder.
+        aiDraftRepository.insertChatMessage(
+            conversationId,
+            AiChatMessage(
+                id = assistantPlaceholderId(imageUserMessageId),
+                conversationId = conversationId,
+                role = ChatRole.Assistant,
+                text = "要帮你记录吗？"
+            )
+        )
+        aiDraftRepository.insertChatMessage(
+            conversationId,
+            AiChatMessage(
+                id = "user-answer-1",
+                conversationId = conversationId,
+                role = ChatRole.User,
+                text = "已选择：记录"
+            )
+        )
+        // Second question: a brand-new assistant message id that the placeholder pairing of the
+        // image user message can never match.
+        aiDraftRepository.insertChatMessage(
+            conversationId,
+            AiChatMessage(
+                id = "assistant-chain-2",
+                conversationId = conversationId,
+                role = ChatRole.Assistant,
+                text = "这些图片是哪一餐呢？",
+                assistantCards = listOf(
+                    AskMissingInfoCardPayload(
+                        id = askCardId,
+                        title = "选择餐次",
+                        message = "这是哪一餐？",
+                        field = "mealType",
+                        originalText = "",
+                        options = listOf(
+                            AskMissingInfoOption("breakfast", "早餐"),
+                            AskMissingInfoOption("lunch", "午餐")
+                        ),
+                        continuationContext = continuationMediaIds?.let { ids ->
+                            mapOf("schemaVersion" to 1, "mediaIds" to ids)
+                        }
+                    )
+                )
+            )
+        )
+
+        val viewModel = buildViewModel(
+            context,
+            SingleMealConfirmCardAssistantRepository(
+                useFallback = false,
+                sourceMediaIds = remoteSourceMediaIds
+            )
+        )
+
+        viewModel.sendInteractionResult(
+            interactionId = askCardId,
+            actionType = "ask_missing_info_card",
+            optionId = "lunch",
+            optionLabel = "午餐",
+            field = "mealType",
+            originalText = ""
+        )
+        advanceUntilIdle()
+
+        val confirmCard = aiDraftRepository.getRecentChatMessages(conversationId, 50)
+            .lastOrNull { message ->
+                message.role == ChatRole.Assistant &&
+                    message.assistantCards.any { it is ShowConfirmCardPayload }
+            }
+            ?.assistantCards
+            ?.filterIsInstance<ShowConfirmCardPayload>()
+            ?.single()
+        assertNotNull("interaction_result should persist a confirm card", confirmCard)
+        assertEquals(
+            "a chained confirm card must keep exactly the conversation's own origin media ids",
+            listOf(MEDIA_ID),
+            confirmCard!!.meals?.single()?.sourceMediaIds
+        )
+    }
+
     private fun runInteractionResultAssignmentTest(useFallback: Boolean) =
         runTest(mainDispatcherRule.testDispatcher) {
             val context = ApplicationProvider.getApplicationContext<android.content.Context>()
@@ -218,9 +365,13 @@ class DayZeroInteractionResultPhotoAssignmentTest {
         )
     }
 
-    /** Streams (or, on fallback, returns) a single-meal confirm card that omits sourceMediaIds. */
+    /**
+     * Streams (or, on fallback, returns) a single-meal confirm card. [sourceMediaIds] is what the
+     * remote assigned: null models the deployed edge omitting the assignment entirely.
+     */
     private class SingleMealConfirmCardAssistantRepository(
-        private val useFallback: Boolean
+        private val useFallback: Boolean,
+        private val sourceMediaIds: List<String>? = null
     ) : AiAssistantRepository {
         private fun confirmTurn(): AiAssistantTurn {
             val meal = ConfirmCardMeal(
@@ -236,7 +387,7 @@ class DayZeroInteractionResultPhotoAssignmentTest {
                         calorieConfidence = "estimated"
                     )
                 ),
-                sourceMediaIds = null // remote omitted assignment (deployed edge does not set it)
+                sourceMediaIds = sourceMediaIds
             )
             val card = ShowConfirmCardPayload(
                 id = "confirm-1",
@@ -325,10 +476,16 @@ class DayZeroInteractionResultPhotoAssignmentTest {
             request: com.goings.dayzero.data.remote.dto.AiSummaryRequestDto
         ) = throw UnsupportedOperationException("not used in this test")
         override suspend fun sendAssistantTurnV2WithResponse(
+            url: String,
+            requestId: String,
             request: com.goings.dayzero.data.remote.dto.assistant.AiAssistantRequestDto
         ) = throw UnsupportedOperationException("not used in this test")
         override suspend fun classifyUserIntent(
             request: com.goings.dayzero.data.remote.dto.IntentClassifierRequestDto
         ) = throw UnsupportedOperationException("not used in this test")
+    }
+
+    private companion object {
+        const val MEDIA_ID = "media-abc"
     }
 }

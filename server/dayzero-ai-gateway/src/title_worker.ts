@@ -83,6 +83,7 @@ export function loadTitleWorkerConfig(): WorkerConfig {
 export function sanitizeGeneratedTitle(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
   const firstLine = raw.split(/\r?\n/, 1)[0]
+    // deno-lint-ignore no-control-regex
     .replace(/[\u0000-\u001f\u007f]/g, "")
     .trim()
     .replace(/^(?:标题|title)\s*[:：]\s*/i, "")
@@ -161,7 +162,8 @@ async function requestTitle(
           { role: "user", content: text },
         ],
         max_tokens: 64,
-        temperature: 0.2,
+        // kimi-k2.6 rejects any temperature other than 0.6 (HTTP 400).
+        temperature: 0.6,
         stream: false,
         thinking: { type: "disabled" },
       }),

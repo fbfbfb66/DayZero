@@ -639,6 +639,8 @@ class DayZeroConversationPhase2Test {
         override suspend fun generateDailySummary(request: AiSummaryRequestDto): AiSummaryResponseDto = error("unused")
         override suspend fun classifyUserIntent(request: IntentClassifierRequestDto): IntentClassificationResultDto = error("unused")
         override suspend fun sendAssistantTurnV2WithResponse(
+            url: String,
+            requestId: String,
             request: com.goings.dayzero.data.remote.dto.assistant.AiAssistantRequestDto
         ): Response<com.goings.dayzero.data.remote.dto.assistant.AssistantTurnV2ResponseDto> = error("unused")
     }

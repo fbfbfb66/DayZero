@@ -2,6 +2,7 @@ package com.goings.dayzero.ui.screens.photoeditor
 
 import com.goings.dayzero.domain.model.ai.AiChatMessage
 import com.goings.dayzero.domain.model.ai.ChatRole
+import com.goings.dayzero.domain.model.ai.assistant.AiChatCard
 import com.goings.dayzero.domain.model.ai.assistant.ConfirmCardMeal
 import com.goings.dayzero.domain.model.ai.assistant.DateMismatchGuardCardPayload
 import com.goings.dayzero.domain.model.ai.assistant.ShowConfirmCardPayload
@@ -47,14 +48,40 @@ internal fun isCardPhotoEditable(lookup: EditorCardLookup): Boolean =
  * image user message paired to the card's assistant message via the
  * deterministic placeholder id. Never guessed from the whole conversation,
  * the Compose draft, or other image messages.
+ *
+ * Past the first answer of an interaction chain the confirm card lives on an
+ * assistant message with its own id, so that pairing no longer resolves. Then
+ * [card]'s own already-persisted assignments stand in — still not a guess: each
+ * id must belong to an image user message of this conversation.
  */
 internal fun resolveOriginMediaIds(
     messages: List<AiChatMessage>,
-    assistantMessageId: String
-): List<String> =
-    messages.firstOrNull { message ->
+    assistantMessageId: String,
+    card: ShowConfirmCardPayload? = null
+): List<String> {
+    val pairedOriginIds = messages.firstOrNull { message ->
         message.role == ChatRole.User && assistantPlaceholderId(message.id) == assistantMessageId
     }?.sourceMediaIds.orEmpty()
+    if (pairedOriginIds.isNotEmpty() || card == null) return pairedOriginIds
+
+    val conversationOwnedIds = messages
+        .asSequence()
+        .filter { it.role == ChatRole.User }
+        .flatMap { it.sourceMediaIds.asSequence() }
+        .toSet()
+    return card.meals.orEmpty()
+        .flatMap { meal -> meal.sourceMediaIds.orEmpty() }
+        .map(String::trim)
+        .filter { it.isNotEmpty() && it in conversationOwnedIds }
+        .distinct()
+}
+
+/** The editable confirm card a rendered chat card stands for, if any. */
+internal fun AiChatCard.editableConfirmCardOrNull(): ShowConfirmCardPayload? = when (this) {
+    is ShowConfirmCardPayload -> this
+    is DateMismatchGuardCardPayload -> pendingOriginalCard
+    else -> null
+}
 
 internal fun mealDisplayLabel(meal: ConfirmCardMeal): String =
     meal.mealLabel ?: when (meal.mealType.lowercase()) {

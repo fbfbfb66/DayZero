@@ -40,6 +40,8 @@ class DayZeroProtocolValidationTest {
             override suspend fun classifyUserIntent(request: IntentClassifierRequestDto): IntentClassificationResultDto = TODO()
             
             override suspend fun sendAssistantTurnV2WithResponse(
+                url: String,
+                requestId: String,
                 request: AiAssistantRequestDto
             ): Response<AssistantTurnV2ResponseDto> {
                 return onSend(request)

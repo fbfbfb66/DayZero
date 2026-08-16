@@ -16,6 +16,7 @@ export function createTestConfig(overrides: Partial<GatewayConfig> = {}): Gatewa
     supabaseAudience: "authenticated",
     supabaseUrl: TEST_SUPABASE_URL,
     supabaseJwtAudience: "authenticated",
+    supabasePublishableKey: undefined,
     allowedOrigins: ["*"],
     requestBodyLimitBytes: 10 * 1024 * 1024,
     logLevel: "error",

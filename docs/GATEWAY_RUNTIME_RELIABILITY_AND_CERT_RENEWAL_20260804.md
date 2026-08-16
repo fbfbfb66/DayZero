@@ -8,9 +8,9 @@
 
 ## 1. 最终状态
 
-**BLOCKED_NGINX_DYNAMIC_RESOLUTION**
+**GATEWAY_RUNTIME_RELIABILITY_PASSED**（2026-08-15 更新）
 
-Nginx 动态解析修复（以及依赖同一 ECS 访问通道的 restart/recreate 实测与 certbot 续期配置）未能在生产执行：本执行环境没有任何可用的 ECS SSH 凭据。本轮未对现网做任何修改，无需回滚，G2-F1 Gateway 与 HTTPS 服务保持正常运行（公网复测通过，见第 3 节）。
+2026-08-04 时曾因本机无 ECS SSH 凭据而 BLOCKED；2026-08-15 凭据恢复后，第 9 节恢复执行清单已全部落地：动态解析 nginx 配置已部署并经 restart/recreate 双模式烟测通过，certbot timer + deploy hook 已安装且 `renew --dry-run` 通过，同时部署了含 conversation-title-jobs 与 title-worker 的新网关镜像（r4，`sha256:003e1743…c254d3eb`）。详细记录见 `docs/DEVELOPMENT_LOG.md` 2026-08-15 条目。
 
 ---
 

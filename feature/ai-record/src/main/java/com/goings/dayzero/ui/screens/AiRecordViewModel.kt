@@ -557,7 +557,7 @@ class AiRecordViewModel @Inject constructor(
         if (!isCardPhotoEditable(lookup)) return
         val meals = lookup.card.meals.orEmpty()
         if (meals.isEmpty()) return
-        val originIds = resolveOriginMediaIds(messages, lookup.assistantMessageId)
+        val originIds = resolveOriginMediaIds(messages, lookup.assistantMessageId, lookup.card)
         if (!PhotoAssignmentDraft.isLegalOriginSet(originIds)) return
 
         val draft = PhotoAssignmentDraft.fromMeals(cardId, meals, originIds)
