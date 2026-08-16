@@ -185,6 +185,29 @@ class AiRecordPhase3Test {
     }
 
     @Test
+    fun homePlusMenuShowsPhotoEntriesAndTakePhotoCallbackFires() {
+        var takePhotoCount = 0
+        composeRule.setContent {
+            MyApplicationTheme {
+                AiRecordHomeScreen(
+                    state = AiConversationHistoryState(isLoading = false, homeInputText = ""),
+                    isAnalyzing = false,
+                    onInputChange = {},
+                    onSubmit = {},
+                    onOpenConversation = {},
+                    onTakePhoto = { takePhotoCount += 1 }
+                )
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("More").performClick()
+        composeRule.onNodeWithText("拍照").assertIsDisplayed()
+        composeRule.onNodeWithText("从照片选择").assertIsDisplayed()
+        composeRule.onNodeWithText("拍照").performClick()
+        assertEquals(1, takePhotoCount)
+    }
+
+    @Test
     fun conversationComposeShowsOnlyProvidedMessagesAndExistingCardRenderer() {
         val messages = listOf(
             AiChatMessage(conversationId = "a", role = ChatRole.User, text = "A visible"),
