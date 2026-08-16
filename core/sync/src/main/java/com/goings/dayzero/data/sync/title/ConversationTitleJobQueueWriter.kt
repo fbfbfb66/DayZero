@@ -14,16 +14,18 @@ class ConversationTitleJobQueueWriter(
         firstUserMessageId: String,
         firstUserText: String,
         identity: AppIdentity,
+        firstUserMediaCount: Int = 0,
         now: Long = System.currentTimeMillis()
     ): Boolean {
         val text = firstUserText.trim()
-        if (text.isBlank()) return false
+        if (text.isBlank() && firstUserMediaCount <= 0) return false
 
         val payload = JSONObject()
             .put("requestId", ConversationTitleSyncContract.requestId(conversationId, firstUserMessageId))
             .put("conversationId", conversationId)
             .put("firstUserMessageId", firstUserMessageId)
             .put("firstUserText", text)
+            .put("firstUserMediaCount", firstUserMediaCount.coerceIn(0, 6))
             .put("schemaVersion", 1)
 
         return syncQueueDao.insertIgnore(

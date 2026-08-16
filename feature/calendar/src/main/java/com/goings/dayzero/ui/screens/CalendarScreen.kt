@@ -3,6 +3,7 @@ package com.goings.dayzero.ui.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
@@ -37,13 +38,18 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SelectableDates
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -55,6 +61,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -80,8 +87,10 @@ import com.goings.dayzero.ui.components.PinnedPhotoStrip
 import com.goings.dayzero.ui.components.PhotoViewerItem
 import com.goings.dayzero.ui.components.PhotoViewerOverlay
 import com.goings.dayzero.ui.components.toPhotoViewerItems
+import java.time.Instant
 import java.time.LocalDate
 import java.time.YearMonth
+import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
@@ -94,6 +103,21 @@ fun CalendarScreen(uiState: AppState, onNavigateToAi: () -> Unit) {
     val daysInMonth = yearMonth.lengthOfMonth()
     val firstDayOfMonth = yearMonth.atDay(1)
     val firstDayOffset = firstDayOfMonth.dayOfWeek.value - 1 // 0 for Monday
+
+    // 可浏览范围：最早到首个记录所在年份的一月（近似注册年份），最晚到当前月份
+    val currentMonth = YearMonth.from(uiState.currentDate)
+    val minMonth = remember(uiState.records) {
+        val earliestYear = uiState.records.minOfOrNull { it.date }?.year
+        YearMonth.of(earliestYear ?: currentMonth.year, 1)
+    }
+    var showDatePicker by remember { mutableStateOf(false) }
+
+    fun shiftMonth(delta: Long) {
+        val target = yearMonth.plusMonths(delta).coerceIn(minMonth, currentMonth)
+        if (target != yearMonth) {
+            selectedDate = target.atDay(minOf(selectedDate.dayOfMonth, target.lengthOfMonth()))
+        }
+    }
 
     val confirmedRecords = uiState.records.filter { it.status == RecordStatus.Confirmed }
     val recordForSelectedDate = confirmedRecords.find { it.date == selectedDate }
@@ -156,7 +180,11 @@ fun CalendarScreen(uiState: AppState, onNavigateToAi: () -> Unit) {
                     style = MaterialTheme.typography.titleLarge,
                     fontFamily = FontFamily.Serif,
                     fontWeight = FontWeight.Bold,
-                    color = TextPrimary
+                    color = TextPrimary,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { showDatePicker = true }
+                        .padding(horizontal = 4.dp, vertical = 2.dp)
                 )
 
                 Surface(
@@ -197,6 +225,25 @@ fun CalendarScreen(uiState: AppState, onNavigateToAi: () -> Unit) {
                         ambientColor = androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.1f),
                         spotColor = androidx.compose.ui.graphics.Color.Transparent
                     )
+                    // 上下滑动切换月份：上滑下个月，下滑上个月，范围限制在 [minMonth, currentMonth]
+                    .pointerInput(yearMonth, minMonth, currentMonth) {
+                        var accumulated = 0f
+                        detectVerticalDragGestures(
+                            onVerticalDrag = { change, dragAmount ->
+                                change.consume()
+                                accumulated += dragAmount
+                            },
+                            onDragEnd = {
+                                val threshold = 40.dp.toPx()
+                                when {
+                                    accumulated <= -threshold -> shiftMonth(1)
+                                    accumulated >= threshold -> shiftMonth(-1)
+                                }
+                                accumulated = 0f
+                            },
+                            onDragCancel = { accumulated = 0f }
+                        )
+                    }
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     // Days of week header
@@ -376,6 +423,44 @@ fun CalendarScreen(uiState: AppState, onNavigateToAi: () -> Unit) {
             }
         }
     }
+    if (showDatePicker) {
+        val minDate = minMonth.atDay(1)
+        val maxDate = uiState.currentDate
+        val pickerState = rememberDatePickerState(
+            initialSelectedDateMillis = selectedDate
+                .coerceIn(minDate, maxDate)
+                .atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli(),
+            yearRange = minMonth.year..currentMonth.year,
+            selectableDates = object : SelectableDates {
+                override fun isSelectableDate(utcTimeMillis: Long): Boolean {
+                    val date = Instant.ofEpochMilli(utcTimeMillis).atZone(ZoneOffset.UTC).toLocalDate()
+                    return !date.isBefore(minDate) && !date.isAfter(maxDate)
+                }
+
+                override fun isSelectableYear(year: Int): Boolean =
+                    year in minMonth.year..currentMonth.year
+            }
+        )
+        DatePickerDialog(
+            onDismissRequest = { showDatePicker = false },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pickerState.selectedDateMillis?.let { millis ->
+                            selectedDate = Instant.ofEpochMilli(millis)
+                                .atZone(ZoneOffset.UTC).toLocalDate()
+                        }
+                        showDatePicker = false
+                    }
+                ) { Text("确定", color = BrandGreen) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDatePicker = false }) { Text("取消", color = TextSecondary) }
+            }
+        ) {
+            DatePicker(state = pickerState)
+        }
+    }
     viewer?.let { activeViewer ->
         PhotoViewerOverlay(
             items = activeViewer.items,
@@ -394,6 +479,8 @@ fun ExpandableMealItem(
     onPhotoClick: (List<PhotoViewerItem>, Int) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
+    val photoItems = meal.mediaIds.toPhotoViewerItems(mediaById)
+    val hasDetails = meal.foods.isNotEmpty() || photoItems.isNotEmpty()
 
     Column(
         modifier = Modifier
@@ -411,7 +498,7 @@ fun ExpandableMealItem(
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("${meal.mealCalories} kcal", color = TextSecondary)
-                if (meal.foods.isNotEmpty()) {
+                if (hasDetails) {
                     Spacer(modifier = Modifier.width(4.dp))
                     Icon(
                         if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
@@ -423,7 +510,7 @@ fun ExpandableMealItem(
             }
         }
         
-        AnimatedVisibility(visible = expanded && meal.foods.isNotEmpty()) {
+        AnimatedVisibility(visible = expanded && hasDetails) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -440,16 +527,15 @@ fun ExpandableMealItem(
                         Text(food.estimatedCalories.toString() + " kcal", color = com.goings.dayzero.ui.theme.TextTertiary, fontSize = 12.sp)
                     }
                 }
+                if (photoItems.isNotEmpty()) {
+                    PinnedPhotoStrip(
+                        items = photoItems,
+                        onPhotoClick = { index -> onPhotoClick(photoItems, index) },
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                        onEditClick = null
+                    )
+                }
             }
-        }
-        val photoItems = meal.mediaIds.toPhotoViewerItems(mediaById)
-        if (photoItems.isNotEmpty()) {
-            PinnedPhotoStrip(
-                items = photoItems,
-                onPhotoClick = { index -> onPhotoClick(photoItems, index) },
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                onEditClick = null
-            )
         }
     }
 }

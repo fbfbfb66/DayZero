@@ -1,6 +1,7 @@
 package com.goings.dayzero.sync
 
 import android.content.Context
+import android.util.Log
 import androidx.hilt.work.HiltWorker
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
@@ -14,6 +15,8 @@ import androidx.work.workDataOf
 import com.goings.dayzero.data.local.dao.SyncQueueDao
 import com.goings.dayzero.data.sync.DayZeroSyncConstants
 import com.goings.dayzero.data.sync.SyncCoordinator
+import com.goings.dayzero.data.sync.SyncScheduler
+import com.goings.dayzero.data.sync.SyncTriggerReason
 import com.goings.dayzero.data.sync.title.ConversationTitleSyncContract
 import com.goings.dayzero.domain.sync.ConversationTitleDeliveryScheduler
 import dagger.assisted.Assisted
@@ -27,10 +30,15 @@ class ConversationTitleDeliveryWorker @AssistedInject constructor(
     @Assisted appContext: Context,
     @Assisted params: WorkerParameters,
     private val syncCoordinator: SyncCoordinator,
-    private val syncQueueDao: SyncQueueDao
+    private val syncQueueDao: SyncQueueDao,
+    private val syncScheduler: SyncScheduler
 ) : CoroutineWorker(appContext, params) {
 
     override suspend fun doWork(): Result {
+        val repaired = syncQueueDao.resetUnsupportedConversationTitleJobs()
+        if (repaired > 0) {
+            Log.d("DayZeroTitleDelivery", "requeued unsupported-op title jobs count=$repaired")
+        }
         syncCoordinator.runOnce()
         val conversationId = inputData.getString(KEY_CONVERSATION_ID)
         if (conversationId != null) {
@@ -40,8 +48,11 @@ class ConversationTitleDeliveryWorker @AssistedInject constructor(
                 )
             ) {
                 null,
-                DayZeroSyncConstants.STATUS_DONE,
                 DayZeroSyncConstants.STATUS_FAILED_FATAL -> Result.success()
+                DayZeroSyncConstants.STATUS_DONE -> {
+                    scheduleTitlePullback()
+                    Result.success()
+                }
                 else -> Result.retry()
             }
         }
@@ -51,15 +62,27 @@ class ConversationTitleDeliveryWorker @AssistedInject constructor(
                 ConversationTitleSyncContract.OP_SUBMIT_TITLE_JOB
             ) == 0
         ) {
+            scheduleTitlePullback()
             Result.success()
         } else {
             Result.retry()
         }
     }
 
+    /**
+     * The server-side title worker generates the title a few seconds after the job is
+     * accepted; pull shortly after submission so the AI title (and title_source) flows
+     * back without waiting for the next app-start pull.
+     */
+    private suspend fun scheduleTitlePullback() {
+        kotlinx.coroutines.delay(TITLE_PULLBACK_DELAY_MS)
+        syncScheduler.requestPull(SyncTriggerReason.RETRY)
+    }
+
     companion object {
         private const val KEY_CONVERSATION_ID = "conversation_id"
         private const val RECONCILE_WORK_NAME = "conversation-title:outbox-reconcile"
+        private const val TITLE_PULLBACK_DELAY_MS = 15_000L
 
         private fun request(conversationId: String? = null) =
             OneTimeWorkRequestBuilder<ConversationTitleDeliveryWorker>()

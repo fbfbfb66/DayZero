@@ -21,6 +21,19 @@ interface ConversationDao {
     @Query("SELECT * FROM conversations WHERE deletedAt IS NULL ORDER BY lastActivityAt DESC, createdAt DESC")
     fun observeConversationsByLastActivity(): Flow<List<ConversationEntity>>
 
+    @Query(
+        """
+        SELECT * FROM conversations
+        WHERE deletedAt IS NULL
+          AND EXISTS (
+            SELECT 1 FROM ai_chat_messages m
+            WHERE m.conversationId = conversations.id AND m.deletedAt IS NULL
+          )
+        ORDER BY lastActivityAt DESC, createdAt DESC
+        """
+    )
+    fun observeNonEmptyConversationsByLastActivity(): Flow<List<ConversationEntity>>
+
     @Query("SELECT * FROM conversations WHERE deletedAt IS NULL ORDER BY lastActivityAt DESC, createdAt DESC LIMIT 1")
     suspend fun getLatestActiveConversation(): ConversationEntity?
 
@@ -55,6 +68,26 @@ interface ConversationDao {
     suspend fun updateConversationSummary(
         id: String,
         title: String,
+        lastMessagePreview: String,
+        lastActivityAt: Long,
+        updatedAt: Long
+    )
+
+    @Query(
+        """
+        UPDATE conversations
+        SET title = :title,
+            titleSource = :titleSource,
+            lastMessagePreview = :lastMessagePreview,
+            lastActivityAt = :lastActivityAt,
+            updatedAt = :updatedAt
+        WHERE id = :id
+        """
+    )
+    suspend fun updateConversationSummaryWithTitleSource(
+        id: String,
+        title: String,
+        titleSource: String,
         lastMessagePreview: String,
         lastActivityAt: Long,
         updatedAt: Long

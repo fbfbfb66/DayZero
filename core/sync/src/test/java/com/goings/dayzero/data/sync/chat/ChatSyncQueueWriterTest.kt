@@ -80,6 +80,7 @@ class ChatSyncQueueWriterTest {
         override suspend fun insert(item: com.goings.dayzero.data.local.entity.SyncQueueEntity) {}
         override suspend fun insertIgnore(item: com.goings.dayzero.data.local.entity.SyncQueueEntity): Long = 1L
         override suspend fun getStatusById(id: String): String? = null
+        override fun observeActiveConversationTitleJobIds(recentDoneAfter: Long): kotlinx.coroutines.flow.Flow<List<String>> = kotlinx.coroutines.flow.flowOf(emptyList())
         override suspend fun countActiveTasksForOperation(operation: String): Int = 0
         override suspend fun getRunnableTasks(now: Long, limit: Int): List<com.goings.dayzero.data.local.entity.SyncQueueEntity> = emptyList()
         override suspend fun getPending(now: Long, limit: Int): List<com.goings.dayzero.data.local.entity.SyncQueueEntity> = emptyList()
@@ -87,6 +88,7 @@ class ChatSyncQueueWriterTest {
         override suspend fun markDone(id: String, updatedAt: Long) {}
         override suspend fun markRetryableFailure(id: String, error: String?, retryCount: Int, updatedAt: Long, nextAttemptAt: Long, reason: String?) {}
         override suspend fun markFatalFailure(id: String, error: String?, updatedAt: Long, reason: String?) {}
+        override suspend fun resetUnsupportedConversationTitleJobs(now: Long): Int = 0
         override suspend fun markWaitingForAuth(id: String, reason: String?, updatedAt: Long, nextAttemptAt: Long) {}
         override fun observePendingCount(): kotlinx.coroutines.flow.Flow<Int> = kotlinx.coroutines.flow.flowOf(0)
         override suspend fun getPendingCount(): Int = 0

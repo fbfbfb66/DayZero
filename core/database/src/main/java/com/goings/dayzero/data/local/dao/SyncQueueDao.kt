@@ -49,6 +49,24 @@ interface SyncQueueDao {
     @Query("SELECT status FROM sync_queue WHERE id = :id LIMIT 1")
     suspend fun getStatusById(id: String): String?
 
+    /**
+     * Conversation ids whose AI title is still being produced: the submit task is either
+     * in flight, or was submitted recently (DONE) and the generated title has not flowed
+     * back yet. DONE rows age out after a short window so a stalled server-side pipeline
+     * falls back to showing the local title instead of an endless loading state.
+     */
+    @Query(
+        """
+        SELECT DISTINCT entityLocalId FROM sync_queue
+        WHERE operation = 'SUBMIT_AI_CONVERSATION_TITLE_JOB'
+          AND (
+            status IN ('PENDING', 'PROCESSING', 'FAILED_RETRYABLE', 'WAITING_FOR_AUTH')
+            OR (status = 'DONE' AND updatedAt > :recentDoneAfter)
+          )
+        """
+    )
+    fun observeActiveConversationTitleJobIds(recentDoneAfter: Long): Flow<List<String>>
+
     @Query(
         """
         SELECT COUNT(*) FROM sync_queue
@@ -107,6 +125,27 @@ interface SyncQueueDao {
         updatedAt: Long = System.currentTimeMillis(),
         reason: String? = null
     )
+
+    /**
+     * One-shot repair for conversation-title jobs that were killed by a client build whose
+     * payload parser rejected the SUBMIT_AI_CONVERSATION_TITLE_JOB operation as unsupported.
+     * Such rows never reached the gateway, so it is safe to queue them again.
+     */
+    @Query(
+        """
+        UPDATE sync_queue
+        SET status = 'PENDING',
+            retryCount = 0,
+            lastError = NULL,
+            lastStatusReason = 'unsupported_operation_repair',
+            updatedAt = :now,
+            nextAttemptAt = 0
+        WHERE operation = 'SUBMIT_AI_CONVERSATION_TITLE_JOB'
+          AND status = 'FAILED_FATAL'
+          AND lastError LIKE 'unsupported operation%'
+        """
+    )
+    suspend fun resetUnsupportedConversationTitleJobs(now: Long = System.currentTimeMillis()): Int
 
     @Query("UPDATE sync_queue SET status = 'WAITING_FOR_AUTH', lastError = :reason, lastStatusReason = :reason, updatedAt = :updatedAt, nextAttemptAt = :nextAttemptAt WHERE id = :id")
     suspend fun markWaitingForAuth(

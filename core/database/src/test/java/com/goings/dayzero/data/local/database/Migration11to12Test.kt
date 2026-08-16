@@ -37,12 +37,12 @@ class Migration11to12Test {
         }
 
         val roomDb = Room.databaseBuilder(context, DayZeroDatabase::class.java, databaseName)
-            .addMigrations(DayZeroDatabase.MIGRATION_11_12, DayZeroDatabase.MIGRATION_12_13)
+            .addMigrations(DayZeroDatabase.MIGRATION_11_12, DayZeroDatabase.MIGRATION_12_13, DayZeroDatabase.MIGRATION_13_14)
             .allowMainThreadQueries()
             .build()
 
         val supportDb = roomDb.openHelper.writableDatabase
-        assertEquals(13, supportDb.version)
+        assertEquals(14, supportDb.version)
 
         assertConversationPreserved(supportDb)
         assertMessagesPreserved(supportDb)

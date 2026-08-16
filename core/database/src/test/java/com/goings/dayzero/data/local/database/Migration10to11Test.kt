@@ -172,7 +172,8 @@ class Migration10to11Test {
         .addMigrations(
             DayZeroDatabase.MIGRATION_10_11,
             DayZeroDatabase.MIGRATION_11_12,
-            DayZeroDatabase.MIGRATION_12_13
+            DayZeroDatabase.MIGRATION_12_13,
+            DayZeroDatabase.MIGRATION_13_14
         )
         .allowMainThreadQueries()
         .build()

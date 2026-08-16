@@ -19,5 +19,7 @@ data class ConversationEntity(
     val createdAt: Long,
     val updatedAt: Long,
     val lastActivityAt: Long,
-    val deletedAt: Long? = null
+    val deletedAt: Long? = null,
+    @androidx.room.ColumnInfo(defaultValue = "local_fallback")
+    val titleSource: String = "local_fallback"
 )

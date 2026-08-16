@@ -15,6 +15,14 @@ interface AiDraftRepository {
 
     suspend fun createConversationWithFirstMessage(text: String, now: Long = System.currentTimeMillis()): String?
 
+    /**
+     * Ensures a local-only draft conversation row exists so that media attachments can be
+     * staged against it before the first message is sent (home-screen photo draft).
+     * No-op when the conversation already exists. Returns true when a draft row was inserted.
+     * The default no-op keeps in-memory test fakes unchanged.
+     */
+    suspend fun ensureDraftConversation(conversationId: String, now: Long = System.currentTimeMillis()): Boolean = false
+
     suspend fun getRecentChatMessages(conversationId: String, limit: Int): List<AiChatMessage>
     
     suspend fun findMessageByAssistantCardId(cardId: String): AiChatMessage?

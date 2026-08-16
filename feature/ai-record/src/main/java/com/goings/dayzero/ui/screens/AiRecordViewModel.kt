@@ -74,7 +74,8 @@ data class AiConversationHistoryState(
     val lastCreatedConversationId: String? = null,
     val errorMessage: String? = null,
     val homeConversationId: String? = null,
-    val draftState: ConversationAttachmentDraftState? = null
+    val draftState: ConversationAttachmentDraftState? = null,
+    val pendingTitleConversationIds: Set<String> = emptySet()
 )
 
 data class AiConversationDetailState(
@@ -211,9 +212,10 @@ class AiRecordViewModel @Inject constructor(
         val attachmentIds = draft?.attachmentIds.orEmpty()
         val text = historyTransient.value.homeInputText
         if (!convId.isNullOrBlank() && attachmentIds.isNotEmpty()) {
+            // Home text and the draft conversation id are cleared inside
+            // submitMediaMessage once the media transaction commits, so a failed
+            // send keeps the home draft intact for retry.
             submitMediaMessage(convId, text, attachmentIds)
-            savedStateHandle.remove<String>(KEY_HOME_CONVERSATION_ID)
-            homeConversationId.value = null
         } else {
             createConversationWithFirstMessage(text)
         }
@@ -338,6 +340,9 @@ class AiRecordViewModel @Inject constructor(
             try {
                 val identity = currentIdentityProvider.currentIdentity()
                 val ownerId = identity.localOwnerId
+                // Home-screen drafts reference a conversation that has no Room row yet;
+                // create the placeholder first so media staging satisfies the foreign key.
+                aiDraftRepository.ensureDraftConversation(conversationId, System.currentTimeMillis())
                 val requests = toImport.map { uri ->
                     ImportLocalMediaRequest(
                         conversationId = conversationId,
@@ -353,7 +358,7 @@ class AiRecordViewModel @Inject constructor(
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Exception) {
-                // Failures logged
+                android.util.Log.e(VIEW_MODEL_TAG, "importPhotos failed conversationId=$conversationId", e)
             } finally {
                 importingCounts.update {
                     val count = it[conversationId] ?: 0
@@ -384,6 +389,8 @@ class AiRecordViewModel @Inject constructor(
             try {
                 val identity = currentIdentityProvider.currentIdentity()
                 val ownerId = identity.localOwnerId
+                // See importPhotos: home-screen drafts need a local conversation row first.
+                aiDraftRepository.ensureDraftConversation(conversationId, System.currentTimeMillis())
                 val requests = listOf(
                     ImportLocalMediaRequest(
                         conversationId = conversationId,
@@ -403,7 +410,7 @@ class AiRecordViewModel @Inject constructor(
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Exception) {
-                // Exceptions caught
+                android.util.Log.e(VIEW_MODEL_TAG, "importCameraCapture failed conversationId=$conversationId", e)
             } finally {
                 importingCounts.update {
                     val count = it[conversationId] ?: 0
@@ -501,6 +508,13 @@ class AiRecordViewModel @Inject constructor(
                             userMessageId
                         }
                         removeSubmittedDraftIds(conversationId, attachments)
+                        if (conversationId == homeConversationId.value) {
+                            // Home-originated send: clear the home input text and the
+                            // temporary draft conversation id now that the send succeeded.
+                            savedStateHandle.remove<String>(KEY_HOME_CONVERSATION_ID)
+                            homeConversationId.value = null
+                            historyTransient.update { it.copy(homeInputText = "", errorMessage = null) }
+                        }
                         _events.tryEmit(
                             AiRecordConversationEvent.MediaMessageCommitted(
                                 conversationId = conversationId,
@@ -688,10 +702,16 @@ class AiRecordViewModel @Inject constructor(
     }
 
     private fun observeHistory(): Flow<AiConversationHistoryState> {
-        return conversationRepository.observeConversationsByLastActivity()
-            .map { conversations ->
-                AiConversationHistoryState(conversations = conversations, isLoading = false)
-            }
+        return combine(
+            conversationRepository.observeNonEmptyConversationsByLastActivity(),
+            conversationRepository.observePendingAiTitleConversationIds()
+        ) { conversations, pendingTitleIds ->
+            AiConversationHistoryState(
+                conversations = conversations,
+                isLoading = false,
+                pendingTitleConversationIds = pendingTitleIds
+            )
+        }
             .onStart { emit(AiConversationHistoryState(isLoading = true)) }
             .catch { error ->
                 emit(
@@ -755,5 +775,6 @@ class AiRecordViewModel @Inject constructor(
         private const val KEY_HOME_CONVERSATION_ID = "home_conversation_id"
         private const val MAX_ATTACHMENT_COUNT = 6
         private const val NETWORK_GATE_TAG = "DayZeroNetworkGate"
+        private const val VIEW_MODEL_TAG = "AiRecordViewModel"
     }
 }

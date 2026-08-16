@@ -163,6 +163,31 @@ class RemoteAiDraftRepository(
         return conversationId
     }
 
+    override suspend fun ensureDraftConversation(conversationId: String, now: Long): Boolean {
+        if (conversationId.isBlank()) return false
+        if (conversationDao.getConversationById(conversationId) != null) return false
+        // Local-only placeholder so home-screen photo drafts satisfy the media_assets
+        // foreign key before the first message exists. Deliberately not enqueued for
+        // sync: committing the first media message pushes the conversation remotely.
+        val date = Instant.ofEpochMilli(now)
+            .atZone(ZoneId.systemDefault())
+            .toLocalDate()
+            .toString()
+        conversationDao.insertConversation(
+            ConversationEntity(
+                id = conversationId,
+                conversationDate = date,
+                title = neutralTitle(date),
+                lastMessagePreview = "",
+                createdAt = now,
+                updatedAt = now,
+                lastActivityAt = now,
+                deletedAt = null
+            )
+        )
+        return true
+    }
+
     override suspend fun getRecentChatMessages(conversationId: String, limit: Int): List<AiChatMessage> {
         return chatDao.getRecentMessagesByConversationId(conversationId, limit)
             .asReversed()

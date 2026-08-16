@@ -210,6 +210,13 @@ fun MainApp() {
                 }
 
                 is AiRecordConversationEvent.MediaMessageCommitted -> {
+                    // Sends initiated from the home prompt should land on the conversation
+                    // page, exactly like the text-first-message path does.
+                    if (navController.currentDestination?.route != AI_CONVERSATION_ROUTE) {
+                        navController.navigate(aiConversationRoute(event.conversationId)) {
+                            launchSingleTop = true
+                        }
+                    }
                     viewModel.startVisionAssistantTurnForExistingUserMessage(
                         conversationId = event.conversationId,
                         userMessageId = event.userMessageId

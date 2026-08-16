@@ -14,7 +14,8 @@ class ConversationEntityMapper {
             createdAt = entity.createdAt,
             updatedAt = entity.updatedAt,
             lastActivityAt = entity.lastActivityAt,
-            deletedAt = entity.deletedAt
+            deletedAt = entity.deletedAt,
+            titleSource = entity.titleSource
         )
     }
 
@@ -27,7 +28,8 @@ class ConversationEntityMapper {
             createdAt = domain.createdAt,
             updatedAt = domain.updatedAt,
             lastActivityAt = domain.lastActivityAt,
-            deletedAt = domain.deletedAt
+            deletedAt = domain.deletedAt,
+            titleSource = domain.titleSource
         )
     }
 }

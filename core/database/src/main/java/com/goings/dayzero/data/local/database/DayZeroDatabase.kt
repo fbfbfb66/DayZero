@@ -31,7 +31,7 @@ import java.util.UUID
         SyncQueueEntity::class,
         MediaAssetEntity::class
     ],
-    version = 13,
+    version = 14,
     exportSchema = false
 )
 abstract class DayZeroDatabase : RoomDatabase() {
@@ -326,6 +326,19 @@ abstract class DayZeroDatabase : RoomDatabase() {
             }
         }
 
+        internal val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                Log.d("DayZeroSync", "room migration start 13->14")
+                try {
+                    db.execSQL("ALTER TABLE conversations ADD COLUMN titleSource TEXT NOT NULL DEFAULT 'local_fallback'")
+                    Log.d("DayZeroSync", "room migration success 13->14")
+                } catch (e: Exception) {
+                    Log.e("DayZeroSync", "room migration error 13->14", e)
+                    throw e
+                }
+            }
+        }
+
         val ALL_MIGRATIONS = arrayOf(
             MIGRATION_5_6,
             MIGRATION_6_7,
@@ -334,7 +347,8 @@ abstract class DayZeroDatabase : RoomDatabase() {
             MIGRATION_9_10,
             MIGRATION_10_11,
             MIGRATION_11_12,
-            MIGRATION_12_13
+            MIGRATION_12_13,
+            MIGRATION_13_14
         )
 
         fun getDatabase(context: Context): DayZeroDatabase {

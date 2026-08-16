@@ -6,8 +6,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -59,6 +58,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -111,6 +111,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.coerceAtLeast
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
 import com.goings.dayzero.domain.model.AppState
 import com.goings.dayzero.domain.model.ai.AiChatMessage
 import com.goings.dayzero.domain.model.ai.ChatRole
@@ -318,6 +319,8 @@ fun AiRecordHomeScreen(
                 ) { conversation ->
                     ConversationHistoryRow(
                         conversation = conversation,
+                        isTitlePending = conversation.titleSource == "local_fallback" &&
+                            conversation.id in state.pendingTitleConversationIds,
                         onClick = { onOpenConversation(conversation.id) }
                     )
                 }
@@ -716,17 +719,6 @@ private fun HomePromptBox(
     val sendEnabled = (text.isNotBlank() || hasDraftAttachments) && enabled && !isBusy
 
     Column(modifier = modifier.fillMaxWidth()) {
-        AnimatedVisibility(
-            visible = isPlusMenuOpen,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically()
-        ) {
-            PlusMenuCard(
-                onTakePhoto = onTakePhoto,
-                onSelectPhotos = onSelectPhotos
-            )
-        }
-
         val showDraftBar = draft != null && (draft.attachmentIds.isNotEmpty() || draft.importingCount > 0)
         AnimatedVisibility(
             visible = showDraftBar,
@@ -795,6 +787,17 @@ private fun HomePromptBox(
                                 modifier = Modifier.graphicsLayer { rotationZ = angle }
                             )
                         }
+                        if (isPlusMenuOpen) {
+                            Popup(
+                                alignment = Alignment.BottomStart,
+                                onDismissRequest = { onPlusMenuToggle(false) }
+                            ) {
+                                PlusMenuCard(
+                                    onTakePhoto = onTakePhoto,
+                                    onSelectPhotos = onSelectPhotos
+                                )
+                            }
+                        }
                     }
 
                     Text(
@@ -839,6 +842,7 @@ private fun HomePromptBox(
 @Composable
 private fun ConversationHistoryRow(
     conversation: Conversation,
+    isTitlePending: Boolean = false,
     onClick: () -> Unit
 ) {
     Surface(
@@ -852,15 +856,52 @@ private fun ConversationHistoryRow(
         border = BorderStroke(1.dp, BorderNormal.copy(alpha = 0.45f)),
         shadowElevation = 0.dp
     ) {
-        Text(
-            text = conversation.title.ifBlank { "Conversation" },
-            color = TextPrimary,
-            fontWeight = FontWeight.SemiBold,
-            fontSize = 15.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)
-        )
+        if (isTitlePending) {
+            TitleLoadingDots()
+        } else {
+            Text(
+                text = conversation.title.ifBlank { "Conversation" },
+                color = TextPrimary,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 15.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun TitleLoadingDots(modifier: Modifier = Modifier) {
+    val transition = androidx.compose.animation.core.rememberInfiniteTransition(label = "titleLoading")
+    Row(
+        modifier = modifier.padding(horizontal = 16.dp, vertical = 18.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        repeat(3) { index ->
+            val alpha by transition.animateFloat(
+                initialValue = 0.25f,
+                targetValue = 1f,
+                animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+                    animation = androidx.compose.animation.core.tween(
+                        durationMillis = 600,
+                        delayMillis = index * 150
+                    ),
+                    repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
+                ),
+                label = "dot$index"
+            )
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .clip(CircleShape)
+                    .background(TextSecondary.copy(alpha = alpha))
+            )
+            if (index < 2) {
+                Spacer(modifier = Modifier.width(4.dp))
+            }
+        }
     }
 }
 
@@ -1055,17 +1096,6 @@ private fun ConversationInputBar(
             .navigationBarsPadding()
             .padding(bottom = 8.dp)
     ) {
-        AnimatedVisibility(
-            visible = isPlusMenuOpen,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically()
-        ) {
-            PlusMenuCard(
-                onTakePhoto = onTakePhoto,
-                onSelectPhotos = onSelectPhotos
-            )
-        }
-
         val showDraftBar = draft != null && (draft.attachmentIds.isNotEmpty() || draft.importingCount > 0)
         AnimatedVisibility(
             visible = showDraftBar,
@@ -1241,6 +1271,17 @@ private fun ConversationInputBar(
                         tint = if (isPlusDisabled) TextSecondary.copy(alpha = 0.3f) else TextSecondary,
                         modifier = Modifier.graphicsLayer { rotationZ = angle }
                     )
+                }
+                if (isPlusMenuOpen) {
+                    Popup(
+                        alignment = Alignment.BottomStart,
+                        onDismissRequest = { onPlusMenuToggle(false) }
+                    ) {
+                        PlusMenuCard(
+                            onTakePhoto = onTakePhoto,
+                            onSelectPhotos = onSelectPhotos
+                        )
+                    }
                 }
             }
         }

@@ -13,7 +13,8 @@ export const TITLE_SYSTEM_PROMPT = `你是聊天会话标题生成器。
 6. 不要机械复制整句，要概括核心主题或意图。
 7. 不要加入用户没有提到的信息。
 8. 避免在标题中完整暴露手机号、邮箱、身份证号、精确地址等敏感信息。
-9. 不要使用换行。`;
+9. 不要使用换行。
+10. 如果第一条消息包含图片，结合图片内容概括标题；纯图片消息也要生成标题。`;
 
 type WorkerConfig = {
   supabaseUrl: string;
@@ -32,8 +33,11 @@ type WorkerConfig = {
 
 export type TitleJob = {
   id: string;
+  user_id: string;
   conversation_id: string;
+  first_user_message_id: string;
   first_user_text: string;
+  first_user_media_count: number;
   attempt_count: number;
 };
 
@@ -137,9 +141,107 @@ async function claimJobs(config: WorkerConfig): Promise<TitleJob[]> {
   });
 }
 
+const MAX_TITLE_IMAGES = 3;
+
+type MediaAssetRow = {
+  thumbnail_object_path: string | null;
+  master_object_path: string | null;
+};
+
+function encodeBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function isRetryableHttp(status: number): boolean {
+  return status === 408 || status === 429 || status >= 500;
+}
+
+async function fetchJobMediaPaths(config: WorkerConfig, job: TitleJob): Promise<string[]> {
+  const required = Math.min(Math.max(job.first_user_media_count, 0), MAX_TITLE_IMAGES);
+  if (required === 0) return [];
+  const url = new URL(`${config.supabaseUrl}/rest/v1/media_assets`);
+  url.searchParams.set("select", "thumbnail_object_path,master_object_path");
+  url.searchParams.set("source_message_id", `eq.${job.first_user_message_id}`);
+  url.searchParams.set("user_id", `eq.${job.user_id}`);
+  url.searchParams.set("deleted_at", "is.null");
+  url.searchParams.set("order", "conversation_order.asc");
+  url.searchParams.set("limit", String(required));
+  const response = await fetch(url, {
+    headers: {
+      "apikey": config.serviceRoleKey,
+      "Authorization": `Bearer ${config.serviceRoleKey}`,
+    },
+    signal: AbortSignal.timeout(8_000),
+  });
+  if (!response.ok) {
+    throw new TitleWorkerError(
+      `MEDIA_QUERY_HTTP_${response.status}`,
+      isRetryableHttp(response.status),
+    );
+  }
+  const rows = await response.json() as MediaAssetRow[];
+  const paths = rows
+    .map((row) => row.thumbnail_object_path ?? row.master_object_path)
+    .filter((path): path is string => typeof path === "string" && path.length > 0);
+  if (paths.length < required) {
+    // Media sync uploads bytes before metadata, so a shortfall means the upload
+    // is still in flight — retry later instead of generating an image-blind title.
+    throw new TitleWorkerError("MEDIA_NOT_READY", true);
+  }
+  return paths.slice(0, required);
+}
+
+async function downloadMediaDataUrl(config: WorkerConfig, path: string): Promise<string> {
+  const response = await fetch(
+    `${config.supabaseUrl}/storage/v1/object/media-assets/${path}`,
+    {
+      headers: {
+        "apikey": config.serviceRoleKey,
+        "Authorization": `Bearer ${config.serviceRoleKey}`,
+      },
+      signal: AbortSignal.timeout(10_000),
+    },
+  );
+  if (!response.ok) {
+    throw new TitleWorkerError(
+      `MEDIA_DOWNLOAD_HTTP_${response.status}`,
+      isRetryableHttp(response.status) || response.status === 404,
+    );
+  }
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (bytes.length === 0) {
+    throw new TitleWorkerError("MEDIA_DOWNLOAD_EMPTY", true);
+  }
+  return `data:image/jpeg;base64,${encodeBase64(bytes)}`;
+}
+
+export async function buildTitleUserContent(
+  config: WorkerConfig,
+  job: TitleJob,
+): Promise<unknown> {
+  const text = job.first_user_text.trim();
+  if (job.first_user_media_count <= 0) return text;
+  const paths = await fetchJobMediaPaths(config, job);
+  const parts: Array<Record<string, unknown>> = [
+    { type: "text", text: text || "（用户只发送了图片，没有文字）" },
+  ];
+  for (const path of paths) {
+    parts.push({
+      type: "image_url",
+      image_url: { url: await downloadMediaDataUrl(config, path) },
+    });
+  }
+  return parts;
+}
+
 async function requestTitle(
   config: WorkerConfig,
-  text: string,
+  content: unknown,
   strictRetry: boolean,
 ): Promise<string> {
   let response: Response;
@@ -159,7 +261,7 @@ async function requestTitle(
               ? `${TITLE_SYSTEM_PROMPT}\n严格重试：输出必须是单行纯标题，最长 48 个字符。`
               : TITLE_SYSTEM_PROMPT,
           },
-          { role: "user", content: text },
+          { role: "user", content },
         ],
         max_tokens: 64,
         // kimi-k2.6 rejects any temperature other than 0.6 (HTTP 400).
@@ -190,12 +292,12 @@ async function requestTitle(
   return title;
 }
 
-async function generateWithStrictRetry(config: WorkerConfig, text: string): Promise<string> {
+async function generateWithStrictRetry(config: WorkerConfig, content: unknown): Promise<string> {
   try {
-    return await requestTitle(config, text, false);
+    return await requestTitle(config, content, false);
   } catch (error) {
     if (error instanceof TitleWorkerError && error.code === "MODEL_OUTPUT_INVALID") {
-      return await requestTitle(config, text, true);
+      return await requestTitle(config, content, true);
     }
     throw error;
   }
@@ -215,9 +317,7 @@ async function finishFailure(
   await rpc<boolean>(config, "finish_ai_conversation_title_job_failure", {
     p_job_id: job.id,
     p_worker_id: config.workerId,
-    p_error_code: retry || job.attempt_count < config.maxAttempts
-      ? error.code
-      : "MAX_ATTEMPTS",
+    p_error_code: retry || job.attempt_count < config.maxAttempts ? error.code : "MAX_ATTEMPTS",
     p_retry: retry,
     p_delay_seconds: retryDelaySeconds(config, job.attempt_count),
   });
@@ -230,7 +330,8 @@ async function processJob(
 ): Promise<void> {
   const startedAt = performance.now();
   try {
-    const title = await generateWithStrictRetry(config, job.first_user_text);
+    const content = await buildTitleUserContent(config, job);
+    const title = await generateWithStrictRetry(config, content);
     const result = await rpc<string>(config, "complete_ai_conversation_title_job", {
       p_job_id: job.id,
       p_worker_id: config.workerId,
