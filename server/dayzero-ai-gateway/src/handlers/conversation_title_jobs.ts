@@ -9,11 +9,12 @@ type TitleJobRequest = {
   conversationId: string;
   firstUserMessageId: string;
   firstUserText: string;
+  firstUserMediaCount: number;
 };
 
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 export const TITLE_INPUT_MAX_CHARS = 2_000;
+export const TITLE_INPUT_MAX_MEDIA = 6;
 
 export function parseTitleJobRequest(value: unknown):
   | { ok: true; value: TitleJobRequest }
@@ -23,15 +24,15 @@ export function parseTitleJobRequest(value: unknown):
   }
   const body = value as Record<string, unknown>;
   const requestId = typeof body.requestId === "string" ? body.requestId.trim() : "";
-  const conversationId = typeof body.conversationId === "string"
-    ? body.conversationId.trim()
-    : "";
+  const conversationId = typeof body.conversationId === "string" ? body.conversationId.trim() : "";
   const firstUserMessageId = typeof body.firstUserMessageId === "string"
     ? body.firstUserMessageId.trim()
     : "";
-  const firstUserText = typeof body.firstUserText === "string"
-    ? body.firstUserText.trim()
-    : "";
+  const firstUserText = typeof body.firstUserText === "string" ? body.firstUserText.trim() : "";
+  const rawMediaCount = body.firstUserMediaCount;
+  const firstUserMediaCount = rawMediaCount === undefined || rawMediaCount === null
+    ? 0
+    : rawMediaCount;
 
   if (requestId.length < 8 || requestId.length > 128) {
     return { ok: false, status: 400, errorCode: "REQUEST_ID_INVALID" };
@@ -39,7 +40,15 @@ export function parseTitleJobRequest(value: unknown):
   if (!UUID_PATTERN.test(conversationId) || !UUID_PATTERN.test(firstUserMessageId)) {
     return { ok: false, status: 400, errorCode: "ID_INVALID" };
   }
-  if (!firstUserText) {
+  if (
+    typeof firstUserMediaCount !== "number" ||
+    !Number.isInteger(firstUserMediaCount) ||
+    firstUserMediaCount < 0 ||
+    firstUserMediaCount > TITLE_INPUT_MAX_MEDIA
+  ) {
+    return { ok: false, status: 400, errorCode: "MEDIA_COUNT_INVALID" };
+  }
+  if (!firstUserText && firstUserMediaCount === 0) {
     return { ok: false, status: 400, errorCode: "TEXT_EMPTY" };
   }
   if (firstUserText.length > TITLE_INPUT_MAX_CHARS) {
@@ -47,7 +56,7 @@ export function parseTitleJobRequest(value: unknown):
   }
   return {
     ok: true,
-    value: { requestId, conversationId, firstUserMessageId, firstUserText },
+    value: { requestId, conversationId, firstUserMessageId, firstUserText, firstUserMediaCount },
   };
 }
 
@@ -122,6 +131,7 @@ export async function handleConversationTitleJob(
         p_conversation_id: parsed.value.conversationId,
         p_first_user_message_id: parsed.value.firstUserMessageId,
         p_first_user_text: parsed.value.firstUserText,
+        p_first_user_media_count: parsed.value.firstUserMediaCount,
       }),
       signal: AbortSignal.timeout(8_000),
     });

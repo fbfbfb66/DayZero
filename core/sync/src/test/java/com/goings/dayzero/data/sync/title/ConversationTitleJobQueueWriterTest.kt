@@ -71,4 +71,24 @@ class ConversationTitleJobQueueWriterTest {
         assertFalse(result)
         coVerify(exactly = 0) { dao.insertIgnore(any()) }
     }
+
+    @Test
+    fun imageOnlyFirstMessageEnqueuesWithMediaCount() = runTest {
+        val dao = mockk<SyncQueueDao>()
+        val captured = mutableListOf<SyncQueueEntity>()
+        coEvery { dao.insertIgnore(capture(captured)) } returns 1L
+
+        val result = ConversationTitleJobQueueWriter(dao).enqueue(
+            conversationId = "00000000-0000-4000-8000-000000000010",
+            firstUserMessageId = "00000000-0000-4000-8000-000000000011",
+            firstUserText = "   ",
+            identity = identity,
+            firstUserMediaCount = 2
+        )
+
+        assertTrue(result)
+        val body = JSONObject(captured.single().payloadJson)
+        assertEquals("", body.getString("firstUserText"))
+        assertEquals(2, body.getInt("firstUserMediaCount"))
+    }
 }

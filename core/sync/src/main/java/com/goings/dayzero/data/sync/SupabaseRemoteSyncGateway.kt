@@ -116,6 +116,7 @@ class SupabaseRemoteSyncGateway(
                     .put("conversationId", payload.body.getString("conversationId"))
                     .put("firstUserMessageId", payload.body.getString("firstUserMessageId"))
                     .put("firstUserText", payload.body.getString("firstUserText"))
+                    .put("firstUserMediaCount", payload.body.optInt("firstUserMediaCount", 0))
                     .toString()
             }.getOrElse {
                 return@withContext RemoteSyncResult.FatalFailure("title_job_payload_invalid")

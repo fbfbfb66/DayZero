@@ -38,7 +38,7 @@ class SupabaseChatRemotePullGateway(
         if (!canPull(identity)) return ChatRemotePullResult.Skipped("remote_disabled_or_unauthorized")
 
         val urlBuilder = "${restUrl()}ai_conversations".toHttpUrl().newBuilder()
-            .addQueryParameter("select", "id,conversation_date,title,last_message_preview,created_at,updated_at,last_activity_at,deleted_at,server_updated_at,schema_version")
+            .addQueryParameter("select", "id,conversation_date,title,last_message_preview,created_at,updated_at,last_activity_at,deleted_at,server_updated_at,schema_version,title_source")
             .addQueryParameter("order", "server_updated_at.asc,id.asc")
             .addQueryParameter("limit", limit.toString())
 
@@ -183,6 +183,7 @@ class SupabaseChatRemotePullGateway(
             updatedAtMillis = parseRemoteTime(json.getString("updated_at")),
             lastActivityAtMillis = parseRemoteTime(json.getString("last_activity_at")),
             deletedAtMillis = parseNullableRemoteTime(json.optNullableString("deleted_at")),
+            titleSource = json.optString("title_source").ifBlank { "local_fallback" },
             schemaVersion = json.optInt("schema_version", 1)
         )
     }

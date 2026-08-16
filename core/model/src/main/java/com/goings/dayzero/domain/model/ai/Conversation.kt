@@ -11,5 +11,7 @@ data class Conversation(
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = createdAt,
     val lastActivityAt: Long = createdAt,
-    val deletedAt: Long? = null
+    val deletedAt: Long? = null,
+    /** Mirrors the server title pipeline: local_fallback until the AI title lands. */
+    val titleSource: String = "local_fallback"
 )

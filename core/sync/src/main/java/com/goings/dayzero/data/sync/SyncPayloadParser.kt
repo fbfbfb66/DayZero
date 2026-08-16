@@ -3,6 +3,7 @@ package com.goings.dayzero.data.sync
 import com.goings.dayzero.data.local.entity.SyncQueueEntity
 import com.goings.dayzero.data.sync.chat.ChatSyncQueueContract
 import com.goings.dayzero.data.sync.media.MediaSyncQueueContract
+import com.goings.dayzero.data.sync.title.ConversationTitleSyncContract
 import org.json.JSONObject
 
 class SyncPayloadParser {
@@ -13,7 +14,11 @@ class SyncPayloadParser {
             require(item.operation in SUPPORTED_OPERATIONS) { "unsupported operation ${item.operation}" }
 
             val body = JSONObject(item.payloadJson)
-            require(body.optString("clientId").isNotBlank()) { "payload clientId is blank" }
+            // Title-job payloads identify their target via conversationId/firstUserMessageId
+            // and legitimately omit clientId; SyncPayload.clientId() falls back to entityLocalId.
+            if (item.operation != ConversationTitleSyncContract.OP_SUBMIT_TITLE_JOB) {
+                require(body.optString("clientId").isNotBlank()) { "payload clientId is blank" }
+            }
 
             SyncPayload(
                 queueId = item.id,
@@ -35,6 +40,7 @@ class SyncPayloadParser {
             DayZeroSyncConstants.OP_SOFT_DELETE_RECORD,
             ChatSyncQueueContract.OP_UPSERT_CONVERSATION,
             ChatSyncQueueContract.OP_UPSERT_MESSAGE,
+            ConversationTitleSyncContract.OP_SUBMIT_TITLE_JOB,
             MediaSyncQueueContract.OP_UPSERT_MEDIA_ASSET,
             MediaSyncQueueContract.OP_DOWNLOAD_MEDIA_ASSET,
             MediaSyncQueueContract.OP_SOFT_DELETE_MEDIA_ASSET

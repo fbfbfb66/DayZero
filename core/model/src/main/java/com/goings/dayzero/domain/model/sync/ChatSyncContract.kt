@@ -11,6 +11,7 @@ data class ChatSyncConversationSnapshot(
     val updatedAtMillis: Long,
     val lastActivityAtMillis: Long,
     val deletedAtMillis: Long? = null,
+    val titleSource: String = "local_fallback",
     val schemaVersion: Int = CHAT_SYNC_SCHEMA_VERSION
 )
 

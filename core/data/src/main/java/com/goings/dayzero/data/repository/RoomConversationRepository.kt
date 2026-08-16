@@ -16,7 +16,7 @@ import kotlinx.coroutines.flow.map
 class RoomConversationRepository(
     private val conversationDao: ConversationDao,
     private val database: DayZeroDatabase? = null,
-    syncQueueDao: SyncQueueDao? = null,
+    private val syncQueueDao: SyncQueueDao? = null,
     private val identityProvider: CurrentIdentityProvider = StaticLocalIdentityProvider()
 ) : ConversationRepository {
     private val mapper = ConversationEntityMapper()
@@ -46,6 +46,17 @@ class RoomConversationRepository(
 
     override fun observeConversationsByLastActivity(): Flow<List<Conversation>> {
         return conversationDao.observeConversationsByLastActivity().map { entities -> entities.map(mapper::toDomain) }
+    }
+
+    override fun observeNonEmptyConversationsByLastActivity(): Flow<List<Conversation>> {
+        return conversationDao.observeNonEmptyConversationsByLastActivity().map { entities -> entities.map(mapper::toDomain) }
+    }
+
+    override fun observePendingAiTitleConversationIds(): Flow<Set<String>> {
+        val dao = syncQueueDao ?: return kotlinx.coroutines.flow.flowOf(emptySet())
+        return dao.observeActiveConversationTitleJobIds(
+            recentDoneAfter = System.currentTimeMillis() - RECENT_TITLE_DONE_WINDOW_MS
+        ).map { ids -> ids.toSet() }
     }
 
     override suspend fun updateConversationSummary(
@@ -94,5 +105,10 @@ class RoomConversationRepository(
             lastActivityAt = lastActivityAt,
             updatedAt = updatedAt
         )
+    }
+
+    private companion object {
+        /** How long after a title-job submission we still wait for the AI title to flow back. */
+        private const val RECENT_TITLE_DONE_WINDOW_MS = 10 * 60 * 1000L
     }
 }

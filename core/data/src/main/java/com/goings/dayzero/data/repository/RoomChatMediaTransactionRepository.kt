@@ -172,12 +172,13 @@ class RoomChatMediaTransactionRepository(
             ?: abort(SendUserMessageWithMediaResult.InvalidConversation("Conversation disappeared during transaction"))
         chatSyncQueueWriter.enqueueConversationUpsert(refreshedConversation, identity)
         chatSyncQueueWriter.enqueueMessageUpsert(userMessageEntity, identity)
-        if (isFirstUserMessage && request.text.isNotBlank()) {
+        if (isFirstUserMessage && (request.text.isNotBlank() || request.orderedMediaIds.isNotEmpty())) {
             ConversationTitleJobQueueWriter(database.syncQueueDao()).enqueue(
                 conversationId = request.conversationId,
                 firstUserMessageId = request.userMessageId,
                 firstUserText = request.text,
                 identity = identity,
+                firstUserMediaCount = request.orderedMediaIds.size,
                 now = request.createdAt
             )
         }

@@ -1077,7 +1077,9 @@ class RoomChatMediaTransactionRepositoryTest {
             return 1L
         }
         override suspend fun getStatusById(id: String): String? = null
+        override fun observeActiveConversationTitleJobIds(recentDoneAfter: Long): kotlinx.coroutines.flow.Flow<List<String>> = kotlinx.coroutines.flow.flowOf(emptyList())
         override suspend fun countActiveTasksForOperation(operation: String): Int = 0
+        override suspend fun resetUnsupportedConversationTitleJobs(now: Long): Int = 0
 
         override suspend fun coalescePendingTask(
             ownerLocalId: String,

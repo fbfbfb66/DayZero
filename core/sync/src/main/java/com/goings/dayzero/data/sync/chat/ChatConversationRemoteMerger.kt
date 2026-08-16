@@ -64,7 +64,8 @@ class ChatConversationRemoteMerger(
                     createdAt = remote.createdAtMillis,
                     updatedAt = remote.updatedAtMillis,
                     lastActivityAt = remote.lastActivityAtMillis,
-                    deletedAt = null
+                    deletedAt = null,
+                    titleSource = remote.titleSource
                 )
                 conversationDao.insertConversation(newEntity)
                 Log.d("DayZeroChatPull", "inserted remote active id=${remote.id.take(8)}")
@@ -120,9 +121,10 @@ class ChatConversationRemoteMerger(
             // Both are active. Compare updatedAt.
             if (remote.updatedAtMillis > local.updatedAt) {
                 // Remote is newer
-                conversationDao.updateConversationSummary(
+                conversationDao.updateConversationSummaryWithTitleSource(
                     id = remote.id,
                     title = remote.title,
+                    titleSource = remote.titleSource,
                     lastMessagePreview = remote.lastMessagePreview,
                     lastActivityAt = remote.lastActivityAtMillis,
                     updatedAt = remote.updatedAtMillis
@@ -137,13 +139,15 @@ class ChatConversationRemoteMerger(
                 // Same timestamp
                 if (remote.title != local.title ||
                     remote.lastMessagePreview != local.lastMessagePreview ||
-                    remote.lastActivityAtMillis != local.lastActivityAt
+                    remote.lastActivityAtMillis != local.lastActivityAt ||
+                    remote.titleSource != local.titleSource
                 ) {
                     // Conflict at same timestamp. Resolve deterministically.
                     // Rule: remote wins on same timestamp to ensure eventual consistency if tie.
-                    conversationDao.updateConversationSummary(
+                    conversationDao.updateConversationSummaryWithTitleSource(
                         id = remote.id,
                         title = remote.title,
+                        titleSource = remote.titleSource,
                         lastMessagePreview = remote.lastMessagePreview,
                         lastActivityAt = remote.lastActivityAtMillis,
                         updatedAt = remote.updatedAtMillis
