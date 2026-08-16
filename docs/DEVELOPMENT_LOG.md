@@ -1,5 +1,46 @@
 # DayZero 开发日志
 
+## 2026-08-16 确认卡片照片归属修复：清空、断链与手动入口（commit `e82a0c3`）
+
+### 背景
+
+用户反馈「发送照片后，照片不会出现在草稿卡片上」。卡片是否显示照片只取决于 `ShowConfirmCardPayload.meals[i].sourceMediaIds`（`AssistantCardRenderer` → `photoItemsForMeal` → `toPhotoViewerItems` → `PinnedPhotoStrip`），与照片是否已上传 Supabase Storage 无关。排查结果：显示逻辑本身完好（`AiRecordPhase3Test` 全绿），问题在于卡片上的 `sourceMediaIds` 拿不到值或被清空，且手动分配入口整条失效。三个断点全部在客户端，Gateway 与 Edge 的分配逻辑正确，无需重新部署。
+
+### 根因与修复
+
+1. **空 allow-list 清空已分配照片**（`core/model/.../ConfirmCardPhotoAssignments.kt`）
+   - `normalize()` 在 `allowedSourceMediaIds` 为空时仍会拿空 `allowedSet` 过滤 meal 已有的 `sourceMediaIds`，结果洗成 `[]`。原注释「No-op when allowedSourceMediaIds is empty」不成立。
+   - 修复：`allowed` 为空时直接返回原 `meals`。「不知道本轮的来源集合」不等于「这张卡没有照片」。`null` 与显式 `[]` 的语义区分保持不变。
+
+2. **多轮追问链丢失来源集合**（`app/.../DayZeroViewModel.kt`）
+   - `resolveInteractionImageMediaIds` 只认 `assistantPlaceholderId(图片用户消息.id) == 被点卡片所在消息.id` 这一次配对。链条第二问及以后（图片 → 问「要记录吗」→ 答 → 问「哪一餐」→ 答 → 确认卡），卡片挂在新建的随机 UUID assistant 消息上，配对必然失败 → allowed 为空 → 叠加根因 1 → 服务端已通过 `continuationContext.mediaIds` 分配好的归属被客户端清空。
+   - 修复：严格配对失败时回退读取被点卡片的 `continuationContext.mediaIds`（服务端 `normalization.ts:657` 一直在逐轮传递）。安全边界保留：继承来的 id 逐个校验必须仍属于本会话某条图片用户消息，远端数据无法扩大 allow-list。
+
+3. **「整理照片」手动入口已死**（`feature/ai-record/.../AssistantCardRenderer.kt`）
+   - `RenderShowConfirmCard` 接收 `originMediaIds` / `onEditMealPhotos` 却从未传给 `FoodDraftConfirmCard`（缺 `onEditPhotos`、`editableOriginPhotoCount`），入口渲染条件 `onEditPhotos != null && !anyMealShowsPhotos` 恒为 false。多餐次卡片在 AI 未分配时因此完全没有兜底手段。此断线自 `bb328d6` 起存在，`DEVELOPMENT_LOG` 2026-07-27 条目曾记录相关测试失败但未修复。
+   - 修复：按原设计接回，可见性条件 `state == "pending"` + `meals` 非空 + `PhotoAssignmentDraft.isLegalOriginSet(originMediaIds)`；confirmed/cancelled、pending guard、纯文本轮次仍无入口。
+   - 同步对齐 `PhotoEditorCardResolver.resolveOriginMediaIds`：严格配对失败时回退到卡片自身已持久化的分配（同样逐个校验归属），避免出现「深链卡片能显示照片却打不开编辑器」的不一致。入口（`AiRecordScreen`）与打开（`AiRecordViewModel`）共用同一函数。
+
+### 测试
+
+- 新增 `ConfirmCardPhotoAssignmentsTest.unknownOriginSetPreservesAlreadyAssignedIdsInsteadOfErasingThem`（含 date-guard 包裹卡）。
+- 新增 `DayZeroInteractionResultPhotoAssignmentTest` 两个深链用例（真实 Room + 真实 ViewModel）：从 `continuationContext` 继承并过滤外来 id；服务端已分配 id 在本地来源未知时不被清空。
+- 新增 `PhotoEditorCardResolverTest` 两个：回退解析、guard 解包。
+- `PinnedPhotoStripUiTest` 增加 `@Config(qualifiers = "w411dp-h891dp")`：完整 pending 确认卡高于 Robolectric 默认 320x470 窗口，尾部编辑入口被压成 0 高度（探针实测 `t=420, b=420`），`assertIsDisplayed` 必然失败。**断言未做任何修改**，此前 3 个失败用例现已通过。
+
+### 验证结果
+
+`:core:model:test`、`:core:database:testDebugUnitTest`、`:core:data:testDebugUnitTest`、`:core:sync:testDebugUnitTest`、`:feature:ai-record:testDebugUnitTest`、`:app:testDebugUnitTest`、`:app:assembleDebug` 全部 BUILD SUCCESSFUL，无失败用例。
+
+### 同批提交
+
+本次 commit 一并纳入工作区中已完成但未提交的 Gateway 路由改动：assistant-turn 请求经 `SupabaseConfig.assistantTurnUrl()` 解析，`AI_GATEWAY_BASE_URL` 非空时打 `${AI_GATEWAY_BASE_URL}api/ai/<fn>` 并携带 `X-Request-Id`，为空则回退 Supabase Edge Functions。
+
+### 遗留
+
+- 多餐次卡片在模型未给 `attachment_N` 引用、文本也无显式提示时仍不自动分配（刻意不猜），依赖已恢复的手动入口兜底。
+- 未做真机复测，建议按「发图 → 要记录吗 → 记录 → 哪一餐 → 午餐 → 确认卡带照片条」这条深链验证。
+
 ## 2026-07-27 代码基线检查点：包名迁移、媒体同步与 Gateway 落地（commit `bb328d6`）
 
 ### 背景
